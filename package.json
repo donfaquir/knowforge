@@ -19,8 +19,8 @@
     "@codemirror/language": "^6.12.3",
     "@codemirror/language-data": "^6.5.2",
     "@milkdown/core": "^7.20.0",
-    "@milkdown/ctx": "^7.20.0",
     "@milkdown/crepe": "^7.20.0",
+    "@milkdown/ctx": "^7.20.0",
     "@milkdown/preset-commonmark": "^7.20.0",
     "@milkdown/react": "^7.20.0",
     "@milkdown/utils": "^7.20.0",
@@ -43,6 +43,8 @@
     "yaml": "^2.8.3"
   },
   "devDependencies": {
+    "@emnapi/core": "1.10.0",
+    "@emnapi/runtime": "1.10.0",
     "@tauri-apps/cli": "~2.11.0",
     "@types/mdast": "^4.0.4",
     "@types/react": "^19.2.0",
