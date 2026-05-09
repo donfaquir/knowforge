@@ -17,9 +17,9 @@ jobs:
     name: Frontend build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: "npm"
@@ -34,7 +34,28 @@ jobs:
     name: Rust tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      # Linux 上编译 Tauri / webkit2gtk 需要 GTK、WebKit 等开发包。
+      # 说明：WebKitGTK 依赖极多，本步在解压期可能长达数分钟且无新日志，界面像「卡住」，属正常现象；与非交互/apt 镜像无关。
+      - name: Install Linux dependencies (Tauri)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=5 update
+          echo "Installing Tauri/Linux deps (--no-install-recommends reduces volume; WebKitGTK 仍以分钟计) ..."
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+          echo "apt install finished."
 
       - uses: dtolnay/rust-toolchain@stable
 
