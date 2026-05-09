@@ -1,0 +1,201 @@
+.understanding-graph {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  min-width: 0;
+  /* 避免 WebKit 在可拖拽区域按下时出现默认蓝色高亮块 */
+  -webkit-tap-highlight-color: transparent;
+}
+
+.understanding-graph__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  /* 与右栏顶栏横向留白同量级，避免工具栏贴死左右边框 */
+  padding: 6px calc(10px * var(--tool-strip-scale, 1)) 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.understanding-graph__metrics,
+.understanding-graph__hidden {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  color: #555;
+  flex: 1;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.understanding-graph__hidden {
+  color: #92400e;
+  flex: none;
+}
+
+.understanding-graph__toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.understanding-graph__toolbar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--app-chrome-bg, #fff);
+  color: #444;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.understanding-graph__toolbar-icon-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.05);
+  color: #111;
+  border-color: rgba(0, 0, 0, 0.16);
+}
+
+.understanding-graph__toolbar-icon-svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+}
+
+.understanding-graph__toolbar-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.understanding-graph__error {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: #b91c1c;
+}
+
+.understanding-graph__empty,
+.understanding-graph__loading {
+  margin: 16px 0 0;
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.understanding-graph__svg {
+  flex: 1;
+  min-height: 200px;
+  width: 100%;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  /* 独立堆叠上下文，减轻高频重绘时的叠影感 */
+  isolation: isolate;
+  shape-rendering: geometricPrecision;
+}
+
+.understanding-graph__node-group {
+  cursor: pointer;
+}
+
+/* 焦点在整组节点上，避免原先 circle :focus 在 WebKit 上出现异常大轮廓 */
+.understanding-graph__node-group:focus {
+  outline: none;
+}
+
+.understanding-graph__node-group:focus-visible .understanding-graph__node {
+  stroke: var(--toolbar-accent, #396cd8);
+  stroke-width: 2.75px;
+}
+
+.understanding-graph__svg :where(g, circle, line, text) {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.understanding-graph__svg:active {
+  cursor: grabbing;
+}
+
+.understanding-graph__edge {
+  stroke: rgba(0, 0, 0, 0.18);
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+
+.understanding-graph__node {
+  cursor: pointer;
+  vector-effect: non-scaling-stroke;
+  outline: none;
+}
+
+.understanding-graph__label {
+  pointer-events: painted;
+  opacity: 0.85;
+}
+
+.understanding-graph__thought-tip {
+  position: absolute;
+  z-index: 6;
+  max-width: 220px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.92);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .understanding-graph__toolbar-icon-btn {
+    border-color: transparent;
+    background: rgba(255, 255, 255, 0.04);
+    color: #d4d4d8;
+  }
+
+  .understanding-graph__toolbar-icon-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+    color: #f4f4f5;
+    border-color: rgba(255, 255, 255, 0.22);
+  }
+
+  .understanding-graph__metrics,
+  .understanding-graph__hidden {
+    color: #a1a1aa;
+  }
+
+  .understanding-graph__hidden {
+    color: #fcd34d;
+  }
+
+  .understanding-graph__empty,
+  .understanding-graph__loading {
+    color: #a1a1aa;
+  }
+
+  .understanding-graph__edge {
+    stroke: rgba(255, 255, 255, 0.2);
+  }
+
+  .understanding-graph__thought-tip {
+    background: rgba(30, 41, 59, 0.96);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  }
+}

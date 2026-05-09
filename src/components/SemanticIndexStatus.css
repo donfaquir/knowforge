@@ -1,0 +1,116 @@
+.semantic-index-status {
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.semantic-index-status__title {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.semantic-index-status__row {
+  margin: 0.2rem 0;
+  font-size: 0.8rem;
+  color: #333;
+}
+
+.semantic-index-status__row code {
+  font-size: 0.78rem;
+}
+
+.semantic-index-status__rebuilding {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #444;
+}
+
+.semantic-index-status__actions {
+  margin-top: 0.65rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.semantic-index-status__btn-continue {
+  background: transparent;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+}
+
+.semantic-index-status__btn-continue:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.semantic-index-status__progress {
+  margin-top: 0.45rem;
+  font-size: 0.78rem;
+  color: #555;
+}
+
+.semantic-index-status__error {
+  margin-top: 0.45rem;
+  font-size: 0.78rem;
+  color: #a30;
+}
+
+.semantic-index-status__summary {
+  margin-top: 0.35rem;
+  color: #2a6;
+}
+
+.semantic-index-status__persisted {
+  margin-top: 0.55rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.semantic-index-status__persisted-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.35rem;
+}
+
+.semantic-index-status__persisted-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #222;
+}
+
+.semantic-index-status__persisted-pct {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #444;
+}
+
+.semantic-index-status__progressbar {
+  width: 100%;
+  height: 0.45rem;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.semantic-index-status__persisted-meta {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  color: #555;
+  word-break: break-all;
+}
+
+.semantic-index-status__persisted-err {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  color: #a30;
+}
+
+.semantic-index-status__hint {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+}

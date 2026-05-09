@@ -1,0 +1,115 @@
+.privacy-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+}
+
+.privacy-overlay__card {
+  max-width: 340px;
+  margin: 0 16px;
+  padding: 24px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  text-align: center;
+}
+
+.privacy-overlay__icon {
+  font-size: 2rem;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.privacy-overlay__text {
+  margin: 0 0 20px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #374151;
+}
+
+.privacy-overlay__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.privacy-overlay__btn {
+  display: block;
+  width: 100%;
+  padding: 8px 16px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.privacy-overlay__btn--primary {
+  background: #2563eb;
+  color: #fff;
+  border-color: #1d4ed8;
+}
+
+.privacy-overlay__btn--primary:hover {
+  background: #1d4ed8;
+}
+
+.privacy-overlay__btn--primary:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.privacy-overlay__btn--secondary {
+  background: transparent;
+  color: #6b7280;
+  border-color: #d1d5db;
+}
+
+.privacy-overlay__btn--secondary:hover {
+  background: #f3f4f6;
+}
+
+.privacy-overlay__btn--secondary:focus-visible {
+  outline: 2px solid #9ca3af;
+  outline-offset: 2px;
+}
+
+/* ---- dark mode ---- */
+@media (prefers-color-scheme: dark) {
+  .privacy-overlay {
+    background: rgba(0, 0, 0, 0.55);
+  }
+
+  .privacy-overlay__card {
+    background: #1f2937;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  }
+
+  .privacy-overlay__text {
+    color: #d1d5db;
+  }
+
+  .privacy-overlay__btn--primary {
+    background: #3b82f6;
+    border-color: #2563eb;
+  }
+
+  .privacy-overlay__btn--primary:hover {
+    background: #2563eb;
+  }
+
+  .privacy-overlay__btn--secondary {
+    color: #9ca3af;
+    border-color: #4b5563;
+  }
+
+  .privacy-overlay__btn--secondary:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+}

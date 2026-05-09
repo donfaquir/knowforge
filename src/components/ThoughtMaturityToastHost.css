@@ -1,0 +1,37 @@
+.thought-maturity-host {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 12000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(360px, calc(100vw - 24px));
+  pointer-events: none;
+}
+
+.thought-maturity-host__toast {
+  pointer-events: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--kf-border, #ccc) 70%, transparent);
+  background: color-mix(in srgb, var(--kf-panel-bg, #1e1e1e) 92%, transparent);
+  color: var(--kf-text, #eaeaea);
+  font-size: 13px;
+  line-height: 1.35;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  text-align: left;
+}
+
+.thought-maturity-host__toast:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--kf-accent, #6ea8fe) 70%, transparent);
+  outline-offset: 2px;
+}
+
+.thought-maturity-host__toast--out {
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}

@@ -1,0 +1,278 @@
+/* --- ChallengeReviewPanel 独立回顾 --- */
+
+.challenge-review-panel {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, #8b5cf6, transparent 78%);
+  background: color-mix(in srgb, #8b5cf6, transparent 94%);
+}
+
+.challenge-review-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 8px;
+}
+
+.challenge-review-panel__linkish {
+  border: none;
+  background: none;
+  color: #6d28d9;
+  cursor: pointer;
+  font-size: 0.82rem;
+  text-decoration: underline;
+}
+
+.challenge-review-panel__hint {
+  font-size: 0.86rem;
+  color: var(--crepe-color-on-surface-variant, #6b7280);
+  margin: 0 0 8px;
+}
+
+.challenge-review-panel__batch-hint {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--kf-text-muted, #64748b);
+  background: color-mix(in srgb, var(--kf-text-muted, #64748b) 8%, transparent);
+  border-radius: 6px;
+}
+
+.challenge-review-panel__created {
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  color: var(--kf-text-muted, #64748b);
+}
+
+.challenge-review-panel__maturity {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+  color: var(--kf-text-muted, #475569);
+}
+
+.challenge-review-panel__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--crepe-color-on-surface-variant, #6b7280);
+  margin-bottom: 6px;
+}
+
+.challenge-review-panel__due {
+  flex-shrink: 0;
+}
+
+.challenge-review-panel__excerpt {
+  font-size: 0.84rem;
+  line-height: 1.45;
+  margin-bottom: 8px;
+  max-height: 6em;
+  overflow: auto;
+}
+
+.challenge-review-panel__question {
+  font-size: 0.9rem;
+  margin-bottom: 8px;
+  line-height: 1.45;
+}
+
+.challenge-review-panel__textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.86rem;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, #8b5cf6, transparent 65%);
+  margin-bottom: 8px;
+}
+
+.challenge-review-panel__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.challenge-review-panel__btn {
+  font-size: 0.82rem;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, #8b5cf6, transparent 55%);
+  cursor: pointer;
+  background: #fff;
+}
+
+.challenge-review-panel__btn--primary {
+  background: #7c3aed;
+  color: #fff;
+  border-color: #7c3aed;
+}
+
+.challenge-review-panel__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.challenge-review-panel__result {
+  font-size: 0.86rem;
+}
+
+.challenge-review-panel__pass {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.challenge-review-panel__sloppy {
+  color: #b45309;
+}
+
+.challenge-review-panel__md {
+  margin: 6px 0;
+}
+
+.challenge-review-panel__queue {
+  margin: 0 0 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, #8b5cf6, transparent 72%);
+  background: color-mix(in srgb, #fff, transparent 12%);
+  overflow: hidden;
+}
+
+.challenge-review-panel__queue-title {
+  padding: 6px 10px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--crepe-color-on-surface-variant, #5b21b6);
+  background: color-mix(in srgb, #8b5cf6, transparent 88%);
+  border-bottom: 1px solid color-mix(in srgb, #8b5cf6, transparent 78%);
+}
+
+.challenge-review-panel__queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.challenge-review-panel__queue-li + .challenge-review-panel__queue-li {
+  border-top: 1px solid color-mix(in srgb, #8b5cf6, transparent 82%);
+}
+
+.challenge-review-panel__queue-row {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 8px 10px;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: inherit;
+}
+
+.challenge-review-panel__queue-row:hover:not(:disabled) {
+  background: color-mix(in srgb, #8b5cf6, transparent 92%);
+}
+
+.challenge-review-panel__queue-row.is-active {
+  background: color-mix(in srgb, #7c3aed, transparent 86%);
+}
+
+.challenge-review-panel__queue-row:disabled:not(.is-active) {
+  opacity: 0.72;
+  cursor: default;
+}
+
+.challenge-review-panel__queue-row:disabled.is-active {
+  opacity: 1;
+  cursor: default;
+}
+
+.challenge-review-panel__queue-row-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.76rem;
+  margin-bottom: 4px;
+}
+
+.challenge-review-panel__queue-idx {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--kf-text-muted, #64748b);
+  min-width: 1.25em;
+}
+
+.challenge-review-panel__queue-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--crepe-color-on-surface-variant, #4b5563);
+}
+
+.challenge-review-panel__queue-due {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  color: var(--kf-text-muted, #64748b);
+}
+
+.challenge-review-panel__queue-excerpt {
+  font-size: 0.74rem;
+  line-height: 1.4;
+  color: var(--crepe-color-on-surface-variant, #52525b);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.challenge-review-panel__queue-excerpt--muted {
+  font-style: italic;
+}
+
+.challenge-review-panel__queue-pick-hint {
+  margin: -4px 0 10px;
+  font-size: 0.72rem;
+  color: var(--kf-text-muted, #64748b);
+}
+
+.challenge-review-panel__stats {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, #8b5cf6, transparent 82%);
+  background: color-mix(in srgb, #fff, transparent 35%);
+}
+
+.challenge-review-panel__stats-row {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--crepe-color-on-surface-variant, #4b5563);
+}
+
+.challenge-review-panel__stats-row--muted {
+  color: var(--kf-text-muted, #94a3b8);
+  font-style: italic;
+}
+
+.challenge-review-panel__hint--compact {
+  margin-top: 4px;
+  font-size: 0.8rem;
+}
+
+.challenge-review-panel__footer-actions {
+  margin-top: 6px;
+}
+
+.challenge-review-panel__actions--spread {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}

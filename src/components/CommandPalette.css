@@ -1,0 +1,103 @@
+.command-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  background: rgba(15, 15, 15, 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 10vh 16px 16px;
+}
+
+.command-palette {
+  width: min(520px, 100%);
+  border-radius: 12px;
+  border: 1px solid #ccc;
+  background: #fafafa;
+  color: #0f0f0f;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+
+.command-palette__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: none;
+  border-bottom: 1px solid rgba(15, 15, 15, 0.1);
+  background: #fff;
+  color: #0f0f0f;
+  font-size: 15px;
+  outline: none;
+}
+
+.command-palette__input::placeholder {
+  color: #64748b;
+}
+
+.command-palette__input:focus {
+  background: #fff;
+}
+
+.command-palette__list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0;
+  max-height: min(52vh, 360px);
+  overflow-y: auto;
+}
+
+.command-palette__item {
+  width: 100%;
+  text-align: left;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.command-palette__item:hover,
+.command-palette__item:focus-visible {
+  background: rgba(59, 130, 246, 0.12);
+  outline: none;
+}
+
+.command-palette__hint {
+  padding: 8px 14px 10px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+@media (prefers-color-scheme: dark) {
+  .command-palette-backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  .command-palette {
+    border-color: #444;
+    background: var(--app-chrome-bg, #1a1a1a);
+    color: #e8e8e8;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  }
+
+  .command-palette__input {
+    border-bottom-color: rgba(255, 255, 255, 0.1);
+    background: #141414;
+    color: #e8e8e8;
+  }
+
+  .command-palette__input::placeholder {
+    color: #94a3b8;
+  }
+
+  .command-palette__item:hover,
+  .command-palette__item:focus-visible {
+    background: rgba(96, 165, 250, 0.15);
+  }
+
+  .command-palette__hint {
+    color: #94a3b8;
+  }
+}

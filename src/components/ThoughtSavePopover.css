@@ -1,0 +1,196 @@
+/* ThoughtSavePopover — Phase 4E: 保存深化回答为理解区块 */
+
+.thought-save-popover {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 60;
+  width: 340px;
+  max-width: 90vw;
+  background: var(--crepe-color-surface, #fff);
+  color: var(--crepe-color-on-surface, #1a1a1a);
+  border: 1px solid var(--crepe-color-outline, #d0d0d0);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  animation: thought-save-fade-in 0.15s ease;
+}
+
+@keyframes thought-save-fade-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+.thought-save-popover__header {
+  font-weight: 600;
+  font-size: 14px;
+  margin: 0 0 2px;
+}
+
+.thought-save-popover__field-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.thought-save-popover__depth-wrap {
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.thought-save-popover__field-row .thought-save-popover__field {
+  flex: 1;
+  min-width: 0;
+}
+
+.thought-save-popover__field {
+  position: relative;
+}
+
+.thought-save-popover__file-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--crepe-color-outline, #ccc);
+  border-radius: 6px;
+  background: var(--crepe-color-surface, #fff);
+  color: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.thought-save-popover__file-input:focus {
+  border-color: var(--crepe-color-primary, #4a90d9);
+  box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.15);
+}
+
+.thought-save-popover__dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--crepe-color-surface, #fff);
+  border: 1px solid var(--crepe-color-outline, #d0d0d0);
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.thought-save-popover__dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thought-save-popover__dropdown-item:hover,
+.thought-save-popover__dropdown-item.is-selected {
+  background: var(--crepe-color-primary, #4a90d9);
+  color: #fff;
+}
+
+.thought-save-popover__dropdown-loading {
+  display: block;
+  padding: 6px 8px;
+  color: var(--crepe-color-on-surface-variant, #888);
+  font-size: 12px;
+}
+
+.thought-save-popover__options {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.thought-save-popover__options input[type="checkbox"] {
+  margin: 0;
+}
+
+.thought-save-popover__error {
+  color: var(--crepe-color-error, #d32f2f);
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.thought-save-popover__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.thought-save-popover__btn {
+  padding: 5px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.12s, opacity 0.12s;
+}
+
+.thought-save-popover__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.thought-save-popover__btn--save {
+  background: var(--crepe-color-primary, #4a90d9);
+  color: #fff;
+  border-color: var(--crepe-color-primary, #4a90d9);
+}
+
+.thought-save-popover__btn--save:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.thought-save-popover__btn--cancel {
+  background: transparent;
+  color: var(--crepe-color-on-surface, #333);
+  border-color: var(--crepe-color-outline, #ccc);
+}
+
+.thought-save-popover__btn--cancel:hover:not(:disabled) {
+  background: var(--crepe-color-surface-variant, #f0f0f0);
+}
+
+.thought-save-popover__passive-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.thought-save-popover__btn--inaccurate {
+  background: transparent;
+  color: var(--crepe-color-on-surface-muted, #666);
+  border-color: var(--crepe-color-outline, #ccc);
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.thought-save-popover__btn--inaccurate:hover:not(:disabled) {
+  background: var(--crepe-color-surface-variant, #f0f0f0);
+}
+
+/* 深色模式适配 */
+@media (prefers-color-scheme: dark) {
+  .thought-save-popover {
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  }
+}

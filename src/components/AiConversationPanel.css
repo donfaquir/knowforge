@@ -1,0 +1,68 @@
+/* AI 对话：理解引用标签（迭代 4） */
+
+/* 被动高亮门控横幅：文案 + 右侧关闭 */
+.ai-chat__banner--dismissible {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 6px 8px 10px;
+}
+
+.ai-chat__banner__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.ai-chat__banner__dismiss {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: -2px -2px 0 0;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 0.12s ease, background-color 0.12s ease;
+}
+
+.ai-chat__banner__dismiss:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.ai-chat__banner__dismiss:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ai-chat__banner__dismiss:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+}
+
+.ai-chat__thought-cite {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--kf-border, #555) 70%, transparent);
+  background: color-mix(in srgb, var(--kf-accent, #3b82f6) 12%, transparent);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 100%;
+  text-align: left;
+}
+
+.ai-chat__thought-cite:hover {
+  filter: brightness(1.08);
+}

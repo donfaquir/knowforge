@@ -1,0 +1,49 @@
+.graph-tab-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.graph-tab-shell__subtabs {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0;
+  padding: 4px calc(10px * var(--tool-strip-scale, 1)) 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.graph-tab-shell__subtab {
+  flex: 1;
+  max-width: 140px;
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+  border: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: #666;
+  cursor: pointer;
+}
+
+.graph-tab-shell__subtab:hover {
+  color: #111;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.graph-tab-shell__subtab.is-active {
+  color: #111;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.graph-tab-shell__panel-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.graph-tab-shell__panel-wrap[hidden] {
+  display: none;
+}

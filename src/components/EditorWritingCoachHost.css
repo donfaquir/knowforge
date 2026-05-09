@@ -1,0 +1,8 @@
+/* 覆盖在 editor-scroll__body 内，不挤占 Crepe 布局 */
+
+.editor-writing-coach-host {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}

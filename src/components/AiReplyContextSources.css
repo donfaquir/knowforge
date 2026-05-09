@@ -1,0 +1,228 @@
+/* 助手气泡末尾「上下文来源」：轻量脚注 + 可展开详情 */
+
+.ai-reply-sources {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+  color: color-mix(in srgb, currentColor 88%, transparent);
+}
+
+/* 折叠触发条：无粗边框，靠 hover 与图标暗示可点 */
+.ai-reply-sources__toggle {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px 10px;
+  width: 100%;
+  margin: 0;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.14s ease;
+}
+
+.ai-reply-sources__toggle:hover {
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+
+.ai-reply-sources__toggle:active {
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.ai-reply-sources__toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--kf-accent, #3b82f6) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.ai-reply-sources__toggle-leading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+}
+
+.ai-reply-sources__glyph {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.ai-reply-sources__toggle-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  min-width: 0;
+}
+
+.ai-reply-sources__toggle-label {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: currentColor;
+}
+
+.ai-reply-sources__toggle-sep {
+  font-weight: 500;
+  color: color-mix(in srgb, currentColor 38%, transparent);
+  user-select: none;
+}
+
+.ai-reply-sources__toggle-hint {
+  font-size: 11px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--kf-accent, #3b82f6) 82%, currentColor);
+}
+
+.ai-reply-sources__toggle-trail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.ai-reply-sources__chevron-svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  transform: rotate(0deg);
+  transition: transform 0.18s ease;
+}
+
+.ai-reply-sources__chevron-svg--open {
+  transform: rotate(180deg);
+}
+
+/* 展开内容：内嵌浅底，与正文区隔开 */
+.ai-reply-sources__panel {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.ai-reply-sources__block + .ai-reply-sources__block {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.ai-reply-sources__block:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.ai-reply-sources__label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, currentColor 58%, transparent);
+  margin-bottom: 6px;
+}
+
+.ai-reply-sources__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-reply-sources__list {
+  margin: 0;
+  padding-left: 1.15em;
+  color: color-mix(in srgb, currentColor 92%, transparent);
+}
+
+.ai-reply-sources__list--thoughts {
+  margin-top: 4px;
+}
+
+.ai-reply-sources__li {
+  margin: 3px 0;
+  word-break: break-all;
+}
+
+.ai-reply-sources__link {
+  display: inline;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--kf-accent, #3b82f6);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  border-bottom: 1px dotted color-mix(in srgb, var(--kf-accent, #3b82f6) 55%, transparent);
+  text-underline-offset: 2px;
+}
+
+.ai-reply-sources__link:hover {
+  border-bottom-style: solid;
+  border-bottom-color: var(--kf-accent, #3b82f6);
+}
+
+.ai-reply-sources__link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--kf-accent, #3b82f6) 70%, transparent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.ai-reply-sources__path {
+  color: inherit;
+}
+
+.ai-reply-sources__badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--kf-accent, #3b82f6) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--kf-accent, #3b82f6) 22%, transparent);
+  color: color-mix(in srgb, currentColor 88%, var(--kf-accent, #3b82f6));
+  vertical-align: middle;
+}
+
+.ai-reply-sources__badge--muted {
+  margin-left: 6px;
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  border-color: color-mix(in srgb, currentColor 14%, transparent);
+  color: color-mix(in srgb, currentColor 72%, transparent);
+}
+
+.ai-reply-sources__thought-id {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.ai-reply-sources__thought-hint {
+  margin-left: 6px;
+  font-size: 10px;
+  color: color-mix(in srgb, currentColor 62%, transparent);
+}
+
+.ai-reply-sources__muted {
+  font-size: 11px;
+  color: color-mix(in srgb, currentColor 68%, transparent);
+}
+
+.ai-reply-sources__more {
+  margin-top: 6px;
+  font-size: 11px;
+  color: color-mix(in srgb, currentColor 62%, transparent);
+}

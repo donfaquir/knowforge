@@ -1,0 +1,226 @@
+/* 写作教练：提示感气泡 + 右侧浮层（默认与主编辑浅色区 #fafafa 协调；暗色随系统偏好） */
+
+.writing-coach-bubble {
+  /* 浅色编辑区：图标/描边用深灰混主题色，避免沿用浅字色导致对比不足 */
+  --wc-bubble-fg: color-mix(in srgb, var(--toolbar-accent, #396cd8) 55%, #1e293b 45%);
+  --wc-bubble-bg-top: color-mix(in srgb, var(--toolbar-accent, #396cd8) 18%, transparent);
+  --wc-bubble-bg-bottom: color-mix(in srgb, #ca8a04 14%, transparent);
+
+  position: absolute;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-top: -17px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--wc-bubble-fg);
+  background: linear-gradient(155deg, var(--wc-bubble-bg-top), var(--wc-bubble-bg-bottom));
+  box-shadow:
+    0 1px 2px color-mix(in srgb, #0f172a 10%, transparent),
+    0 6px 18px color-mix(in srgb, var(--toolbar-accent, #396cd8) 14%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 55%, transparent);
+  z-index: 4;
+  pointer-events: auto;
+  transition:
+    opacity 0.45s ease,
+    transform 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+.writing-coach-bubble__halo {
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--toolbar-accent, #396cd8) 26%, transparent),
+    transparent 72%
+  );
+  opacity: 0.65;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.writing-coach-bubble__icon {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  opacity: 0.92;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--toolbar-accent, #396cd8) 28%, transparent));
+}
+
+.writing-coach-bubble:hover {
+  transform: translateY(-2px) scale(1.04);
+  box-shadow:
+    0 2px 4px color-mix(in srgb, #0f172a 10%, transparent),
+    0 10px 26px color-mix(in srgb, var(--toolbar-accent, #396cd8) 18%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 60%, transparent);
+}
+
+.writing-coach-bubble:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--toolbar-accent, #396cd8) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.writing-coach-bubble--fading {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.writing-coach-panel {
+  position: absolute;
+  top: 8px;
+  right: 6px;
+  width: min(300px, calc(100% - 12px));
+  max-height: min(420px, calc(100vh - 120px));
+  overflow: auto;
+  z-index: 5;
+  pointer-events: auto;
+  border-radius: 12px;
+  padding: 12px 12px 10px;
+  background: #ffffff;
+  color: #111827;
+  box-shadow:
+    0 12px 40px color-mix(in srgb, #0f172a 12%, transparent),
+    0 2px 10px color-mix(in srgb, #0f172a 6%, transparent),
+    0 0 0 1px color-mix(in srgb, #0f172a 8%, transparent);
+}
+
+.writing-coach-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 8px;
+  letter-spacing: 0.01em;
+}
+
+.writing-coach-panel__list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.writing-coach-panel__list li {
+  margin-bottom: 6px;
+}
+
+.writing-coach-panel__section {
+  margin-top: 10px;
+}
+
+.writing-coach-panel__link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--toolbar-accent, #2563eb);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.writing-coach-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.writing-coach-panel__btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+  color: inherit;
+  cursor: pointer;
+}
+
+.writing-coach-panel__btn--primary {
+  border-color: color-mix(in srgb, var(--toolbar-accent, #396cd8) 45%, #93c5fd);
+  background: color-mix(in srgb, var(--toolbar-accent, #396cd8) 12%, #eff6ff);
+  color: #111827;
+}
+
+.writing-coach-panel__err {
+  font-size: 12px;
+  color: #b91c1c;
+  margin: 0 0 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .writing-coach-bubble {
+    --wc-bubble-fg: color-mix(in srgb, #e8e8ea 88%, var(--toolbar-accent, #60a5fa) 12%);
+    --wc-bubble-bg-top: color-mix(in srgb, var(--toolbar-accent, #60a5fa) 14%, transparent);
+    --wc-bubble-bg-bottom: color-mix(in srgb, #eab308 10%, transparent);
+    box-shadow:
+      0 1px 2px color-mix(in srgb, #000 14%, transparent),
+      0 6px 18px color-mix(in srgb, var(--toolbar-accent, #60a5fa) 12%, transparent),
+      inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent);
+  }
+
+  .writing-coach-bubble__halo {
+    background: radial-gradient(
+      closest-side,
+      color-mix(in srgb, var(--toolbar-accent, #60a5fa) 22%, transparent),
+      transparent 72%
+    );
+  }
+
+  .writing-coach-bubble__icon {
+    filter: drop-shadow(0 0 6px color-mix(in srgb, var(--toolbar-accent, #60a5fa) 35%, transparent));
+  }
+
+  .writing-coach-bubble:hover {
+    box-shadow:
+      0 2px 4px color-mix(in srgb, #000 12%, transparent),
+      0 10px 26px color-mix(in srgb, var(--toolbar-accent, #60a5fa) 18%, transparent),
+      inset 0 1px 0 color-mix(in srgb, #fff 14%, transparent);
+  }
+
+  .writing-coach-bubble:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--toolbar-accent, #60a5fa) 65%, transparent);
+  }
+
+  .writing-coach-panel {
+    background: #2a2a2a;
+    color: #e8e8e8;
+    box-shadow:
+      0 10px 36px color-mix(in srgb, #000 38%, transparent),
+      0 0 0 1px color-mix(in srgb, #fff 10%, transparent);
+  }
+
+  .writing-coach-panel__link {
+    color: color-mix(in srgb, var(--toolbar-accent, #60a5fa) 88%, #fff);
+  }
+
+  .writing-coach-panel__actions {
+    border-top-color: color-mix(in srgb, #e8e8e8 10%, transparent);
+  }
+
+  .writing-coach-panel__btn {
+    border-color: color-mix(in srgb, #e8e8e8 18%, transparent);
+    background: color-mix(in srgb, #e8e8e8 6%, transparent);
+    color: inherit;
+  }
+
+  .writing-coach-panel__btn--primary {
+    border-color: color-mix(in srgb, var(--toolbar-accent, #60a5fa) 55%, transparent);
+    background: color-mix(in srgb, var(--toolbar-accent, #60a5fa) 18%, transparent);
+    color: inherit;
+  }
+
+  .writing-coach-panel__err {
+    color: #f5a090;
+  }
+}

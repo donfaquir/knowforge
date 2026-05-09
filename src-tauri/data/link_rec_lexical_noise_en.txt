@@ -1,0 +1,21 @@
+# 链接推荐英文空泛词：整词匹配（仅字母；小写比对）
+actually
+basically
+certain
+core
+fairly
+generic
+largely
+lot
+lots
+mainly
+many
+mostly
+much
+overall
+quite
+rather
+really
+simply
+various
+very

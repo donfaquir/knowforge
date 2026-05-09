@@ -1,0 +1,48 @@
+name: Bug 报告
+description: 报告可复现的缺陷或异常行为
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先搜索是否已有相同 Issue。安全漏洞请按仓库根目录 SECURITY.md 中的说明私下报告，勿在此公开讨论。
+  - type: textarea
+    id: summary
+    attributes:
+      label: 简述
+      description: 一句话说明问题
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: 操作系统、Knowforge 版本或 commit、Rust/Node 版本（若与构建相关）
+      placeholder: "例如：macOS 15.x，Knowforge 0.5.0，从 main @ abc1234 构建"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 从启动应用到出现问题的最小步骤
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或截图（可选）
+      description: 控制台、Tauri 日志或界面截图（注意脱敏）

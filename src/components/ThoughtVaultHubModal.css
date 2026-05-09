@@ -1,0 +1,194 @@
+/* 与主壳浅色主题一致；暗色跟随 prefers-color-scheme */
+
+.thought-vault-hub-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(15, 15, 15, 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+}
+
+.thought-vault-hub {
+  width: min(720px, 100%);
+  max-height: min(80vh, 640px);
+  display: flex;
+  flex-direction: column;
+  background: #fafafa;
+  color: #0f0f0f;
+  border: 1px solid #ccc;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+
+.thought-vault-hub__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(15, 15, 15, 0.1);
+}
+
+.thought-vault-hub__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.thought-vault-hub__close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.thought-vault-hub__close:hover {
+  color: #2563eb;
+}
+
+.thought-vault-hub__search {
+  margin: 10px 14px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #bbb;
+  background: #fff;
+  color: #0f0f0f;
+  font-size: 13px;
+}
+
+.thought-vault-hub__search::placeholder {
+  color: #64748b;
+}
+
+.thought-vault-hub__search:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 0;
+  border-color: #94a3b8;
+}
+
+.thought-vault-hub__muted {
+  margin: 8px 14px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.thought-vault-hub__err {
+  margin: 8px 14px;
+  color: #c62828;
+  font-size: 12px;
+}
+
+.thought-vault-hub__list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 0 12px;
+  overflow: auto;
+  flex: 1;
+}
+
+.thought-vault-hub__li {
+  margin: 0;
+  padding: 0;
+}
+
+.thought-vault-hub__row {
+  width: 100%;
+  text-align: left;
+  padding: 8px 14px;
+  border: none;
+  border-bottom: 1px solid rgba(15, 15, 15, 0.08);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.thought-vault-hub__row:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.thought-vault-hub__path {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f0f0f;
+}
+
+.thought-vault-hub__tid {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.thought-vault-hub__excerpt {
+  font-size: 12px;
+  line-height: 1.35;
+  color: #334155;
+  white-space: pre-wrap;
+}
+
+.thought-vault-hub__meta {
+  font-size: 11px;
+  color: #64748b;
+  text-transform: lowercase;
+}
+
+@media (prefers-color-scheme: dark) {
+  .thought-vault-hub-backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  .thought-vault-hub {
+    background: var(--app-chrome-bg, #1a1a1a);
+    color: #e8e8e8;
+    border-color: #444;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  }
+
+  .thought-vault-hub__head {
+    border-bottom-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .thought-vault-hub__close:hover {
+    color: #93c5fd;
+  }
+
+  .thought-vault-hub__search {
+    border-color: #555;
+    background: #141414;
+    color: #e8e8e8;
+  }
+
+  .thought-vault-hub__search::placeholder {
+    color: #94a3b8;
+  }
+
+  .thought-vault-hub__muted {
+    color: #94a3b8;
+  }
+
+  .thought-vault-hub__row {
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .thought-vault-hub__row:hover {
+    background: rgba(96, 165, 250, 0.12);
+  }
+
+  .thought-vault-hub__path {
+    color: #e8e8e8;
+  }
+
+  .thought-vault-hub__tid,
+  .thought-vault-hub__meta {
+    color: #94a3b8;
+  }
+
+  .thought-vault-hub__excerpt {
+    color: #e2e8f0;
+  }
+}

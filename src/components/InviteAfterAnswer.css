@@ -1,0 +1,164 @@
+/* --- InviteAfterAnswer 邀请区样式 --- */
+
+.invite-after-answer {
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--crepe-color-primary, #2563eb), transparent 92%);
+  border: 1px solid color-mix(in srgb, var(--crepe-color-primary, #2563eb), transparent 80%);
+  animation: invite-fade-in 0.3s ease-out;
+}
+
+@keyframes invite-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.invite-thought-ref {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 0.82rem;
+  color: var(--crepe-color-on-surface-variant, #6b7280);
+}
+
+.invite-thought-icon {
+  flex-shrink: 0;
+}
+
+.invite-thought-path {
+  font-weight: 500;
+  color: var(--crepe-color-primary, #2563eb);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.invite-thought-excerpt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.invite-question {
+  font-size: 0.88rem;
+  color: var(--crepe-color-on-surface, #374151);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.invite-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.invite-btn {
+  font-size: 0.82rem;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.invite-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.invite-btn--accept {
+  background: var(--crepe-color-primary, #2563eb);
+  color: #fff;
+}
+
+.invite-btn--accept:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.invite-btn--dismiss {
+  background: transparent;
+  color: var(--crepe-color-on-surface-variant, #6b7280);
+  border-color: color-mix(in srgb, var(--crepe-color-outline, #9ca3af), transparent 50%);
+}
+
+.invite-btn--dismiss:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--crepe-color-outline, #9ca3af), transparent 85%);
+}
+
+.invite-btn--snooze {
+  background: transparent;
+  color: var(--crepe-color-on-surface-variant, #6b7280);
+  border-color: transparent;
+  font-size: 0.78rem;
+  padding: 4px 8px;
+}
+
+.invite-btn--snooze:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.invite-snooze-confirm {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--crepe-color-outline, #9ca3af), transparent 70%);
+}
+
+.invite-snooze-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--crepe-color-on-surface-variant, #6b7280);
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+.invite-snooze-options {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.invite-btn--snooze-option {
+  background: var(--crepe-color-surface, #f4f4f5);
+  color: var(--crepe-color-on-surface, #374151);
+  border-color: color-mix(in srgb, var(--crepe-color-outline, #9ca3af), transparent 50%);
+  font-size: 0.78rem;
+  padding: 3px 10px;
+}
+
+.invite-btn--snooze-option:hover:not(:disabled) {
+  background: var(--crepe-color-surface-variant, #e4e4e7);
+}
+
+.invite-btn--snooze-cancel {
+  background: transparent;
+  color: var(--crepe-color-on-surface-variant, #6b7280);
+  border-color: transparent;
+  font-size: 0.78rem;
+  padding: 3px 8px;
+}
+
+.invite-btn--snooze-cancel:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+/* 暗色模式 */
+@media (prefers-color-scheme: dark) {
+  .invite-after-answer {
+    background: color-mix(in srgb, var(--crepe-color-primary, #93c5fd), transparent 90%);
+    border-color: color-mix(in srgb, var(--crepe-color-primary, #93c5fd), transparent 75%);
+  }
+
+  .invite-question {
+    color: var(--crepe-color-on-surface, #e4e4e7);
+  }
+}

@@ -1,0 +1,410 @@
+/* DepthSlider — 下拉选择器样式 */
+
+.depth-slider {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 12px 4px;
+  border-bottom: 1px solid var(--crepe-color-outline, #a1a1aa33);
+  user-select: none;
+}
+
+.depth-slider[data-disabled] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ---- 紧凑：仅箭头 + 档位文案（对话框内 / 输入区底栏） ---- */
+.depth-slider--compact {
+  padding: 0;
+  border-bottom: none;
+  gap: 4px;
+  align-self: center;
+}
+
+.depth-slider--compact .depth-slider__trigger {
+  width: auto;
+  min-width: 0;
+  white-space: nowrap;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  padding: 4px 6px;
+  /* AI 输入区底栏：档位文案与箭头与 Crepe on-surface-variant 对齐（currentColor 供 SVG 描边） */
+  color: var(--crepe-color-on-surface-variant, #52525b);
+}
+
+.depth-slider--compact .depth-slider__trigger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--crepe-color-hover, #ececf0), transparent 82%);
+  border: none;
+  color: var(--crepe-color-on-surface, #27272a);
+}
+
+.depth-slider--compact .depth-slider__trigger:hover:not(:disabled) .depth-slider__trigger-value--compact,
+.depth-slider--compact .depth-slider__trigger:hover:not(:disabled) .depth-slider__trigger-chevron {
+  color: var(--crepe-color-on-surface, #27272a);
+}
+
+.depth-slider--compact .depth-slider__trigger:focus-visible {
+  outline: 2px solid var(--toolbar-accent, #396cd8);
+  outline-offset: 1px;
+}
+
+.depth-slider--compact .depth-slider__trigger-value--compact {
+  flex: 0 1 auto;
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--crepe-color-on-surface-variant, #52525b);
+}
+
+.depth-slider--compact .depth-slider__trigger-chevron {
+  color: var(--crepe-color-on-surface-variant, #52525b);
+}
+
+/* 向上展开；宽度窄于右栏，避免被 .right-panel-shell__panel overflow 裁切 */
+.depth-slider--compact .depth-slider__dropdown {
+  top: auto;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: auto;
+  min-width: 0;
+  width: max-content;
+  max-width: min(calc(var(--right-panel-width, 364px) - 32px), calc(100vw - 24px));
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.12);
+  animation: depth-dropdown-fade-in-up 0.12s ease;
+}
+
+.depth-slider--compact .depth-slider__option {
+  font-size: 12px;
+}
+
+.depth-slider--compact .depth-slider__option-desc {
+  font-size: 11px;
+}
+
+.depth-slider--compact .depth-slider__healing-banner {
+  font-size: 10px;
+  padding: 3px 6px;
+  max-width: 260px;
+}
+
+/* ---- Trigger button ---- */
+
+.depth-slider__trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--crepe-color-outline, rgba(161, 161, 170, 0.2));
+  border-radius: 6px;
+  background: var(--crepe-color-surface, #f4f4f5);
+  color: var(--crepe-color-on-surface, #71717a);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  outline: none;
+}
+
+.depth-slider__trigger:hover {
+  border-color: var(--crepe-color-primary, #2563eb);
+}
+
+.depth-slider__trigger:focus-visible {
+  outline: 2px solid var(--toolbar-accent, #396cd8);
+  outline-offset: 1px;
+}
+
+.depth-slider__trigger-label {
+  font-size: 10.5px;
+  color: var(--crepe-color-on-surface, #71717a);
+  flex-shrink: 0;
+}
+
+.depth-slider__trigger-value {
+  flex: 1;
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  /* 与 AI 面板正文一致，不用主题蓝 */
+  color: var(--crepe-color-on-surface, #444);
+}
+
+.depth-slider__trigger-chevron {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  color: var(--crepe-color-on-surface, #71717a);
+  transition: transform 0.15s ease;
+}
+
+.depth-slider__trigger-chevron--open {
+  transform: rotate(180deg);
+}
+
+/* ---- Dropdown ---- */
+
+.depth-slider__dropdown {
+  position: absolute;
+  top: calc(100% - 2px);
+  left: 12px;
+  right: 12px;
+  z-index: 40;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+  animation: depth-dropdown-fade-in 0.12s ease;
+}
+
+@keyframes depth-dropdown-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes depth-dropdown-fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.depth-slider__dropdown:focus {
+  outline: none;
+}
+
+/* ---- Option ---- */
+
+.depth-slider__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+  outline: none;
+}
+
+.depth-slider__option:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.depth-slider__option:focus-visible {
+  background: rgba(0, 0, 0, 0.06);
+  outline: none;
+}
+
+.depth-slider__option--active {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.depth-slider__option--active:hover {
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.depth-slider__option-name {
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 2em;
+}
+
+.depth-slider__option-desc {
+  flex: 1;
+  font-size: 10px;
+  color: var(--crepe-color-on-surface, #71717a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.depth-slider__option-check {
+  flex-shrink: 0;
+  color: var(--crepe-color-primary, #2563eb);
+}
+
+/* ---- Info row (unchanged) ---- */
+
+.depth-slider__info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 18px;
+}
+
+.depth-slider__desc {
+  font-size: 10.5px;
+  color: var(--crepe-color-on-surface, #71717a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.depth-slider__details-btn {
+  border: none;
+  background: none;
+  color: var(--crepe-color-primary, #2563eb);
+  font-size: 10.5px;
+  cursor: pointer;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.depth-slider__details-btn:hover {
+  text-decoration: underline;
+}
+
+/* ---- Healing banner ---- */
+
+.depth-slider__healing-banner {
+  font-size: 10.5px;
+  color: var(--crepe-color-error, #dc2626);
+  background: var(--crepe-color-error-container, #fef2f2);
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-top: 2px;
+}
+
+/* ---- Details panel (unchanged) ---- */
+
+.depth-slider__details-panel {
+  border: 1px solid var(--crepe-color-outline, #a1a1aa33);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 10.5px;
+  color: var(--crepe-color-on-surface, #71717a);
+  max-height: 120px;
+  overflow-y: auto;
+  margin-top: 2px;
+}
+
+.depth-slider__details-placeholder {
+  font-style: italic;
+}
+
+.depth-slider__decision-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.depth-slider__decision-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: baseline;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.depth-slider__decision-time {
+  color: var(--crepe-color-on-surface, #71717a);
+  flex-shrink: 0;
+}
+
+.depth-slider__decision-resolved {
+  font-weight: 600;
+  color: var(--crepe-color-primary, #2563eb);
+}
+
+.depth-slider__decision-override {
+  color: var(--crepe-color-error, #dc2626);
+  font-weight: 500;
+}
+
+.depth-slider__decision-reason {
+  color: var(--crepe-color-on-surface, #71717a);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+/* ---- Dark mode ---- */
+
+@media (prefers-color-scheme: dark) {
+  .depth-slider__trigger {
+    background: var(--crepe-color-surface, #2a2a2e);
+    color: var(--crepe-color-on-surface, #a1a1aa);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .depth-slider--compact .depth-slider__trigger {
+    background: transparent;
+    border: none;
+  }
+
+  /* 无 Crepe 变量时：hover 文案回退为亮色 on-surface，避免 #27272a 在暗底不可读 */
+  .depth-slider--compact .depth-slider__trigger:hover:not(:disabled),
+  .depth-slider--compact .depth-slider__trigger:hover:not(:disabled) .depth-slider__trigger-value--compact,
+  .depth-slider--compact .depth-slider__trigger:hover:not(:disabled) .depth-slider__trigger-chevron {
+    color: var(--crepe-color-on-surface, #d4d4d8);
+  }
+
+  .depth-slider__trigger:hover {
+    border-color: var(--crepe-color-primary, #93c5fd);
+  }
+
+  .depth-slider__trigger-value {
+    color: var(--crepe-color-on-surface, #a1a1aa);
+  }
+
+  .depth-slider__dropdown {
+    border-color: rgba(255, 255, 255, 0.12);
+    background: #27272a;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  }
+
+  .depth-slider--compact .depth-slider__dropdown {
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.45);
+  }
+
+  .depth-slider__option:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .depth-slider__option:focus-visible {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .depth-slider__option--active {
+    background: rgba(147, 197, 253, 0.12);
+  }
+
+  .depth-slider__option--active:hover {
+    background: rgba(147, 197, 253, 0.18);
+  }
+
+  .depth-slider__option-check {
+    color: var(--crepe-color-primary, #93c5fd);
+  }
+
+  .depth-slider__decision-resolved {
+    color: var(--crepe-color-primary, #93c5fd);
+  }
+}

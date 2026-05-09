@@ -1,0 +1,82 @@
+.kf-wiki-suggest {
+  box-sizing: border-box;
+  min-width: 240px;
+  max-width: min(420px, calc(100vw - 24px));
+  max-height: min(320px, 42vh);
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: var(--app-chrome-bg, #fff);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
+  overflow: hidden;
+}
+
+.kf-wiki-suggest__scroll {
+  max-height: min(320px, 42vh);
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.kf-wiki-suggest__empty {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 0.8125rem;
+  color: #666;
+}
+
+.kf-wiki-suggest__row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: #222;
+}
+
+.kf-wiki-suggest__row:hover,
+.kf-wiki-suggest__row:focus-visible {
+  background: rgba(0, 0, 0, 0.06);
+  outline: none;
+}
+
+.kf-wiki-suggest__name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.kf-wiki-suggest__path {
+  font-size: 0.7rem;
+  color: #666;
+  word-break: break-all;
+}
+
+@media (prefers-color-scheme: dark) {
+  .kf-wiki-suggest {
+    border-color: rgba(255, 255, 255, 0.12);
+    background: #252525;
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55);
+  }
+
+  .kf-wiki-suggest__empty {
+    color: #a1a1aa;
+  }
+
+  .kf-wiki-suggest__row {
+    color: #e5e5e5;
+  }
+
+  .kf-wiki-suggest__row:hover,
+  .kf-wiki-suggest__row:focus-visible {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .kf-wiki-suggest__path {
+    color: #a1a1aa;
+  }
+}

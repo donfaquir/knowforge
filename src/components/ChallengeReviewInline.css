@@ -1,0 +1,116 @@
+/* --- ChallengeReviewInline 内联挑战回顾 --- */
+
+.challenge-review-inline {
+  margin: 10px 0 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--kf-cognitive-violet), transparent 92%);
+  border: 1px solid color-mix(in srgb, var(--kf-cognitive-violet), transparent 78%);
+  animation: challenge-review-fade-in 0.28s ease-out;
+}
+
+@keyframes challenge-review-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.challenge-review-inline__divider {
+  height: 1px;
+  margin: 0 0 8px;
+  background: color-mix(in srgb, var(--kf-cognitive-violet), transparent 55%);
+}
+
+.challenge-review-inline__label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #6b21a8;
+  margin-bottom: 6px;
+}
+
+.challenge-review-inline__excerpt {
+  font-size: 0.82rem;
+  color: var(--crepe-color-on-surface-variant, #6b7280);
+  margin-bottom: 8px;
+  line-height: 1.45;
+  max-height: 4.5em;
+  overflow: hidden;
+}
+
+.challenge-review-inline__question {
+  font-size: 0.9rem;
+  color: var(--crepe-color-on-surface, #374151);
+  margin-bottom: 8px;
+  line-height: 1.45;
+}
+
+.challenge-review-inline__textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.86rem;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--kf-cognitive-violet), transparent 65%);
+  margin-bottom: 8px;
+  resize: vertical;
+  min-height: 64px;
+  background: var(--crepe-color-surface, #fff);
+  color: var(--crepe-color-on-surface, #111827);
+}
+
+.challenge-review-inline__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.challenge-review-inline__btn {
+  font-size: 0.82rem;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.challenge-review-inline__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.challenge-review-inline__btn--primary {
+  background: var(--kf-cognitive-violet-strong);
+  color: #fff;
+}
+
+.challenge-review-inline__btn--ghost {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--kf-cognitive-violet), transparent 55%);
+  color: var(--crepe-color-on-surface, #374151);
+}
+
+.challenge-review-inline__result {
+  font-size: 0.86rem;
+}
+
+.challenge-review-inline__pass {
+  color: #15803d;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.challenge-review-inline__sloppy {
+  color: #b45309;
+  margin: 0 0 6px;
+}
+
+.challenge-review-inline__commentary {
+  margin-bottom: 8px;
+}

@@ -1,0 +1,294 @@
+.link-rec-panel {
+  /* 与 .layout 侧栏/右栏一致：项目默认 chrome 灰底 */
+  background: var(--app-chrome-bg, #e8e8e8);
+  padding: 6px 10px 10px;
+  font-size: 12px;
+}
+
+/* 独立右栏 tab：占满面板高度，列表区可滚动 */
+.link-rec-panel--page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-bottom: none;
+}
+
+.link-rec-panel__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.link-rec-panel__title {
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.link-rec-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 面板与行内：无边框图标按钮，默认透明，hover 才铺底 */
+.link-rec-panel__btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  line-height: 1.25;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.link-rec-panel__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.link-rec-panel__btn:not(:disabled):hover {
+  background: rgba(15, 15, 15, 0.08);
+}
+
+.link-rec-panel__btn:not(:disabled):active {
+  transform: translateY(0.5px);
+}
+
+@media (prefers-color-scheme: dark) {
+  .link-rec-panel__btn:not(:disabled):hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+}
+
+.link-rec-panel__btn--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 5px;
+}
+
+.link-rec-panel__btn--icon .link-rec-panel__icon-svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.link-rec-panel__icon-svg--spin {
+  animation: link-rec-panel-icon-spin 0.85s linear infinite;
+}
+
+@keyframes link-rec-panel-icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.link-rec-panel__options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  opacity: 0.9;
+}
+
+.link-rec-panel__options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.link-rec-panel__hint {
+  margin: 0 0 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  opacity: 0.75;
+}
+
+.link-rec-panel__error {
+  margin: 0 0 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--kf-danger-text, #c62828);
+}
+
+/* 多条推荐：卡片竖排，条与条之间留白+边框，层次清晰 */
+.link-rec-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 280px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.link-rec-panel--page .link-rec-panel__list {
+  max-height: none;
+}
+
+.link-rec-panel__item {
+  margin: 0;
+  padding: 10px 10px 8px;
+  border-radius: 8px;
+  /* 每条推荐：浅色卡片，略亮于外层 .link-rec-panel 条带 */
+  background: #fafbfd;
+  border: 1px solid rgba(15, 15, 15, 0.09);
+  box-shadow: 0 1px 2px rgba(15, 15, 15, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  .link-rec-panel__item {
+    background: #2c2c30;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  }
+}
+
+.link-rec-panel__item-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  margin-bottom: 6px;
+}
+
+.link-rec-panel__item-name {
+  font-weight: 600;
+  word-break: break-all;
+  color: var(--kf-fg, inherit);
+}
+
+.link-rec-panel__item-score {
+  font-size: 11px;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+/* 推荐词：备注式侧栏+淡底，与主标题区拉开层级 */
+.link-rec-panel__keywords {
+  margin: 4px 0 8px;
+  padding: 8px 10px 9px 11px;
+  font-size: 11px;
+  line-height: 1.45;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--kf-border, #555) 38%, transparent);
+  border-left: 3px solid color-mix(in srgb, var(--kf-text-muted, #94a3b8) 55%, transparent);
+  background: color-mix(in srgb, var(--kf-text-muted, #64748b) 10%, transparent);
+}
+
+.link-rec-panel__keywords-label {
+  display: block;
+  margin-bottom: 6px;
+  padding: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.3;
+  color: var(--kf-text-muted, #64748b);
+}
+
+.link-rec-panel__keywords-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 6px;
+}
+
+.link-rec-panel__keyword-chip {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 500;
+  max-width: 100%;
+  word-break: break-word;
+  color: #334155;
+  background: #eef1f5;
+  border: 1px solid rgba(15, 15, 15, 0.1);
+  user-select: text;
+}
+
+@media (prefers-color-scheme: dark) {
+  .link-rec-panel__keyword-chip {
+    color: color-mix(in srgb, var(--kf-fg, #e8e8ea) 90%, var(--kf-text-muted, #64748b));
+    background: color-mix(in srgb, var(--kf-panel-bg, #121214) 78%, transparent);
+    border: 1px solid color-mix(in srgb, var(--kf-border, #555) 32%, transparent);
+  }
+}
+
+.link-rec-panel__item-reason {
+  margin: 0 0 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  opacity: 0.88;
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: rgba(15, 15, 15, 0.04);
+  color: var(--kf-fg, #0f0f0f);
+}
+
+@media (prefers-color-scheme: dark) {
+  .link-rec-panel__item-reason {
+    background: color-mix(in srgb, var(--kf-fg, #e5e5e5) 6%, transparent);
+    color: inherit;
+  }
+}
+
+.link-rec-panel__item-actions {
+  /* 三钮靠右成组；整体高度相对原设计约 ×0.6（缩小 40%） */
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  margin-top: 1px;
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--kf-border-subtle, rgba(127, 127, 127, 0.28)) 85%, transparent);
+}
+
+.link-rec-panel__item-actions .link-rec-panel__btn.link-rec-panel__btn--icon {
+  min-width: 18px;
+  min-height: 18px;
+}
+
+.link-rec-panel__item-actions .link-rec-panel__btn {
+  flex: 0 0 auto;
+  padding: 3px 5px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--kf-fg, inherit);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+}
+
+.link-rec-panel__item-actions .link-rec-panel__btn .link-rec-panel__icon-svg {
+  width: 12px;
+  height: 12px;
+}
+
+.link-rec-panel__empty {
+  margin: 4px 0 0;
+  font-size: 11px;
+  opacity: 0.65;
+}

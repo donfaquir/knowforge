@@ -1,0 +1,125 @@
+/* 浮动于编辑器内：与主列浅色一致 */
+
+.editor-find-bar {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 25;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: min(520px, calc(100% - 24px));
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f0f0f;
+  border: 1px solid #ccc;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+.editor-find-bar__input {
+  flex: 1;
+  min-width: 120px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid #bbb;
+  background: #fafafa;
+  color: #0f0f0f;
+  font-size: 13px;
+}
+
+.editor-find-bar__input::placeholder {
+  color: #64748b;
+}
+
+.editor-find-bar__input:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.3);
+  outline-offset: 0;
+  border-color: #94a3b8;
+}
+
+.editor-find-bar__case {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: #334155;
+}
+
+.editor-find-bar__btn {
+  padding: 6px 10px;
+  border-radius: 4px;
+  border: 1px solid #bbb;
+  background: #e8e8e8;
+  color: #0f0f0f;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.editor-find-bar__btn:hover:not(:disabled) {
+  background: #dbdce3;
+}
+
+.editor-find-bar__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.editor-find-bar__btn--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 6px;
+}
+
+.editor-find-bar__btn--icon svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.editor-find-bar__meta {
+  width: 100%;
+  font-size: 11px;
+  color: #64748b;
+}
+
+@media (prefers-color-scheme: dark) {
+  .editor-find-bar {
+    background: var(--app-chrome-bg, #1a1a1a);
+    color: #e8e8e8;
+    border-color: #444;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  }
+
+  .editor-find-bar__input {
+    border-color: #555;
+    background: #141414;
+    color: #e8e8e8;
+  }
+
+  .editor-find-bar__input::placeholder {
+    color: #94a3b8;
+  }
+
+  .editor-find-bar__case {
+    color: #cbd5e1;
+  }
+
+  .editor-find-bar__btn {
+    border-color: #555;
+    background: #2a2a2a;
+    color: #e8e8e8;
+  }
+
+  .editor-find-bar__btn:hover:not(:disabled) {
+    background: #333;
+  }
+
+  .editor-find-bar__meta {
+    color: #94a3b8;
+  }
+}

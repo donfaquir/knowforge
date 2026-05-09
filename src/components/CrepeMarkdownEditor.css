@@ -1,0 +1,642 @@
+/**
+ * Crepe 默认标题极大（h1 42px），与笔记阅读节奏不符；在此收紧层级、行距与色板，并与应用主色协调。
+ * 须在 frame/common 主题之后加载以保证优先级。
+ */
+
+/* 篇内查找高亮（ProseMirror inline decoration） */
+.editor-scroll .editor-find-match {
+  background: rgba(255, 220, 0, 0.38);
+  border-radius: 2px;
+}
+.editor-scroll .editor-find-match--current {
+  background: rgba(255, 165, 0, 0.55);
+}
+
+.editor-scroll [data-milkdown-root] {
+  /* 滚动容器：无白底卡片，与 .editor-scroll 背景一致 */
+  flex: 1 1 0%;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  /* Crepe 块级操作柄在正文左侧绝对定位（约 32px 宽，偶有多按钮），须留 gutter */
+  padding-left: 52px;
+  /* 勿用 overflow-x:hidden（会裁切块柄）。两轴均显式声明，避免只设 overflow-y 时另一轴仍为 visible 导致宽表/长行溢出父级 */
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.editor-scroll .milkdown {
+  flex: 0 0 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  /* 覆盖 frame.css 的 #fff，避免 ProseMirror 父级透出白块 */
+  --crepe-color-background: transparent;
+  background: transparent;
+  --crepe-color-on-background: #1c1917;
+  --crepe-color-surface: #f4f4f5;
+  --crepe-color-surface-low: #e4e4e7;
+  --crepe-color-on-surface: #27272a;
+  --crepe-color-on-surface-variant: #52525b;
+  --crepe-color-outline: #a1a1aa;
+  --crepe-color-primary: #2563eb;
+  --crepe-color-secondary: #d4d4d8;
+  --crepe-color-on-secondary: #18181b;
+  --crepe-color-inline-code: #c2410c;
+  --crepe-color-inline-area: #e4e4e7;
+  --crepe-color-hover: #ececf0;
+  --crepe-color-selected: rgba(37, 99, 235, 0.22);
+  --crepe-font-title: ui-serif, Georgia, "Noto Serif SC", "Songti SC", "Times New Roman",
+    serif;
+  --crepe-font-default: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans SC",
+    "PingFang SC", sans-serif;
+  --crepe-font-code: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  /* wikilink 装饰（与下方 .kf-wikilink 配套；与普通 Markdown 链接色相区分） */
+  --kf-wikilink-fg: #5b21b6;
+  --kf-wikilink-dec: #7c3aed;
+  --kf-wikilink-bg: color-mix(in srgb, #7c3aed, transparent 90%);
+  --kf-wikilink-bg-hover: color-mix(in srgb, #7c3aed, transparent 82%);
+}
+
+.editor-scroll .milkdown .ProseMirror {
+  flex: 0 0 auto;
+  min-height: min-content;
+  padding: 28px 28px 40px;
+  /* Crepe 常见 class：ProseMirror virtual-cursor-enabled editor */
+  background: transparent;
+}
+
+.editor-scroll .milkdown .ProseMirror h1,
+.editor-scroll .milkdown .ProseMirror h2,
+.editor-scroll .milkdown .ProseMirror h3,
+.editor-scroll .milkdown .ProseMirror h4,
+.editor-scroll .milkdown .ProseMirror h5,
+.editor-scroll .milkdown .ProseMirror h6 {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--crepe-color-on-background);
+}
+
+.editor-scroll .milkdown .ProseMirror h1 {
+  font-size: 1.75rem;
+  line-height: 1.3;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--crepe-color-outline), transparent 75%);
+}
+
+.editor-scroll .milkdown .ProseMirror > h1:first-child,
+.editor-scroll .milkdown .ProseMirror > h2:first-child,
+.editor-scroll .milkdown .ProseMirror > h3:first-child,
+.editor-scroll .milkdown .ProseMirror > h4:first-child,
+.editor-scroll .milkdown .ProseMirror > h5:first-child,
+.editor-scroll .milkdown .ProseMirror > h6:first-child {
+  margin-top: 0;
+}
+
+.editor-scroll .milkdown .ProseMirror h2 {
+  font-size: 1.375rem;
+  line-height: 1.35;
+  margin-top: 1.35rem;
+  margin-bottom: 0.4rem;
+}
+
+.editor-scroll .milkdown .ProseMirror h3 {
+  font-size: 1.15rem;
+  line-height: 1.4;
+  margin-top: 1.15rem;
+  margin-bottom: 0.35rem;
+}
+
+.editor-scroll .milkdown .ProseMirror h4 {
+  font-size: 1.05rem;
+  line-height: 1.45;
+  margin-top: 1rem;
+  margin-bottom: 0.3rem;
+}
+
+.editor-scroll .milkdown .ProseMirror h5 {
+  font-size: 0.95rem;
+  line-height: 1.5;
+  margin-top: 0.9rem;
+  margin-bottom: 0.25rem;
+}
+
+.editor-scroll .milkdown .ProseMirror h6 {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  margin-top: 0.85rem;
+  margin-bottom: 0.25rem;
+  font-weight: 600;
+  color: var(--crepe-color-on-surface-variant);
+  text-transform: none;
+}
+
+.editor-scroll .milkdown .ProseMirror p {
+  font-size: 1rem;
+  line-height: 1.72;
+  padding: 5px 0;
+  color: var(--crepe-color-on-background);
+}
+
+.editor-scroll .milkdown .ProseMirror a {
+  color: var(--crepe-color-primary);
+  text-decoration-color: color-mix(in srgb, var(--crepe-color-primary), transparent 55%);
+  text-underline-offset: 2px;
+}
+
+.editor-scroll .milkdown .ProseMirror a:hover {
+  text-decoration-color: var(--crepe-color-primary);
+}
+
+/* Obsidian 式 [[wikilink]]：装饰 span，色相偏紫 + 虚线下划线，与上方 `a` 实线蓝链区分 */
+.editor-scroll .milkdown .ProseMirror .kf-wikilink {
+  color: var(--kf-wikilink-fg);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--kf-wikilink-dec), transparent 35%);
+  text-decoration-style: dashed;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  border-radius: 3px;
+  padding: 0.06em 0.12em;
+  background: var(--kf-wikilink-bg);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition:
+    background 0.12s ease,
+    text-decoration-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.editor-scroll .milkdown .ProseMirror .kf-wikilink:hover {
+  color: var(--kf-wikilink-dec);
+  text-decoration-style: solid;
+  text-decoration-color: color-mix(in srgb, var(--kf-wikilink-dec), transparent 12%);
+  background: var(--kf-wikilink-bg-hover);
+}
+
+/* 行内代码：与正文区分更明显，长串不易与句子粘在一起 */
+.editor-scroll .milkdown .ProseMirror code {
+  font-family: var(--crepe-font-code);
+  font-size: 0.86em;
+  padding: 0.1em 0.38em;
+  border-radius: 5px;
+  font-weight: 500;
+  border: 1px solid color-mix(in srgb, var(--crepe-color-outline), transparent 68%);
+  background: color-mix(in srgb, var(--crepe-color-inline-area), #fff 18%);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* 纯 pre（非 CodeMirror 块）与代码块面板同色，避免浅色底 + oneDark 高亮撞色 */
+.editor-scroll .milkdown .ProseMirror pre {
+  margin: 14px 0;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, #3e4451, transparent 35%);
+  background: #282c34;
+  color: #abb2bf;
+  line-height: 1.6;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+.editor-scroll .milkdown .ProseMirror pre code {
+  font-family: var(--crepe-font-code);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: inherit;
+  color: inherit;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+/**
+ * fenced 代码块：Crepe 使用 CodeMirror + oneDark，用深色面板包住以统一对比度；
+ * 收紧内边距、圆角与语言栏，避免「灰盒子套灰编辑器」的松散感。
+ */
+.editor-scroll .milkdown .milkdown-code-block {
+  margin: 16px 0;
+  padding: 10px 12px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, #3e4451, transparent 25%);
+  background: #282c34;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.14), 0 4px 18px rgba(15, 23, 42, 0.06);
+  /* 勿 hidden：语言检索浮层在块内定位，会被裁切 */
+  overflow: visible;
+  position: relative;
+}
+
+/* 空块/少行时也给足高度，避免工具条与首行挤在一起 */
+.editor-scroll .milkdown .milkdown-code-block .cm-editor {
+  min-height: 10rem;
+  border-radius: 6px;
+  /* 与外层一致保持 visible，避免语言面板落在 editor 子树时被裁切 */
+  overflow: visible;
+}
+
+/* 语言按钮与浮层叠在相邻段落之上，避免被后续块盖住 */
+.editor-scroll .milkdown .milkdown-code-block .tools {
+  position: relative;
+  z-index: 2;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .cm-editor,
+.editor-scroll .milkdown .milkdown-code-block .cm-gutters {
+  background-color: transparent !important;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .cm-scroller {
+  font-family: var(--crepe-font-code);
+  font-size: 0.8125rem;
+  line-height: 1.65;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .cm-content {
+  padding: 4px 0 6px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .cm-line {
+  padding: 0 2px 0 0;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .tools .language-button {
+  opacity: 1;
+  margin-bottom: 4px;
+  padding: 1px 2px 1px 4px;
+  gap: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #c8ccd4;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-family: var(--crepe-font-code);
+  font-size: 6px;
+  line-height: 8px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .tools .language-button:hover {
+  background: rgba(255, 255, 255, 0.11);
+  color: #e6e8ec;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .tools .tools-button-group button {
+  opacity: 0.95;
+  padding: 2px 5px;
+  font-size: 6px;
+  line-height: 8px;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.09);
+  color: #d7dae0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.editor-scroll .milkdown .milkdown-code-block .tools .tools-button-group button svg {
+  width: 7px;
+  height: 7px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .tools .language-button .expand-icon {
+  width: 9px;
+  height: 9px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .tools .language-button .expand-icon svg {
+  width: 7px;
+  height: 7px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .tools .tools-button-group button:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.editor-scroll .milkdown .milkdown-code-block.selected {
+  outline: 2px solid color-mix(in srgb, var(--crepe-color-primary), transparent 35%);
+  outline-offset: 1px;
+  /* 选中时抬高 stacking，语言列表不被下方块遮挡 */
+  z-index: 3;
+}
+
+.editor-scroll .milkdown .ProseMirror blockquote {
+  margin: 10px 0;
+  padding: 6px 0 6px 1.1rem;
+}
+
+.editor-scroll .milkdown .ProseMirror blockquote::before {
+  width: 3px;
+  border-radius: 3px;
+  top: 6px;
+  bottom: 6px;
+  background: color-mix(in srgb, var(--crepe-color-primary), transparent 25%);
+}
+
+/* --- Thought callout 样式（> [!thought]） --- */
+
+.editor-scroll .milkdown .ProseMirror blockquote.thought-callout {
+  border-radius: 6px;
+  padding: 8px 12px 8px 1.2rem;
+  background: color-mix(in srgb, #22c55e, transparent 92%);
+}
+
+.editor-scroll .milkdown .ProseMirror blockquote.thought-callout::before {
+  background: #22c55e;
+  width: 3px;
+}
+
+.editor-scroll .milkdown .ProseMirror blockquote.thought-callout--growing {
+  background: color-mix(in srgb, #3b82f6, transparent 92%);
+}
+
+.editor-scroll .milkdown .ProseMirror blockquote.thought-callout--growing::before {
+  background: #3b82f6;
+}
+
+.editor-scroll .milkdown .ProseMirror blockquote.thought-callout--mature {
+  background: color-mix(in srgb, #8b5cf6, transparent 92%);
+}
+
+.editor-scroll .milkdown .ProseMirror blockquote.thought-callout--mature::before {
+  background: #8b5cf6;
+}
+
+.editor-scroll .milkdown .ProseMirror ul,
+.editor-scroll .milkdown .ProseMirror ol {
+  margin: 6px 0;
+  padding-left: 1.35rem;
+}
+
+.editor-scroll .milkdown .ProseMirror li {
+  margin: 2px 0;
+}
+
+.editor-scroll .milkdown .ProseMirror li p {
+  padding: 2px 0;
+}
+
+.editor-scroll .milkdown .ProseMirror hr {
+  margin: 1.5rem 0;
+  padding: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--crepe-color-outline), transparent 70%);
+  background-clip: border-box;
+}
+
+.editor-scroll .milkdown .milkdown-table-block th,
+.editor-scroll .milkdown .milkdown-table-block td {
+  padding: 8px 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .editor-scroll [data-milkdown-root] {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+  }
+
+  .editor-scroll .milkdown {
+    --crepe-color-on-background: #e4e4e7;
+    --crepe-color-surface: #2a2a2e;
+    --crepe-color-surface-low: #27272a;
+    --crepe-color-on-surface: #d4d4d8;
+    --crepe-color-on-surface-variant: #a1a1aa;
+    --crepe-color-outline: #71717a;
+    --crepe-color-primary: #93c5fd;
+    --crepe-color-secondary: #3f3f46;
+    --crepe-color-on-secondary: #e4e4e7;
+    --crepe-color-inline-code: #fdba74;
+    --crepe-color-inline-area: #3f3f46;
+    --crepe-color-hover: #2e2e33;
+    --crepe-color-selected: rgba(147, 197, 253, 0.25);
+    --kf-wikilink-fg: #ddd6fe;
+    --kf-wikilink-dec: #c4b5fd;
+    --kf-wikilink-bg: color-mix(in srgb, #8b5cf6, transparent 86%);
+    --kf-wikilink-bg-hover: color-mix(in srgb, #8b5cf6, transparent 72%);
+  }
+
+  .editor-scroll .milkdown .ProseMirror code {
+    border-color: color-mix(in srgb, var(--crepe-color-outline), transparent 45%);
+    background: color-mix(in srgb, var(--crepe-color-inline-area), transparent 15%);
+  }
+
+  .editor-scroll .milkdown .ProseMirror pre {
+    background: #21252b;
+    border-color: rgba(255, 255, 255, 0.12);
+    color: #abb2bf;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+  }
+
+  .editor-scroll .milkdown .milkdown-code-block {
+    background: #21252b;
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
+  }
+
+  .editor-scroll .milkdown .milkdown-code-block .tools .language-button {
+    background: rgba(0, 0, 0, 0.2);
+    border-color: rgba(255, 255, 255, 0.08);
+    color: #b1bac4;
+  }
+
+  .editor-scroll .milkdown .milkdown-code-block .tools .tools-button-group button {
+    background: rgba(0, 0, 0, 0.22);
+    border-color: rgba(255, 255, 255, 0.06);
+    color: #c9d1d9;
+  }
+
+  .editor-scroll .milkdown .ProseMirror blockquote.thought-callout {
+    background: color-mix(in srgb, #22c55e, transparent 88%);
+  }
+
+  .editor-scroll .milkdown .ProseMirror blockquote.thought-callout--growing {
+    background: color-mix(in srgb, #3b82f6, transparent 88%);
+  }
+
+  .editor-scroll .milkdown .ProseMirror blockquote.thought-callout--mature {
+    background: color-mix(in srgb, #8b5cf6, transparent 88%);
+  }
+}
+
+/*
+ * Crepe 块柄、/ 菜单、选区浮动工具条、代码块语言面板：主题默认约 12–14px，
+ * 此处统一为约 50% 量级（含图标与内边距），避免编辑区「操作 UI」喧宾夺主。
+ */
+.editor-scroll .milkdown .milkdown-block-handle {
+  gap: 1px;
+}
+
+.editor-scroll .milkdown .milkdown-block-handle .operation-item {
+  width: 16px;
+  height: 16px;
+  padding: 2px;
+}
+
+.editor-scroll .milkdown .milkdown-block-handle .operation-item svg {
+  width: 12px;
+  height: 12px;
+}
+
+.editor-scroll .milkdown .milkdown-slash-menu .tab-group {
+  padding: 6px 6px 0;
+}
+
+.editor-scroll .milkdown .milkdown-slash-menu .tab-group ul {
+  padding: 4px 5px;
+  gap: 5px;
+}
+
+.editor-scroll .milkdown .milkdown-slash-menu .tab-group ul li {
+  padding: 3px 5px;
+  font-size: 7px;
+  line-height: 10px;
+}
+
+.editor-scroll .milkdown .milkdown-slash-menu .menu-groups {
+  padding: 0 6px 6px;
+  max-height: 210px;
+}
+
+.editor-scroll .milkdown .milkdown-slash-menu .menu-groups .menu-group h6 {
+  font-size: 7px;
+  line-height: 10px;
+  padding: 7px 5px;
+}
+
+.editor-scroll .milkdown .milkdown-slash-menu .menu-groups .menu-group li {
+  gap: 8px;
+  padding: 7px 5px;
+  min-width: 110px;
+}
+
+.editor-scroll .milkdown .milkdown-slash-menu .menu-groups .menu-group li svg {
+  width: 12px;
+  height: 12px;
+}
+
+.editor-scroll .milkdown .milkdown-slash-menu .menu-groups .menu-group li > span {
+  font-size: 7px;
+  line-height: 10px;
+}
+
+.editor-scroll .milkdown .milkdown-toolbar .toolbar-item {
+  width: 16px;
+  height: 16px;
+  margin: 3px;
+  padding: 2px;
+}
+
+.editor-scroll .milkdown .milkdown-toolbar .toolbar-item svg {
+  width: 12px;
+  height: 12px;
+}
+
+.editor-scroll .milkdown .milkdown-toolbar .divider {
+  height: 12px;
+  margin: 5px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .list-wrapper {
+  width: 120px;
+  padding-top: 6px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .language-list {
+  height: 205px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .language-list-item {
+  gap: 4px;
+  padding: 2px 11px;
+  font-size: 7px;
+  line-height: 10px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .language-list-item .leading,
+.editor-scroll .milkdown .milkdown-code-block .language-list-item .leading svg {
+  width: 12px;
+  height: 12px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .search-box {
+  margin: 0 6px 4px;
+  gap: 4px;
+  padding: 3px 5px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .search-box input {
+  font-size: 7px;
+  line-height: 10px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .search-box .clear-icon {
+  width: 10px;
+  height: 10px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .search-box .clear-icon svg {
+  width: 10px;
+  height: 10px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .preview-panel .preview-label {
+  font-size: 6px;
+  margin: 3px 0;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .cm-panel {
+  font-size: 7px;
+  line-height: 10px;
+}
+
+.editor-scroll .milkdown .milkdown-code-block .cm-panel > button {
+  font-size: 6px;
+  line-height: 8px;
+  padding: 2px 5px;
+}
+
+.editor-scroll .milkdown .milkdown-table-block .handle {
+  font-size: 7px;
+}
+
+.editor-scroll .milkdown .milkdown-table-block .cell-handle .button-group button {
+  margin: 3px;
+  padding: 2px;
+}
+
+.editor-scroll .milkdown .milkdown-table-block .cell-handle .button-group button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.editor-scroll .milkdown .milkdown-table-block .line-handle .add-button svg {
+  width: 8px;
+  height: 8px;
+}
+
+/* Mermaid 预览块（code_block 下方 widget） */
+.editor-scroll .milkdown .ProseMirror .kf-mermaid-preview {
+  margin: 8px 0 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--crepe-color-outline, #a1a1aa);
+  background: var(--crepe-color-surface, #f4f4f5);
+  overflow-x: auto;
+}
+
+.editor-scroll .milkdown .ProseMirror .kf-mermaid-preview svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}

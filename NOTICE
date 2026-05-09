@@ -1,0 +1,12 @@
+Knowforge
+Copyright 2026 caichangqing
+
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file for the full license text.
+
+Third-party materials bundled in this repository:
+
+- Embedding model weights under src-tauri/resources/models/bge-small-zh-v1.5/
+  originate from the BAAI/bge-small-zh-v1.5 project on Hugging Face. Use and
+  redistribution of those files are subject to the license terms published by
+  the model authors at https://huggingface.co/BAAI/bge-small-zh-v1.5

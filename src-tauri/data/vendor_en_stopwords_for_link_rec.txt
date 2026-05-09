@@ -1,0 +1,17 @@
+# 常见英文衔接/空泛词（可与主表合并；整词匹配，≥3 字母）
+# 参考：Snowball / ISO 停用词中的功能类副词子集（自行核对上游许可）
+
+accordingly
+although
+consequently
+furthermore
+hence
+however
+likewise
+moreover
+nevertheless
+nonetheless
+otherwise
+therefore
+though
+thus

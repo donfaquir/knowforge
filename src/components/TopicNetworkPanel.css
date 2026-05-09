@@ -1,0 +1,189 @@
+/* 主题网络图：布局与理解网络同量级，独立 BEM 前缀避免与 App.css 纠缠 */
+
+.topic-network {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  min-width: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.topic-network__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 6px calc(10px * var(--tool-strip-scale, 1)) 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.topic-network__metrics {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: #555;
+  flex: 1;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.topic-network__toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.topic-network__text-btn {
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: var(--app-chrome-bg, #fff);
+  color: #333;
+  cursor: pointer;
+}
+
+.topic-network__text-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.topic-network__text-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.topic-network__toolbar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--app-chrome-bg, #fff);
+  color: #444;
+  cursor: pointer;
+}
+
+.topic-network__toolbar-icon-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.16);
+}
+
+.topic-network__toolbar-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.topic-network__toolbar-icon-svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+}
+
+.topic-network__error,
+.topic-network__empty,
+.topic-network__loading {
+  margin: 12px 0 0;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.topic-network__error {
+  color: #b91c1c;
+}
+
+.topic-network__svg {
+  flex: 1;
+  min-height: 200px;
+  width: 100%;
+  touch-action: none;
+  user-select: none;
+}
+
+.topic-network__edge {
+  stroke: rgba(100, 100, 120, 0.35);
+  stroke-width: 1;
+}
+
+.topic-network__edge--dim {
+  stroke-opacity: 0.12;
+}
+
+.topic-network__node-topic {
+  stroke: rgba(0, 0, 0, 0.18);
+  stroke-width: 1;
+}
+
+.topic-network__node-doc {
+  stroke: rgba(0, 0, 0, 0.18);
+  stroke-width: 1;
+}
+
+.topic-network__node-group--dim .topic-network__node-topic,
+.topic-network__node-group--dim .topic-network__node-doc,
+.topic-network__node-group--dim .topic-network__label {
+  opacity: 0.28;
+}
+
+.topic-network__label {
+  font-size: 10px;
+  fill: currentColor;
+  pointer-events: none;
+}
+
+.topic-network__modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.25);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 48px;
+}
+
+.topic-network__modal {
+  width: min(360px, calc(100% - 24px));
+  padding: 14px 16px 16px;
+  border-radius: 10px;
+  background: var(--app-chrome-bg, #fff);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.topic-network__modal h3 {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.topic-network__modal p {
+  margin: 0 0 10px;
+  font-size: 0.8125rem;
+  color: #555;
+  line-height: 1.4;
+}
+
+.topic-network__modal input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 0.875rem;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  margin-bottom: 12px;
+}
+
+.topic-network__modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

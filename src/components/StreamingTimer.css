@@ -1,0 +1,21 @@
+.streaming-timer {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--color-text-muted, #888);
+  padding: 2px 0;
+  user-select: none;
+}
+
+.streaming-timer--active {
+  color: var(--color-accent, #4a9eff);
+}
+
+@media (prefers-color-scheme: dark) {
+  .streaming-timer {
+    color: var(--color-text-muted, #999);
+  }
+  .streaming-timer--active {
+    color: var(--color-accent, #6ab7ff);
+  }
+}

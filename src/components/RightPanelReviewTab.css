@@ -1,0 +1,8 @@
+/* 右栏回顾标签：可滚动内容区，与大纲/AI 面板同高 */
+.right-panel-review-tab {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  padding: 8px 10px 12px;
+}
