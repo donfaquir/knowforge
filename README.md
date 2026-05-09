@@ -12,8 +12,6 @@
 
 Knowforge 是一款基于 [Tauri 2](https://tauri.app/) 的跨平台桌面应用：前端为 **React + TypeScript + Vite**，核心业务逻辑在 **Rust**（`src-tauri/`）中运行。数据以本地为主，适合管理 Markdown 笔记、知识库目录与检索、写作辅助等场景（具体能力随版本迭代，以应用内体验为准）。
 
-若你关注**从公司内部走向对外开源**的背景与必要性说明，参见 [OPEN_SOURCE.md](OPEN_SOURCE.md)。
-
 ### 功能概览
 
 - 本地 Markdown / 知识库工作流，结合文件监听与索引能力  
@@ -76,7 +74,6 @@ knowforge/
 ├── package.json
 ├── LICENSE              # Apache-2.0
 ├── NOTICE               # 版权与第三方说明（含随仓库分发的模型资源提示）
-├── OPEN_SOURCE.md       # 开源背景与必要性（中英）
 └── CONTRIBUTING.md      # 参与贡献说明
 ```
 
@@ -97,8 +94,6 @@ knowforge/
 ### Overview
 
 Knowforge is a **local-first** desktop application built with [Tauri 2](https://tauri.app/). The UI is **React + TypeScript + Vite**, while core logic runs in **Rust** under `src-tauri/`. It targets Markdown notes, knowledge-vault workflows, search, and writing assistance (exact features evolve with releases; the in-app experience is authoritative).
-
-For **background and rationale** on moving from a company-internal context to public open source, see [OPEN_SOURCE.md](OPEN_SOURCE.md).
 
 ### Highlights
 
@@ -162,7 +157,6 @@ knowforge/
 ├── package.json
 ├── LICENSE              # Apache-2.0
 ├── NOTICE               # Attribution & third-party notes (e.g. bundled model weights)
-├── OPEN_SOURCE.md       # Open-source background & rationale (bilingual)
 └── CONTRIBUTING.md      # Contribution guide
 ```
 
