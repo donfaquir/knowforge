@@ -42,5 +42,9 @@ __pycache__/
 *.pyo
 *.pyd
 /docs/
-/src-tauri/resources/models/bge-small-zh-v1.5/.gitkeep
+
+# 嵌入模型权重大，不入库；仅占位目录满足 tauri-build（见该目录下 .gitkeep）
+/src-tauri/resources/models/bge-small-zh-v1.5/*
+!/src-tauri/resources/models/bge-small-zh-v1.5/.gitkeep
+
 .idea/
