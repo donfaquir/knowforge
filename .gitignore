@@ -43,3 +43,4 @@ __pycache__/
 *.pyd
 /docs/
 /src-tauri/resources/models/bge-small-zh-v1.5/.gitkeep
+.idea/
