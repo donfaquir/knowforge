@@ -36,6 +36,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Linux 上编译 tauri / webkit2gtk 需要 GObject、GTK、WebKit 等系统库，否则 gobject-sys 等 -sys crate 的 build.rs 会失败
+      - name: Install Linux dependencies (Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
