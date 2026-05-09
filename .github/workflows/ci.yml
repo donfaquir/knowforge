@@ -36,11 +36,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Linux 上编译 tauri / webkit2gtk 需要 GObject、GTK、WebKit 等系统库，否则 gobject-sys 等 -sys crate 的 build.rs 会失败
+      # Linux 上编译 Tauri / webkit2gtk 需要 GTK、WebKit 等开发包。
+      # 说明：WebKitGTK 依赖极多，本步在解压期可能长达数分钟且无新日志，界面像「卡住」，属正常现象；与非交互/apt 镜像无关。
       - name: Install Linux dependencies (Tauri)
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=5 update
+          echo "Installing Tauri/Linux deps (--no-install-recommends reduces volume; WebKitGTK 仍以分钟计) ..."
+          sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev \
             build-essential \
             curl \
@@ -50,6 +55,7 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev
+          echo "apt install finished."
 
       - uses: dtolnay/rust-toolchain@stable
 

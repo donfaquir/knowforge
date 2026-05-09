@@ -13,12 +13,13 @@ name = "knowforge_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+# tauri-build 版本号独立于 tauri crate，2.11 线对应 tauri-build 2.6.x
+tauri-build = { version = "2.6", features = [] }
 
 [dependencies]
-# tauri 与 tauri-build 版本线独立，均用 major=2 由 Cargo 解析到当前最新兼容组合
-tauri = { version = "2", features = ["macos-private-api"] }
-tauri-plugin-dialog = "2"
+# 与前端 @tauri-apps/api 保持同一 minor（Tauri CLI 会校验），勿只写 major=2 导致与 npm 漂移
+tauri = { version = "2.11", features = ["macos-private-api"] }
+tauri-plugin-dialog = "2.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 url = "2.5"
