@@ -34,6 +34,35 @@ Knowforge 是一款基于 [Tauri 2](https://tauri.app/) 的跨平台桌面应用
 - **Node.js**：建议使用当前 LTS  
 - 操作系统与系统库：请遵循 [Tauri 官方前置条件](https://tauri.app/start/prerequisites/)
 
+### 编译前：语义嵌入模型（BGE）
+
+为控制仓库体积，**BAAI bge-small-zh-v1.5** 权重文件默认不随 Git 提交（见仓库根目录 `.gitignore` 与 [NOTICE](NOTICE)）。在运行 **`npm run tauri dev`** 或 **`npm run tauri build`** 之前，请在本机补齐模型，否则依赖本地向量索引/语义能力的特性可能不可用。
+
+在仓库根目录下，将以下三个文件放到 **`src-tauri/resources/models/bge-small-zh-v1.5/`**（与其中 `.gitkeep` 同级）：
+
+| 文件 | 说明 |
+|------|------|
+| `config.json` | 模型配置 |
+| `tokenizer.json` | 分词器 |
+| `model.safetensors` | 权重（较大） |
+
+**下载方式（任选其一）**
+
+1. **Hugging Face Hub CLI**（推荐；需 Python 3）  
+   在克隆后的项目根目录执行：
+
+   ```bash
+   pip install -U "huggingface_hub[cli]"
+   huggingface-cli download BAAI/bge-small-zh-v1.5 --local-dir src-tauri/resources/models/bge-small-zh-v1.5
+   ```
+
+   若已安装新版 CLI，也可使用：`hf download BAAI/bge-small-zh-v1.5 --local-dir src-tauri/resources/models/bge-small-zh-v1.5`
+
+2. **网页手动下载**  
+   打开模型页 [huggingface.co/BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5)，在 **Files and versions** 中下载上述三个文件，保存到 `src-tauri/resources/models/bge-small-zh-v1.5/`。
+
+首次成功加载后，应用会把完整三件套复制到用户缓存目录 **`~/.cache/knowforge/models/bge-small-zh-v1.5/`**（一般无需手动创建）。若仅将文件放在用户缓存而不放 `src-tauri/resources/...`，需自行保证路径与文件名与上表一致。
+
 ### 快速开始
 
 ```bash
@@ -116,6 +145,35 @@ Knowforge is a **local-first** desktop application built with [Tauri 2](https://
 - **Rust**: at least the `rust-version` declared in `src-tauri/Cargo.toml`  
 - **Node.js**: current LTS recommended  
 - **OS / system libraries**: follow [Tauri prerequisites](https://tauri.app/start/prerequisites/)
+
+### Before you build: embedding weights (BGE)
+
+To keep the Git repository small, **BAAI bge-small-zh-v1.5** weight files are **not** committed by default (see `.gitignore` at the repo root and [NOTICE](NOTICE)). Download them locally **before** running **`npm run tauri dev`** or **`npm run tauri build`**, or features that rely on the bundled embedding model may not work.
+
+From the repository root, place these three files under **`src-tauri/resources/models/bge-small-zh-v1.5/`** (alongside the existing `.gitkeep`):
+
+| File | Role |
+|------|------|
+| `config.json` | Model config |
+| `tokenizer.json` | Tokenizer |
+| `model.safetensors` | Weights (large) |
+
+**How to obtain the files (pick one)**
+
+1. **Hugging Face Hub CLI** (recommended; Python 3 required)  
+   Run from the cloned repository root:
+
+   ```bash
+   pip install -U "huggingface_hub[cli]"
+   huggingface-cli download BAAI/bge-small-zh-v1.5 --local-dir src-tauri/resources/models/bge-small-zh-v1.5
+   ```
+
+   If you use the newer CLI entrypoint: `hf download BAAI/bge-small-zh-v1.5 --local-dir src-tauri/resources/models/bge-small-zh-v1.5`
+
+2. **Browser download**  
+   Open [huggingface.co/BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5), use **Files and versions**, and download the three files into `src-tauri/resources/models/bge-small-zh-v1.5/`.
+
+On first successful load, the app copies the complete set into **`~/.cache/knowforge/models/bge-small-zh-v1.5/`** (you normally do not need to create this manually). If you only populate the user cache and skip `src-tauri/resources/...`, you must keep the same three filenames under that cache path.
 
 ### Quick start
 
