@@ -1,11 +1,44 @@
 import type { TreeNode } from "../components/FileTree";
 
 /**
- * 新建 Untitled 笔记写入磁盘的初始正文：同时包含标题块与首段，
- * 避免编辑器里只能点标题、必须回车才出现正文区域。
+ * 新建笔记的兜底模板（固定 H1）；弹窗「新建 Markdown」应使用 `initialMarkdownFromBasename`，
+ * 使首行标题与文件名 stem 一致。
  */
 export const DEFAULT_NEW_MARKDOWN_TEMPLATE =
   "# Title\n\nStart writing here.\n";
+
+/** 去掉 .md / .markdown 后缀（不区分大小写），保留 stem 原始大小写 */
+function stemFromMarkdownBasename(basename: string): string {
+  const lower = basename.toLowerCase();
+  if (lower.endsWith(".markdown")) {
+    return basename.slice(0, -".markdown".length);
+  }
+  if (lower.endsWith(".md")) {
+    return basename.slice(0, -".md".length);
+  }
+  return basename;
+}
+
+/** 用于 ATX 标题行：去换行/制表、压空格 */
+function sanitizeHeadingStem(stem: string): string {
+  return stem
+    .replace(/\r\n|\n|\r|\t/g, " ")
+    .replace(/ +/g, " ")
+    .trim();
+}
+
+/** 与新建/重命名同步标题一致：用于比对或写入首行 H1 文案 */
+export function displayHeadingStemFromBasename(basename: string): string {
+  return sanitizeHeadingStem(stemFromMarkdownBasename(basename)) || "Untitled";
+}
+
+/**
+ * 由已通过 `normalizeMarkdownBasename` 的文件基础名生成初始正文：首行 H1 与 stem 对齐。
+ */
+export function initialMarkdownFromBasename(basename: string): string {
+  const heading = displayHeadingStemFromBasename(basename);
+  return `# ${heading}\n\nStart writing here.\n`;
+}
 
 /** 收集树中所有 Markdown 文件的 rel_path（仅叶子节点） */
 export function collectMarkdownFileRelPaths(nodes: TreeNode[]): Set<string> {

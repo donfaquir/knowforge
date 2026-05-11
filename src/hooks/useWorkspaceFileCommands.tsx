@@ -5,19 +5,24 @@ import { useTranslation } from "react-i18next";
 import type { FileTreeFileOps, TreeNode } from "../components/FileTree";
 import {
   collectMarkdownFileRelPaths,
-  DEFAULT_NEW_MARKDOWN_TEMPLATE,
+  initialMarkdownFromBasename,
   joinRelPath,
   nextUntitledRelPathInDir,
   normalizeFolderBasename,
   normalizeMarkdownBasename,
   parentDirOfRelPath,
 } from "../utils/newUntitledMarkdownPath";
+import { isMarkdownRelPath } from "../utils/syncMarkdownHeadingOnRename";
 
 /** 与 useOpenDocs 配合：仅依赖文件操作所需 API，便于单测与复用 */
 export type WorkspaceFileCommandsDocState = {
   setSaveError: (msg: string | null) => void;
   openOrFocusTab: (relPath: string) => Promise<string | null>;
-  renameTabPath: (fromRel: string, toRel: string) => void;
+  renameTabPath: (
+    fromRel: string,
+    toRel: string,
+    options?: { markdownHeadingRename?: { oldBasename: string; newBasename: string } },
+  ) => void;
   renameDirectoryInOpenDocs: (fromDirRel: string, toDirRel: string) => void;
   removeTabByPath: (relPath: string) => void;
   removeTabsUnderDirectory: (dirRel: string) => void;
@@ -488,7 +493,7 @@ export function useWorkspaceFileCommands({
       }
       await invoke("write_markdown_file", {
         relPath,
-        content: DEFAULT_NEW_MARKDOWN_TEMPLATE,
+        content: initialMarkdownFromBasename(newBase),
       });
       await refreshTree();
       setPreferredNewMarkdownDir(newMdDialog.dirRel);
@@ -553,7 +558,16 @@ export function useWorkspaceFileCommands({
     setSaveError(null);
     try {
       await invoke("move_workspace_entry", { fromRel: renameDialog.relPath, toRel: nextPath });
-      renameTabPath(renameDialog.relPath, nextPath);
+      const fromSlash = renameDialog.relPath.lastIndexOf("/");
+      const oldBase =
+        fromSlash < 0 ? renameDialog.relPath : renameDialog.relPath.slice(fromSlash + 1);
+      renameTabPath(
+        renameDialog.relPath,
+        nextPath,
+        isMarkdownRelPath(nextPath)
+          ? { markdownHeadingRename: { oldBasename: oldBase, newBasename: newBase } }
+          : undefined,
+      );
       await refreshTree();
       setRenameDialog(null);
     } catch (e) {
