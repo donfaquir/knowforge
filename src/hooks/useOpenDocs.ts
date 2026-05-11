@@ -6,6 +6,7 @@ import { mergeEditorMarkdownWithStoredFrontmatter } from "../utils/kfPrivateFron
 import { markdownEquivalentForDirty } from "../utils/markdownDirtyEquivalence";
 import { endPerfTrace, startPerfTrace } from "../utils/perfTrace";
 import { sha256Utf8Hex } from "../utils/sha256Utf8Hex";
+import { isMarkdownRelPath, syncMarkdownHeadingAfterRename } from "../utils/syncMarkdownHeadingOnRename";
 
 /** 防抖自动保存间隔（毫秒） */
 const AUTO_SAVE_DEBOUNCE_MS = 1200;
@@ -953,44 +954,63 @@ export function useOpenDocs(workspaceReady: boolean) {
     persistInFlightRef.current = nextFlight;
   }, []);
 
-  /** 磁盘重命名后同步 Tab 与文档状态（不读写磁盘） */
-  const renameTabPath = useCallback((fromRel: string, toRel: string) => {
-    if (fromRel === toRel) {
-      return;
-    }
-    setTabPaths((paths) => paths.map((p) => (p === fromRel ? toRel : p)));
-    setDocByPath((prev) => {
-      const doc = prev[fromRel];
-      if (!doc) {
-        return prev;
+  /** 磁盘重命名后同步 Tab 与文档状态（不读写磁盘）；可选将首行 H1 与新旧文件名 stem 对齐 */
+  const renameTabPath = useCallback(
+    (
+      fromRel: string,
+      toRel: string,
+      options?: { markdownHeadingRename?: { oldBasename: string; newBasename: string } },
+    ) => {
+      if (fromRel === toRel) {
+        return;
       }
-      const next = { ...prev };
-      delete next[fromRel];
-      next[toRel] = doc;
-      return next;
-    });
-    setActivePath((cur) => (cur === fromRel ? toRel : cur));
-    setContentInjectEpochByPath((prev) => {
-      const next = { ...prev };
-      const prevEpoch = next[fromRel] ?? 0;
-      delete next[fromRel];
-      next[toRel] = prevEpoch + 1;
-      return next;
-    });
-    setDiskStaleDirtyPaths((prev) =>
-      prev.map((p) => (p === fromRel ? toRel : p)).filter((p, i, arr) => arr.indexOf(p) === i),
-    );
-    const signature = diskSignatureByPathRef.current[fromRel];
-    delete diskSignatureByPathRef.current[fromRel];
-    if (signature) {
-      diskSignatureByPathRef.current[toRel] = signature;
-    }
-    const pendingTimer = autoSaveTimersRef.current[fromRel];
-    if (pendingTimer != null) {
-      delete autoSaveTimersRef.current[fromRel];
-      autoSaveTimersRef.current[toRel] = pendingTimer;
-    }
-  }, []);
+      const hdr = options?.markdownHeadingRename;
+      setTabPaths((paths) => paths.map((p) => (p === fromRel ? toRel : p)));
+      setDocByPath((prev) => {
+        const doc = prev[fromRel];
+        if (!doc) {
+          return prev;
+        }
+        let nextDoc = doc;
+        if (hdr && isMarkdownRelPath(toRel) && !doc.loading && doc.loadError == null) {
+          const nextContent = syncMarkdownHeadingAfterRename(
+            doc.content,
+            hdr.oldBasename,
+            hdr.newBasename,
+          );
+          if (nextContent !== doc.content) {
+            nextDoc = { ...doc, content: nextContent };
+          }
+        }
+        const next = { ...prev };
+        delete next[fromRel];
+        next[toRel] = nextDoc;
+        return next;
+      });
+      setActivePath((cur) => (cur === fromRel ? toRel : cur));
+      setContentInjectEpochByPath((prev) => {
+        const next = { ...prev };
+        const prevEpoch = next[fromRel] ?? 0;
+        delete next[fromRel];
+        next[toRel] = prevEpoch + 1;
+        return next;
+      });
+      setDiskStaleDirtyPaths((prev) =>
+        prev.map((p) => (p === fromRel ? toRel : p)).filter((p, i, arr) => arr.indexOf(p) === i),
+      );
+      const signature = diskSignatureByPathRef.current[fromRel];
+      delete diskSignatureByPathRef.current[fromRel];
+      if (signature) {
+        diskSignatureByPathRef.current[toRel] = signature;
+      }
+      const pendingTimer = autoSaveTimersRef.current[fromRel];
+      if (pendingTimer != null) {
+        delete autoSaveTimersRef.current[fromRel];
+        autoSaveTimersRef.current[toRel] = pendingTimer;
+      }
+    },
+    [],
+  );
 
   /** 删除磁盘文件后关闭对应 Tab，不弹确认（由调用方负责） */
   const removeTabByPath = useCallback((relPath: string) => {
