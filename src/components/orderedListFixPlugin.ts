@@ -1,5 +1,6 @@
 import { $prose } from '@milkdown/utils'
 import { Plugin, PluginKey } from '@milkdown/prose/state'
+import { ReplaceStep } from '@milkdown/prose/transform'
 
 /**
  * 有序列表 "N." 自动插入 bug 防御插件。
@@ -25,8 +26,8 @@ export const orderedListFixPlugin = $prose(() =>
       if (!(tr as any).isGeneric || !tr.docChanged) return true
 
       for (const step of tr.steps) {
+        if (!(step instanceof ReplaceStep)) continue
         const s = step as any
-        if (s.constructor?.name !== 'ReplaceStep') continue
         if (s.from !== s.to) continue // 仅拦截纯插入（非替换）
 
         const text: string =
