@@ -1,0 +1,28 @@
+diff --git a/node_modules/@milkdown/preset-commonmark/lib/index.js b/node_modules/@milkdown/preset-commonmark/lib/index.js
+index 3832b79..3fb1167 100644
+--- a/node_modules/@milkdown/preset-commonmark/lib/index.js
++++ b/node_modules/@milkdown/preset-commonmark/lib/index.js
+@@ -1392,7 +1392,22 @@ withMeta(liftListItemCommand, {
+ 	displayName: "Command<liftListItemCommand>",
+ 	group: "ListItem"
+ });
+-var splitListItemCommand = $command("SplitListItem", (ctx) => () => splitListItem(listItemSchema.type(ctx)));
++var splitListItemCommand = $command("SplitListItem", (ctx) => () => (state, dispatch, view) => {
++  const { $from } = state.selection;
++  const grandParent = $from.node(-1);
++  let itemAttrs;
++  if (grandParent && grandParent.type.name === 'ordered_list') {
++    const order = grandParent.attrs.order || 1;
++    const currentIndex = $from.index(-1);
++    const newLabel = `${currentIndex + 1 + order}.`;
++    itemAttrs = {
++      label: newLabel,
++      listType: 'ordered',
++      spread: grandParent.attrs.spread != null ? grandParent.attrs.spread : true,
++    };
++  }
++  return splitListItem(listItemSchema.type(ctx), itemAttrs)(state, dispatch, view);
++});
+ withMeta(splitListItemCommand, {
+ 	displayName: "Command<splitListItemCommand>",
+ 	group: "ListItem"

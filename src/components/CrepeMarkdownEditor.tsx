@@ -32,6 +32,7 @@ import {
 } from "./editorFindHighlightPlugin";
 import { appendRelatedNotesWikiLinkToMarkdown } from "../utils/appendRelatedNotesSection";
 import { buildPreviewScrollNeedles, findFirstDocMatchForNeedles } from "../utils/previewScrollNeedle";
+import { orderedListFixPlugin } from "./orderedListFixPlugin";
 import { endPerfTrace, startPerfTrace } from "../utils/perfTrace";
 import type { WikiSuggestFileRow } from "../utils/flattenMarkdownTreeForWikiSuggest";
 
@@ -192,6 +193,7 @@ function CrepeInner({
         },
       });
       crepe.editor.config(configureRemarkStringifyPreserveWikilink);
+      crepe.editor.use(orderedListFixPlugin); // FIX: 拦截 readDOMChange 误插入序号文字
       crepe.editor.use(remarkBreaks$);
       crepe.editor.use(editorDocAutosaveBridgePlugin);
       crepe.editor.use(thoughtCalloutPlugin);
