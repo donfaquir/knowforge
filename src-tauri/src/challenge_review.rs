@@ -356,10 +356,12 @@ pub async fn generate_challenge_question(
         LlmChatMessage {
             role: "system".into(),
             content: SYSTEM_CHALLENGE_GENERATE.to_string(),
+            ..Default::default()
         },
         LlmChatMessage {
             role: "user".into(),
             content: user_block,
+            ..Default::default()
         },
     ];
 
@@ -478,10 +480,12 @@ pub async fn evaluate_challenge_answer(
         LlmChatMessage {
             role: "system".into(),
             content: SYSTEM_CHALLENGE_EVALUATE.to_string(),
+            ..Default::default()
         },
         LlmChatMessage {
             role: "user".into(),
             content: user_block,
+            ..Default::default()
         },
     ];
 

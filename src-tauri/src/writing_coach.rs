@@ -413,10 +413,12 @@ pub async fn analyze_writing_coach(
         LlmChatMessage {
             role: "system".into(),
             content: SYSTEM_WRITING_COACH.to_string(),
+            ..Default::default()
         },
         LlmChatMessage {
             role: "user".into(),
             content: prep.user_body.clone(),
+            ..Default::default()
         },
     ];
 

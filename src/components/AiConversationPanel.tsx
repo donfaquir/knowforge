@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useAiConversationSession } from "../contexts/AiConversationSessionContext";
 import type { ThoughtFocusContext } from "../types/aiConversation";
 import { useAiNoteContext } from "../contexts/AiNoteContext";
-import type { ChatMessage } from "../hooks/useWorkspaceAiConversations";
+import type { ChatMessage, ToolCallDisplayInfo } from "../hooks/useWorkspaceAiConversations";
 import type { ReplyContextSources } from "../types/replyContextSources";
 import { hasReplyContextSourcesToShow } from "../types/replyContextSources";
 import type { SearchWorkspaceContextResponse } from "../types/vaultContextSearch";
@@ -281,6 +281,11 @@ export function AiConversationPanel() {
   const activeSessionRef = useRef<string | null>(null);
   const listEndRef = useRef<HTMLDivElement>(null);
 
+  /** P2 Tool Calling Loop：工具调用总开关（默认关闭，向后兼容） */
+  const [toolsEnabled, setToolsEnabled] = useState(false);
+  /** 发送时快照：agent 模式下 stream-done 仅是中间信号，不能最终化助手消息 */
+  const isAgentModeRef = useRef(false);
+
   /** invite-after-answer 状态 */
   const [inviteData, setInviteData] = useState<InviteData | null>(null);
   const [challengeInlineData, setChallengeInlineData] = useState<ChallengeInlineData | null>(null);
@@ -470,6 +475,11 @@ export function AiConversationPanel() {
         if (p.sessionId !== activeSessionRef.current) {
           return;
         }
+        // P2 Tool Calling Loop：agent 模式下 stream-done 只是轮次中的中间信号，
+        // 后续还会有 tool-call-* 与后续文本输出，只能由 llm:agent-done 最终化。
+        if (isAgentModeRef.current) {
+          return;
+        }
         markNeedPersist();
         activeSessionRef.current = null;
         setIsStreaming(false);
@@ -644,6 +654,7 @@ export function AiConversationPanel() {
         }
         markNeedPersist();
         activeSessionRef.current = null;
+        isAgentModeRef.current = false;
         setIsStreaming(false);
         if (p.code === "cancelled") {
           setMessages((prev) => {
@@ -682,6 +693,94 @@ export function AiConversationPanel() {
         });
         setErrorBanner(p.message);
       }),
+      // P2 Tool Calling Loop：工具调用开始 → 在末尾 assistant 消息中插入 running 状态项
+      listen<{ sessionId: string; toolCallId: string; toolName: string }>(
+        "llm:tool-call-start",
+        (e) => {
+          const p = e.payload;
+          if (p.sessionId !== activeSessionRef.current) {
+            return;
+          }
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role !== "assistant") {
+              return prev;
+            }
+            const existing = last.meta?.toolCalls ?? [];
+            const newCall: ToolCallDisplayInfo = {
+              toolCallId: p.toolCallId,
+              toolName: p.toolName,
+              status: "running",
+            };
+            return [
+              ...next.slice(0, -1),
+              {
+                ...last,
+                meta: { ...last.meta, toolCalls: [...existing, newCall] },
+              },
+            ];
+          });
+        },
+      ),
+      // P2 Tool Calling Loop：工具调用完成 → 更新对应 toolCallId 的状态为 done/error
+      listen<{ sessionId: string; toolCallId: string; success: boolean }>(
+        "llm:tool-call-done",
+        (e) => {
+          const p = e.payload;
+          if (p.sessionId !== activeSessionRef.current) {
+            return;
+          }
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role !== "assistant") {
+              return prev;
+            }
+            const existing = last.meta?.toolCalls ?? [];
+            const updated = existing.map((tc) =>
+              tc.toolCallId === p.toolCallId
+                ? { ...tc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"] }
+                : tc,
+            );
+            return [
+              ...next.slice(0, -1),
+              { ...last, meta: { ...last.meta, toolCalls: updated } },
+            ];
+          });
+        },
+      ),
+      // P2 Tool Calling Loop：Agent 轮次结束 → 最终化助手消息、清理 streaming 状态
+      listen<{ sessionId: string }>("llm:agent-done", (e) => {
+        if (e.payload.sessionId !== activeSessionRef.current) {
+          return;
+        }
+        markNeedPersist();
+        activeSessionRef.current = null;
+        isAgentModeRef.current = false;
+        setIsStreaming(false);
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant" && last.streaming) {
+            next[next.length - 1] = {
+              ...last,
+              streaming: false,
+              meta: last.meta?.timing
+                ? { ...last.meta, timing: { ...last.meta.timing, endMs: Date.now() } }
+                : last.meta,
+            };
+          }
+          const strippedPack = stripMarkedPassiveHighlightWithCount(next);
+          if (strippedPack.stripped > 0) {
+            passiveHighlightMarkedCountRef.current = Math.max(
+              0,
+              passiveHighlightMarkedCountRef.current - strippedPack.stripped,
+            );
+          }
+          return strippedPack.messages;
+        });
+      }),
     ]).then((unlisteners) => {
       if (disposed) {
         unlisteners.forEach((u) => void u());
@@ -713,6 +812,7 @@ export function AiConversationPanel() {
 
     markNeedPersist();
     activeSessionRef.current = null;
+    isAgentModeRef.current = false;
     setIsStreaming(false);
     setErrorBanner(null);
     if (hasComposerDraft) {
@@ -987,7 +1087,8 @@ export function AiConversationPanel() {
         vaultContext?: { snippets: SearchWorkspaceContextResponse["snippets"] };
         depthMode: typeof depthMode;
         thoughtFocusContext?: ThoughtFocusContext;
-      } = { messages: chatTurns, depthMode };
+        toolsEnabled?: boolean;
+      } = { messages: chatTurns, depthMode, toolsEnabled };
       if (noteContext) {
         streamArgs.noteContext = noteContext;
       }
@@ -1018,6 +1119,9 @@ export function AiConversationPanel() {
         setAutoResolved(null);
       }
       activeSessionRef.current = res.sessionId;
+      // P2 Tool Calling Loop：仅在 invoke 成功后设置 agent 模式快照，
+      // 避免失败下 stream-done 处理被错误提前拦截。
+      isAgentModeRef.current = toolsEnabled;
       setIsStreaming(true);
       setMessages((prev) => [
         ...prev,
@@ -1054,6 +1158,7 @@ export function AiConversationPanel() {
     setAutoResolved,
     depthMode,
     thoughtFocusContext,
+    toolsEnabled,
     t,
     schedulePassiveHighlightDetection,
   ]);
@@ -1418,6 +1523,35 @@ export function AiConversationPanel() {
               <div className={`ai-chat__bubble ai-chat__bubble--${m.role}`}>
                 {m.role === "assistant" ? (
                   <>
+                    {m.meta?.toolCalls && m.meta.toolCalls.length > 0 ? (
+                      <ul className="ai-chat__tool-calls" aria-label={t("aiPanel.toolCallsAria")}>
+                        {m.meta.toolCalls.map((tc) => (
+                          <li
+                            key={tc.toolCallId}
+                            className={`ai-chat__tool-call ai-chat__tool-call--${tc.status}`}
+                          >
+                            <span
+                              className="ai-chat__tool-call__icon"
+                              aria-hidden={true}
+                            >
+                              {tc.status === "running"
+                                ? "⋯"
+                                : tc.status === "done"
+                                  ? "✓"
+                                  : "✗"}
+                            </span>
+                            <span className="ai-chat__tool-call__name">{tc.toolName}</span>
+                            <span className="ai-chat__tool-call__status">
+                              {tc.status === "running"
+                                ? t("aiPanel.toolCallRunning")
+                                : tc.status === "done"
+                                  ? t("aiPanel.toolCallDone")
+                                  : t("aiPanel.toolCallError")}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                     <AiAssistantMarkdown content={m.content} />
                     {!m.streaming && m.meta?.thoughtCitation && !m.meta.thoughtCitation.privateOmitted ? (
                       <button
@@ -1597,6 +1731,21 @@ export function AiConversationPanel() {
             {...dragExcludeProps}
           />
           <span id="ai-chat-vault-hint">{t("aiPanel.vaultSearch")}</span>
+        </label>
+        {/* P2 Tool Calling Loop：工具调用总开关（默认关闭） */}
+        <label
+          className="ai-chat__attach ai-chat__attach--above-input"
+          title={t("aiPanel.toolsToggleTitle")}
+        >
+          <input
+            type="checkbox"
+            checked={toolsEnabled}
+            onChange={(e) => setToolsEnabled(e.target.checked)}
+            disabled={isStreaming || isVaultSearching}
+            aria-describedby="ai-chat-tools-hint"
+            {...dragExcludeProps}
+          />
+          <span id="ai-chat-tools-hint">{t("aiPanel.toolsToggle")}</span>
         </label>
         <div className="ai-chat__composer-field">
           <div className="ai-chat__composer-stack">

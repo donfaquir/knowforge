@@ -18,6 +18,13 @@ export type ChatMessageTiming = {
   endMs?: number;
 };
 
+/** P2 Tool Calling Loop：assistant 消息上展示的工具调用状态（运行时，不持久化） */
+export type ToolCallDisplayInfo = {
+  toolCallId: string;
+  toolName: string;
+  status: "running" | "done" | "error";
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -32,6 +39,8 @@ export type ChatMessage = {
     thoughtCitation?: ThoughtRetrievalResult;
     /** 本轮模型实际注入的上下文来源（持久化到历史会话） */
     replyContextSources?: ReplyContextSources;
+    /** P2 Tool Calling Loop：本轮发生的工具调用（运行时） */
+    toolCalls?: ToolCallDisplayInfo[];
   };
 };
 
