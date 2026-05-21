@@ -37,7 +37,7 @@ sha2 = "0.10"
 hex = "0.4"
 candle-core = { version = "0.8", default-features = false }
 candle-nn = { version = "0.8", default-features = false }
-candle-transformers = { version = "0.8", default-features = false }
+candle-transformers = { version = "0.10", default-features = false }
 tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 aho-corasick = "1"
 dirs = "6"
