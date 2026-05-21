@@ -69,28 +69,58 @@ struct OllamaStreamLine {
 #[derive(Deserialize)]
 struct OllamaStreamMessage {
     content: Option<String>,
+    /// Ollama tools 调用出现在 `done:false` 中间行上。
+    #[serde(default)]
+    tool_calls: Option<Vec<OllamaToolCallRaw>>,
 }
 
-/// `Ok(true)` 继续读流；`Ok(false)` 已 emit 错误/业务终止，应结束；`Err` 为解析失败。
-fn handle_json_line(app: &AppHandle, session_id: &str, line: &str) -> Result<bool, String> {
+#[derive(Deserialize, Debug, Clone)]
+pub struct OllamaToolCallRaw {
+    pub function: OllamaToolFunctionRaw,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct OllamaToolFunctionRaw {
+    pub name: String,
+    /// Ollama 返回已解析的 JSON 参数。
+    pub arguments: serde_json::Value,
+}
+
+/// `Ok(Some(calls))` 本行携带工具调用；`Ok(None)` 仅含文本/控制信息；
+/// 返回负载中包含 `error` 字段时，函数内部会 `emit_error`，调用方可以允许返回 `Ok(None)` 后继续。
+fn handle_json_line(
+    app: &AppHandle,
+    session_id: &str,
+    line: &str,
+) -> Result<(Option<Vec<OllamaToolCallRaw>>, bool), String> {
+    // 返回的布尔表示 `should_stop`（遇到业务错误需提前终止）。
     let parsed: OllamaStreamLine =
         serde_json::from_str(line).map_err(|e| format!("NDJSON parse error: {e}"))?;
 
     if let Some(err) = parsed.error {
         emit_error(app, session_id, Some("ollama_error"), &err);
-        return Ok(false);
+        return Ok((None, true));
     }
 
+    let mut tool_calls_out: Option<Vec<OllamaToolCallRaw>> = None;
     if let Some(msg) = parsed.message {
         if let Some(content) = msg.content.filter(|c| !c.is_empty()) {
             emit_chunk(app, session_id, &content);
         }
+        if let Some(tc) = msg.tool_calls.filter(|v| !v.is_empty()) {
+            tool_calls_out = Some(tc);
+        }
     }
 
-    Ok(true)
+    Ok((tool_calls_out, false))
 }
 
 /// 流式 chat：经 `emit` 推送增量；`cancel` 触发时尽快结束。
+///
+/// 返回值语义：
+/// - `Ok(Some(calls))`：本轮流中累计到了 tool_calls，调用方（agent_loop）需执行并接续下一轮。
+/// - `Ok(None)`：仅产出了文本、并已 `emit_done`。
+/// - `Err(msg)`：出现错误、已 `emit_error`。
 pub async fn run_chat_stream(
     app: AppHandle,
     session_id: String,
@@ -101,19 +131,40 @@ pub async fn run_chat_stream(
     top_p: Option<f64>,
     timeout_ms: u64,
     cancel: CancellationToken,
-) {
+    tools: Option<Vec<serde_json::Value>>,
+) -> Result<Option<Vec<OllamaToolCallRaw>>, String> {
     let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
     let client = match http_client(timeout_ms) {
         Ok(c) => c,
         Err(e) => {
             emit_error(&app, &session_id, Some("client_error"), &e);
-            return;
+            return Err(e);
         }
     };
 
     let messages_json: Vec<serde_json::Value> = messages
         .iter()
-        .map(|m| json!({ "role": m.role, "content": m.content }))
+        .map(|m| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("role".into(), json!(m.role));
+            obj.insert("content".into(), json!(m.content));
+            if let Some(ref tc) = m.tool_calls {
+                let arr: Vec<serde_json::Value> = tc
+                    .iter()
+                    .map(|c| json!({
+                        "function": {
+                            "name": c.function.name,
+                            "arguments": c.function.arguments,
+                        }
+                    }))
+                    .collect();
+                obj.insert("tool_calls".into(), serde_json::Value::Array(arr));
+            }
+            if let Some(ref name) = m.tool_name {
+                obj.insert("tool_name".into(), json!(name));
+            }
+            serde_json::Value::Object(obj)
+        })
         .collect();
 
     let mut options = json!({ "temperature": temperature });
@@ -123,23 +174,29 @@ pub async fn run_chat_stream(
         }
     }
 
-    let body = json!({
+    let mut body = json!({
         "model": model,
         "messages": messages_json,
         "stream": true,
         "options": options,
     });
+    if let Some(tools_json) = tools.as_ref().filter(|v| !v.is_empty()) {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("tools".into(), serde_json::Value::Array(tools_json.clone()));
+        }
+    }
 
     let resp = match client.post(&url).json(&body).send().await {
         Ok(r) => r,
         Err(e) => {
+            let msg = map_reqwest_err(e);
             emit_error(
                 &app,
                 &session_id,
                 Some("connection_error"),
-                &map_reqwest_err(e),
+                &msg,
             );
-            return;
+            return Err(msg);
         }
     };
 
@@ -152,38 +209,41 @@ pub async fn run_chat_stream(
             format!("Ollama returned HTTP {status}: {text}")
         };
         emit_error(&app, &session_id, Some("http_status"), &msg);
-        return;
+        return Err(msg);
     }
 
     let mut stream = resp.bytes_stream();
     let mut line_buf = String::new();
+    let mut accumulated_tool_calls: Vec<OllamaToolCallRaw> = Vec::new();
 
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 emit_error(&app, &session_id, Some("cancelled"), "Request aborted");
-                return;
+                return Err("cancelled".to_string());
             }
             item = stream.next() => {
                 match item {
                     None => break,
                     Some(Err(e)) => {
-                        emit_error(&app, &session_id, Some("stream_error"), &map_reqwest_err(e));
-                        return;
+                        let msg = map_reqwest_err(e);
+                        emit_error(&app, &session_id, Some("stream_error"), &msg);
+                        return Err(msg);
                     }
                     Some(Ok(bytes)) => {
                         line_buf.push_str(&String::from_utf8_lossy(&bytes));
                         if line_buf.len() > MAX_STREAM_LINE_BYTES {
+                            let msg = format!(
+                                "Single NDJSON line exceeded {} MiB without newline; aborting.",
+                                MAX_STREAM_LINE_BYTES / (1024 * 1024)
+                            );
                             emit_error(
                                 &app,
                                 &session_id,
                                 Some("line_too_long"),
-                                &format!(
-                                    "Single NDJSON line exceeded {} MiB without newline; aborting.",
-                                    MAX_STREAM_LINE_BYTES / (1024 * 1024)
-                                ),
+                                &msg,
                             );
-                            return;
+                            return Err(msg);
                         }
                         while let Some(pos) = line_buf.find('\n') {
                             let raw_line = line_buf[..pos].trim().to_string();
@@ -192,11 +252,17 @@ pub async fn run_chat_stream(
                                 continue;
                             }
                             match handle_json_line(&app, &session_id, &raw_line) {
-                                Ok(true) => {}
-                                Ok(false) => return,
+                                Ok((tc_opt, should_stop)) => {
+                                    if let Some(mut tc) = tc_opt {
+                                        accumulated_tool_calls.append(&mut tc);
+                                    }
+                                    if should_stop {
+                                        return Err("ollama_error".to_string());
+                                    }
+                                }
                                 Err(e) => {
                                     emit_error(&app, &session_id, Some("parse_error"), &e);
-                                    return;
+                                    return Err(e);
                                 }
                             }
                         }
@@ -209,16 +275,27 @@ pub async fn run_chat_stream(
     let tail = line_buf.trim();
     if !tail.is_empty() {
         match handle_json_line(&app, &session_id, tail) {
-            Ok(true) => {}
-            Ok(false) => return,
+            Ok((tc_opt, should_stop)) => {
+                if let Some(mut tc) = tc_opt {
+                    accumulated_tool_calls.append(&mut tc);
+                }
+                if should_stop {
+                    return Err("ollama_error".to_string());
+                }
+            }
             Err(e) => {
                 emit_error(&app, &session_id, Some("parse_error"), &e);
-                return;
+                return Err(e);
             }
         }
     }
 
     let _ = emit_done(&app, &session_id);
+    if accumulated_tool_calls.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(accumulated_tool_calls))
+    }
 }
 
 #[derive(Deserialize)]

@@ -30,16 +30,18 @@ pub fn markdown_treat_as_kf_private(markdown: &str) -> bool {
 
 /// `rel_path` 必须为 Vault 内相对路径（`/` 分隔），禁止逃逸。
 /// 读取 Markdown 文件前缀（UTF-8 有损）并判定是否 `kf-private`；用于构建文件树，避免整文件读入。
+/// 读取文件前 24KB 判断是否标记为 kf-private。
+/// fail-closed：文件无法打开或读取时返回 `true`（视为私密），防止 I/O 错误导致私密内容泄露。
 pub fn peek_kf_private_from_md_file(path: &Path) -> bool {
     const PREFIX: usize = 24_576;
     let mut file = match std::fs::File::open(path) {
         Ok(f) => f,
-        Err(_) => return false,
+        Err(_) => return true,
     };
     let mut buf = vec![0u8; PREFIX];
     let n = match file.read(&mut buf) {
         Ok(n) => n,
-        Err(_) => return false,
+        Err(_) => return true,
     };
     buf.truncate(n);
     let head = String::from_utf8_lossy(&buf);

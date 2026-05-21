@@ -701,10 +701,12 @@ pub async fn enrich_recommendations_with_reasons(
         LlmChatMessage {
             role: "system".into(),
             content: SYSTEM_LINK_REASONS.to_string(),
+            ..Default::default()
         },
         LlmChatMessage {
             role: "user".into(),
             content: user_body,
+            ..Default::default()
         },
     ];
 

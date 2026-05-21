@@ -153,10 +153,12 @@ pub async fn detect_passive_highlight(
         LlmChatMessage {
             role: "system".into(),
             content: SYSTEM_PASSIVE.to_string(),
+            ..Default::default()
         },
         LlmChatMessage {
             role: "user".into(),
             content: user_content,
+            ..Default::default()
         },
     ];
 

@@ -66,3 +66,63 @@
 .ai-chat__thought-cite:hover {
   filter: brightness(1.08);
 }
+
+/* P2 Tool Calling Loop：工具调用状态行。在 assistant 气泡顶部、文本之前。 */
+.ai-chat__tool-calls {
+  list-style: none;
+  margin: 0 0 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ai-chat__tool-call {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--kf-border, #555) 50%, transparent);
+  background: color-mix(in srgb, var(--kf-accent, #3b82f6) 6%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+  align-self: flex-start;
+  max-width: 100%;
+}
+.ai-chat__tool-call__icon {
+  display: inline-flex;
+  width: 14px;
+  justify-content: center;
+  font-weight: 600;
+}
+.ai-chat__tool-call__name {
+  font-family: var(--kf-mono-font, ui-monospace, monospace);
+  opacity: 0.92;
+}
+.ai-chat__tool-call__status {
+  opacity: 0.65;
+}
+.ai-chat__tool-call--running {
+  border-color: color-mix(in srgb, var(--kf-accent, #3b82f6) 60%, transparent);
+}
+.ai-chat__tool-call--running .ai-chat__tool-call__icon {
+  animation: ai-chat-tool-call-pulse 1.2s ease-in-out infinite;
+}
+.ai-chat__tool-call--done {
+  border-color: color-mix(in srgb, #16a34a 60%, transparent);
+  background: color-mix(in srgb, #16a34a 8%, transparent);
+}
+.ai-chat__tool-call--done .ai-chat__tool-call__icon {
+  color: #16a34a;
+}
+.ai-chat__tool-call--error {
+  border-color: color-mix(in srgb, #dc2626 60%, transparent);
+  background: color-mix(in srgb, #dc2626 8%, transparent);
+}
+.ai-chat__tool-call--error .ai-chat__tool-call__icon {
+  color: #dc2626;
+}
+@keyframes ai-chat-tool-call-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
