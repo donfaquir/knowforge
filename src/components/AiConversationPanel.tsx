@@ -20,6 +20,9 @@ import type { ActiveProvider, VaultConfigForUi } from "../types/vaultAiConfig";
 import { isChallengeInlineLlmReady } from "../utils/isChallengeReviewLlmReady";
 import { markdownTreatAsKfPrivateForUi } from "../utils/kfPrivateMarkdown";
 import { PrivacyChangeOverlay } from "./PrivacyChangeOverlay";
+import { AiToolApprovalDialog } from "./AiToolApprovalDialog";
+import type { ApprovalRequest } from "../types/toolTypes";
+import { respondToolApproval } from "../utils/toolInvoke";
 import { AiAssistantMarkdown } from "./AiAssistantMarkdown";
 import { StreamingTimer } from "./StreamingTimer";
 import { useCognitiveFrequencyControl } from "../hooks/useCognitiveFrequencyControl";
@@ -285,6 +288,29 @@ export function AiConversationPanel() {
   const [toolsEnabled, setToolsEnabled] = useState(false);
   /** 发送时快照：agent 模式下 stream-done 仅是中间信号，不能最终化助手消息 */
   const isAgentModeRef = useRef(false);
+
+  /** P3 审批：按到达顺序串行展示弹窗，避免并行 tool_calls 时 UI 叠加 */
+  const approvalQueueRef = useRef<ApprovalRequest[]>([]);
+  const [activeApproval, setActiveApproval] = useState<ApprovalRequest | null>(null);
+  const dequeueNextApproval = useCallback(() => {
+    setActiveApproval(() => {
+      const q = approvalQueueRef.current;
+      return q.length > 0 ? q.shift()! : null;
+    });
+  }, []);
+  const handleApprovalResolve = useCallback(
+    (approvalId: string, decision: boolean) => {
+      void respondToolApproval(approvalId, decision).catch(() => {});
+      dequeueNextApproval();
+    },
+    [dequeueNextApproval],
+  );
+  // 切换会话时清掉 UI 状态；后端 ConfirmOncePerSession 缓存按 conv_id 维度保留，
+  // 用户切回原会话时仍生效。
+  useEffect(() => {
+    approvalQueueRef.current = [];
+    setActiveApproval(null);
+  }, [conversationId]);
 
   /** invite-after-answer 状态 */
   const [inviteData, setInviteData] = useState<InviteData | null>(null);
@@ -750,6 +776,20 @@ export function AiConversationPanel() {
           });
         },
       ),
+      // P3 审批：后端在执行非 Auto 工具前请求用户决策
+      listen<ApprovalRequest>("llm:tool-approval-request", (e) => {
+        const p = e.payload;
+        if (p.sessionId !== activeSessionRef.current) {
+          return;
+        }
+        setActiveApproval((cur) => {
+          if (cur === null) {
+            return p;
+          }
+          approvalQueueRef.current.push(p);
+          return cur;
+        });
+      }),
       // P2 Tool Calling Loop：Agent 轮次结束 → 最终化助手消息、清理 streaming 状态
       listen<{ sessionId: string }>("llm:agent-done", (e) => {
         if (e.payload.sessionId !== activeSessionRef.current) {
@@ -1088,7 +1128,13 @@ export function AiConversationPanel() {
         depthMode: typeof depthMode;
         thoughtFocusContext?: ThoughtFocusContext;
         toolsEnabled?: boolean;
-      } = { messages: chatTurns, depthMode, toolsEnabled };
+        conversationId?: string;
+      } = {
+        messages: chatTurns,
+        depthMode,
+        toolsEnabled,
+        conversationId: conversationId ?? undefined,
+      };
       if (noteContext) {
         streamArgs.noteContext = noteContext;
       }
@@ -1236,7 +1282,13 @@ export function AiConversationPanel() {
           depthMode: typeof depthMode;
           inviteContext?: { question: string; thoughtExcerpt?: string };
           thoughtFocusContext?: ThoughtFocusContext;
-        } = { messages: chatTurns, depthMode, inviteContext };
+          conversationId?: string;
+        } = {
+          messages: chatTurns,
+          depthMode,
+          inviteContext,
+          conversationId: conversationId ?? undefined,
+        };
         if (
           thoughtFocusContext != null &&
           thoughtFocusContext.thoughtId.trim() !== "" &&
@@ -1851,6 +1903,8 @@ export function AiConversationPanel() {
           onContinue={() => setPrivacyChangeWarning(null)}
         />
       ) : null}
+
+      <AiToolApprovalDialog request={activeApproval} onResolve={handleApprovalResolve} />
     </section>
   );
 }

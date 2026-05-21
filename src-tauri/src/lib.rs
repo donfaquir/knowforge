@@ -1610,6 +1610,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(WorkspaceState::default())
         .manage(Arc::new(llm::LlmSessionState::default()))
+        .manage(Arc::new(llm::approval::ToolApprovalState::new()))
         .manage(Arc::new(tools::ToolRegistry::new()))
         .manage({
             let audit_sink: Arc<dyn tools::context::AuditSink> = Arc::new(
@@ -1638,6 +1639,8 @@ pub fn run() {
             llm::list_ollama_models,
             llm::start_ollama_chat_stream,
             llm::abort_llm_stream,
+            llm::respond_tool_approval,
+            llm::clear_conversation_approvals,
             list_ai_conversations,
             create_ai_conversation,
             load_ai_conversation,

@@ -51,3 +51,24 @@ export function isToolOk(result: ToolResultJson): result is ToolResultOk {
 export function isToolErr(result: ToolResultJson): result is ToolResultErr {
   return result.status === "error";
 }
+
+/**
+ * 回送审批结果（Allow / Deny）。
+ */
+export async function respondToolApproval(
+  approvalId: string,
+  decision: boolean,
+): Promise<void> {
+  return invoke<void>("respond_tool_approval", { args: { approvalId, decision } });
+}
+
+/**
+ * 切换/删除会话时清理 ConfirmOncePerSession 会话级缓存。
+ */
+export async function clearConversationApprovals(
+  conversationId: string,
+): Promise<void> {
+  return invoke<void>("clear_conversation_approvals", {
+    args: { conversationId },
+  });
+}

@@ -2,6 +2,7 @@
 
 pub(crate) mod ollama;
 pub(crate) mod agent_loop;
+pub mod approval;
 
 use crate::depth_decisions;
 use crate::lock_workspace_root;
@@ -137,6 +138,10 @@ pub struct OllamaChatStreamStartArgs {
     /// 是否启用 Tool Calling Loop（P2）；默认 false 走原文字流路径。
     #[serde(default)]
     pub tools_enabled: bool,
+    /// 前端会话 ID（用于 ConfirmOncePerSession 审批缓存的作用域）；
+    /// 缺省时退化为本次 stream 的 session_id（兼容旧客户端）。
+    #[serde(default)]
+    pub conversation_id: Option<String>,
 }
 
 /// 深化轮次的上下文（由邀请 UI 传入）。
@@ -636,6 +641,7 @@ pub async fn start_ollama_chat_stream(
     sessions: State<'_, Arc<LlmSessionState>>,
     registry: State<'_, Arc<ToolRegistry>>,
     ctx_factory: State<'_, Arc<ToolContextFactory>>,
+    approval: State<'_, Arc<approval::ToolApprovalState>>,
     args: OllamaChatStreamStartArgs,
 ) -> Result<OllamaChatStreamStartResponse, String> {
     let root = lock_workspace_root(&workspace)?;
@@ -701,8 +707,16 @@ pub async fn start_ollama_chat_stream(
     let top_p = ai.parameters.top_p;
     let registry_arc = Arc::clone(registry.inner());
     let ctx_factory_arc = Arc::clone(ctx_factory.inner());
+    let approval_arc = Arc::clone(approval.inner());
     let workspace_root = root.clone();
-    let conversation_id = session_id.clone();
+    // 优先使用前端传入的 conversationId（用于审批缓存作用域）；缺省退化为 session_id。
+    let conversation_id = args
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| session_id.clone());
 
     tokio::spawn(async move {
         if tools_enabled {
@@ -728,6 +742,7 @@ pub async fn start_ollama_chat_stream(
                 cancel,
                 agent_loop::AgentLoopConfig::default(),
                 conversation_id,
+                approval_arc,
             )
             .await;
         } else {
@@ -760,5 +775,37 @@ pub fn abort_llm_stream(session_id: String, sessions: State<'_, Arc<LlmSessionSt
     if let Some(token) = sessions.take_cancel(&session_id) {
         token.cancel();
     }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RespondToolApprovalArgs {
+    pub approval_id: String,
+    pub decision: bool,
+}
+
+/// 前端响应一次审批请求（Allow / Deny）。
+#[tauri::command]
+pub fn respond_tool_approval(
+    args: RespondToolApprovalArgs,
+    approval: State<'_, Arc<approval::ToolApprovalState>>,
+) -> Result<(), String> {
+    approval.resolve(&args.approval_id, args.decision)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearConversationApprovalsArgs {
+    pub conversation_id: String,
+}
+
+/// 切换或删除会话时清理该会话的 ConfirmOncePerSession 缓存。
+#[tauri::command]
+pub fn clear_conversation_approvals(
+    args: ClearConversationApprovalsArgs,
+    approval: State<'_, Arc<approval::ToolApprovalState>>,
+) -> Result<(), String> {
+    approval.clear_conversation(&args.conversation_id);
     Ok(())
 }

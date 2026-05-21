@@ -5,6 +5,7 @@ pub mod audit;
 pub mod privacy;
 pub mod validation;
 pub mod commands;
+pub mod path_safety;
 pub mod built_in;
 
 pub use types::*;
@@ -91,6 +92,11 @@ pub fn register_builtin_tools(registry: &ToolRegistry) -> Result<(), registry::R
     registry.register(Arc::new(built_in::graph_ops::GraphQueryTopicNetworkTool::new()))?;
     registry.register(Arc::new(built_in::graph_ops::IndexStatusTool::new()))?;
 
+    // P3 写操作工具
+    registry.register(Arc::new(built_in::note_ops::NoteWriteSectionTool::new()))?;
+    registry.register(Arc::new(built_in::note_ops::NoteCreateTool::new()))?;
+    registry.register(Arc::new(built_in::thought_ops::ThoughtCreateTool::new()))?;
+
     Ok(())
 }
 
@@ -110,12 +116,12 @@ mod mod_tests {
             "register_builtin_tools failed: {:?}",
             result.err()
         );
-        // 确认工具总数：1(time.now) + 8(P1) = 9
+        // 确认工具总数：1(time.now) + 8(P1) + 3(P3 写操作) = 12
         let tools = registry.list(crate::tools::registry::ListFilter {
             effects: None,
             risk: None,
             tags: None,
         });
-        assert_eq!(tools.len(), 9, "expected 9 registered tools, got {}", tools.len());
+        assert_eq!(tools.len(), 12, "expected 12 registered tools, got {}", tools.len());
     }
 }

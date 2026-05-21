@@ -329,6 +329,8 @@ export function useWorkspaceAiConversations(opts: {
         return;
       }
       await invoke("delete_ai_conversation", { args: { conversationId: id } });
+      // 清理后端 ConfirmOncePerSession 缓存，避免 id 回收时残留批准。
+      void invoke("clear_conversation_approvals", { args: { conversationId: id } }).catch(() => {});
       const list = await invoke<ListAiConversationsResponse>("list_ai_conversations");
       setConversations(list.conversations);
 

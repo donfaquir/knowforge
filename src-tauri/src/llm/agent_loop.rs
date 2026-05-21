@@ -15,11 +15,12 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
+use super::approval::ToolApprovalState;
 use super::ollama::{self, OllamaToolCallRaw};
 use super::{LlmChatMessage, LlmToolCall, LlmToolCallFunction};
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::types::ToolManifest;
+use crate::tools::types::{ApprovalPolicy, ToolManifest};
 
 /// Agent Loop 上限配置；任一项达到上限即终止循环并 emit `llm:agent-done`。
 #[allow(dead_code)]
@@ -61,6 +62,7 @@ pub async fn run_agent_stream(
     cancel: CancellationToken,
     config: AgentLoopConfig,
     conversation_id: String,
+    approval_state: Arc<ToolApprovalState>,
 ) {
     let mut messages = initial_messages;
     let mut total_tool_result_chars: usize = 0;
@@ -123,11 +125,16 @@ pub async fn run_agent_stream(
             let app_cache_dir = app_cache_dir.clone();
             let app_bundle_resource_dir = app_bundle_resource_dir.clone();
             let conversation_id = conversation_id.clone();
+            let approval_state = approval_state.clone();
+            let app = app.clone();
+            let session_id = session_id.clone();
             let id = id.clone();
             let tc = tc.clone();
             async move {
                 tokio::select! {
                     res = tokio::time::timeout(tool_timeout, execute_tool(
+                        &app,
+                        &session_id,
                         &registry,
                         &ctx_factory,
                         &workspace_root,
@@ -136,6 +143,8 @@ pub async fn run_agent_stream(
                         &conversation_id,
                         &id,
                         &tc,
+                        &approval_state,
+                        &cancel,
                     )) => {
                         match res {
                             Ok(tool_result) => tool_result,
@@ -221,19 +230,85 @@ pub async fn run_agent_stream(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_tool(
+    app: &AppHandle,
+    session_id: &str,
     registry: &Arc<ToolRegistry>,
     ctx_factory: &Arc<ToolContextFactory>,
     workspace_root: &PathBuf,
     app_cache_dir: Option<PathBuf>,
     app_bundle_resource_dir: Option<PathBuf>,
     conversation_id: &str,
-    _call_id: &str,
+    call_id: &str,
     tc: &OllamaToolCallRaw,
+    approval_state: &Arc<ToolApprovalState>,
+    cancel: &CancellationToken,
 ) -> Result<Value, String> {
     let tool = registry
         .get(&tc.function.name)
         .ok_or_else(|| format!("tool not found: {}", tc.function.name))?;
+
+    // 审批门控：根据 manifest 的 default_approval 决定是否需要用户确认。
+    let policy = tool.manifest().default_approval.clone();
+    match &policy {
+        ApprovalPolicy::Auto => { /* 直接放行 */ }
+        ApprovalPolicy::Forbidden => {
+            return Err(format!("tool '{}' is forbidden", tc.function.name));
+        }
+        ApprovalPolicy::ConfirmOncePerSession
+            if approval_state.is_pre_approved(conversation_id, &tc.function.name) =>
+        {
+            // 会话级缓存命中,放行
+        }
+        ApprovalPolicy::ConfirmEach | ApprovalPolicy::ConfirmOncePerSession => {
+            let (approval_id, rx, _guard) = approval_state.register();
+            let manifest = tool.manifest();
+            let _ = app.emit(
+                "llm:tool-approval-request",
+                json!({
+                    "sessionId": session_id,
+                    "conversationId": conversation_id,
+                    "approvalId": approval_id,
+                    "toolCallId": call_id,
+                    "toolName": tc.function.name,
+                    "policy": &policy,
+                    "inputSummary": summarize_tool_input(&tc.function.arguments),
+                    "risk": &manifest.risk,
+                    "effects": &manifest.effects,
+                }),
+            );
+
+            let decision = tokio::select! {
+                res = tokio::time::timeout(Duration::from_secs(30), rx) => res,
+                _ = cancel.cancelled() => {
+                    // _guard drop 时会自动清理 pending
+                    return Err("cancelled".to_string());
+                }
+            };
+
+            match decision {
+                Ok(Ok(true)) => {
+                    if matches!(policy, ApprovalPolicy::ConfirmOncePerSession) {
+                        approval_state.remember_approval(conversation_id, &tc.function.name);
+                    }
+                    // sender 已被 resolve 移除;_guard drop 时 discard_pending 是 no-op
+                }
+                Ok(Ok(false)) => {
+                    return Err(format!("user denied approval for tool '{}'", tc.function.name));
+                }
+                Ok(Err(_)) => {
+                    return Err("approval channel closed unexpectedly".to_string());
+                }
+                Err(_) => {
+                    return Err(format!(
+                        "approval timed out for tool '{}'",
+                        tc.function.name
+                    ));
+                }
+            }
+        }
+    }
 
     tool.validate_input(&tc.function.arguments)
         .map_err(|e| format!("validation failed: {}", e.message))?;
@@ -345,4 +420,70 @@ fn emit_agent_done(app: &AppHandle, session_id: &str) {
         "llm:agent-done",
         json!({ "sessionId": session_id }),
     );
+}
+
+/// 把 tool 输入序列化为审批弹窗展示用的字符串,
+/// 总长截断到 200 char,过长字符串值替换为 `<...N chars>`。
+fn summarize_tool_input(args: &Value) -> String {
+    const MAX_TOTAL_LEN: usize = 200;
+    const MAX_VALUE_LEN: usize = 80;
+
+    fn shorten(v: &Value) -> Value {
+        match v {
+            Value::String(s) if s.len() > MAX_VALUE_LEN => {
+                let mut end = MAX_VALUE_LEN;
+                while end > 0 && !s.is_char_boundary(end) {
+                    end -= 1;
+                }
+                Value::String(format!("{}<...{} chars>", &s[..end], s.len() - end))
+            }
+            Value::Array(arr) => Value::Array(arr.iter().map(shorten).collect()),
+            Value::Object(obj) => {
+                let mut out = serde_json::Map::with_capacity(obj.len());
+                for (k, val) in obj {
+                    out.insert(k.clone(), shorten(val));
+                }
+                Value::Object(out)
+            }
+            other => other.clone(),
+        }
+    }
+
+    let shortened = shorten(args);
+    let mut s = shortened.to_string();
+    if s.len() > MAX_TOTAL_LEN {
+        let mut end = MAX_TOTAL_LEN;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+        s.push_str("...");
+    }
+    s
+}
+
+#[cfg(test)]
+mod summarize_tests {
+    use super::*;
+
+    #[test]
+    fn shortens_long_string_values() {
+        let v = json!({"content": "a".repeat(200), "title": "ok"});
+        let s = summarize_tool_input(&v);
+        assert!(s.contains("<...120 chars>"));
+        assert!(s.contains("\"title\":\"ok\""));
+    }
+
+    #[test]
+    fn truncates_overall_length() {
+        let v = json!({"a": "x", "b": "y", "c": "z", "d": "w", "long_key_aaaaaaaa": "yyyyyyyyyy".repeat(20)});
+        let s = summarize_tool_input(&v);
+        assert!(s.len() <= 203, "got len={}: {}", s.len(), s); // 200 + "..."
+    }
+
+    #[test]
+    fn preserves_short_input() {
+        let v = json!({"k": "v"});
+        assert_eq!(summarize_tool_input(&v), "{\"k\":\"v\"}");
+    }
 }
