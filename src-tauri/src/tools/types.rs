@@ -146,7 +146,6 @@ pub enum ToolResult {
     },
     #[serde(rename = "error")]
     Err {
-        #[serde(flatten)]
         error: ToolError,
     },
 }

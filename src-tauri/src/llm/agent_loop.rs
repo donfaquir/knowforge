@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures_util::future::join_all;
 use serde_json::{json, Value};
@@ -112,18 +113,40 @@ pub async fn run_agent_stream(
             emit_tool_call_start(&app, &session_id, id, &tc.function.name);
         }
 
-        // 4. 并行执行工具
+        // 4. 并行执行工具（每个工具有独立超时，支持取消）
+        let tool_timeout = Duration::from_millis(config.timeout_ms);
         let results = join_all(calls_with_ids.iter().map(|(id, tc)| {
-            execute_tool(
-                &registry,
-                &ctx_factory,
-                &workspace_root,
-                app_cache_dir.clone(),
-                app_bundle_resource_dir.clone(),
-                &conversation_id,
-                id,
-                tc,
-            )
+            let cancel = cancel.clone();
+            let registry = registry.clone();
+            let ctx_factory = ctx_factory.clone();
+            let workspace_root = workspace_root.clone();
+            let app_cache_dir = app_cache_dir.clone();
+            let app_bundle_resource_dir = app_bundle_resource_dir.clone();
+            let conversation_id = conversation_id.clone();
+            let id = id.clone();
+            let tc = tc.clone();
+            async move {
+                tokio::select! {
+                    res = tokio::time::timeout(tool_timeout, execute_tool(
+                        &registry,
+                        &ctx_factory,
+                        &workspace_root,
+                        app_cache_dir,
+                        app_bundle_resource_dir,
+                        &conversation_id,
+                        &id,
+                        &tc,
+                    )) => {
+                        match res {
+                            Ok(tool_result) => tool_result,
+                            Err(_) => Err(format!("tool '{}' timed out after {}ms", tc.function.name, tool_timeout.as_millis())),
+                        }
+                    }
+                    _ = cancel.cancelled() => {
+                        Err("cancelled".to_string())
+                    }
+                }
+            }
         }))
         .await;
 
@@ -222,7 +245,42 @@ async fn execute_tool(
         app_bundle_resource_dir,
     );
 
+    let manifest = tool.manifest().clone();
+    let start = std::time::Instant::now();
+
     let result = tool.invoke(&ctx, tc.function.arguments.clone()).await;
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    // 构造 AuditEntry 并记录（与 commands::invoke_tool 保持一致）
+    let (result_summary, error_code) = match &result {
+        crate::tools::types::ToolResult::Ok { redacted_count, .. } => (
+            serde_json::json!({ "status": "ok", "redacted_count": redacted_count }),
+            None,
+        ),
+        crate::tools::types::ToolResult::PartialOk { errors, .. } => (
+            serde_json::json!({ "status": "partial_ok", "error_count": errors.len() }),
+            None,
+        ),
+        crate::tools::types::ToolResult::Err { error } => (
+            serde_json::json!({ "status": "error" }),
+            Some(format!("{:?}", error.code)),
+        ),
+    };
+
+    let entry = crate::tools::context::AuditEntry {
+        ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        conversation_id: ctx.conversation_id.clone(),
+        call_id: ctx.call_id.clone(),
+        tool_name: manifest.name.clone(),
+        version: manifest.version.clone(),
+        input_redacted: crate::tools::audit::redact_value(&tc.function.arguments),
+        result_summary,
+        duration_ms,
+        approval: format!("{:?}", manifest.default_approval),
+        error_code,
+    };
+    ctx.audit_sink.record(entry).await;
+
     match result {
         crate::tools::types::ToolResult::Ok { data, .. } => Ok(data),
         crate::tools::types::ToolResult::PartialOk { data, .. } => Ok(data),
