@@ -34,6 +34,7 @@ mod workspace_text_search;
 mod understanding_graph;
 mod link_recommendation;
 mod topic_network;
+mod tools;
 
 /// 供前端展示的文件树节点（目录带 children，Markdown 文件为叶子）
 #[derive(Debug, Clone, Serialize)]
@@ -1609,6 +1610,16 @@ pub fn run() {
     tauri::Builder::default()
         .manage(WorkspaceState::default())
         .manage(Arc::new(llm::LlmSessionState::default()))
+        .manage(Arc::new(tools::ToolRegistry::new()))
+        .manage({
+            let audit_sink: Arc<dyn tools::context::AuditSink> = Arc::new(
+                tools::audit::NullAuditSink
+            );
+            let privacy_filter: Arc<dyn tools::context::PrivacyFilter> = Arc::new(
+                tools::privacy::KfPrivateFilter
+            );
+            Arc::new(tools::ToolContextFactory::new(audit_sink, privacy_filter))
+        })
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             open_workspace,
@@ -1670,8 +1681,16 @@ pub fn run() {
             build_topic_network,
             get_topic_cache_status,
             export_topic_index_markdown,
-            add_manual_topic_semantic
+            add_manual_topic_semantic,
+            tools::commands::list_tools,
+            tools::commands::invoke_tool
         ])
+        .setup(|app| {
+            use tauri::Manager;
+            let registry = app.state::<Arc<tools::ToolRegistry>>();
+            tools::register_builtin_tools(&registry).expect("failed to register builtin tools");
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -381,10 +381,12 @@ pub async fn extract_topics_for_document(
         LlmChatMessage {
             role: "system".into(),
             content: SYSTEM_TOPIC_EXTRACT.to_string(),
+            ..Default::default()
         },
         LlmChatMessage {
             role: "user".into(),
             content: user_body,
+            ..Default::default()
         },
     ];
     let raw = ollama::run_chat_completion(

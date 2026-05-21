@@ -1,17 +1,21 @@
 //! Rust 侧 Ollama 代理：模型列表、流式 chat、会话中止（任务 04）。
 
 pub(crate) mod ollama;
+pub(crate) mod agent_loop;
 
 use crate::depth_decisions;
 use crate::lock_workspace_root;
 use crate::note_privacy;
 use crate::semantic_index;
+use crate::tools::context::ToolContextFactory;
+use crate::tools::registry::{ToolRegistry, ToolScope};
 use crate::vault_config::{self, ActiveProvider, DepthMode};
 use crate::vault_context_search::{self, VaultSnippetKind};
 use std::path::PathBuf;
 use chrono::Utc;
 use ollama::run_chat_stream;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -58,11 +62,29 @@ impl LlmSessionState {
 
 // --- IPC 类型 ---
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LlmChatMessage {
     pub role: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<LlmToolCall>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmToolCall {
+    /// 服务端生成的 UUID v7，用于追踪一次工具调用的生命周期。
+    pub id: String,
+    pub function: LlmToolCallFunction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmToolCallFunction {
+    pub name: String,
+    /// Ollama 返回的已解析 JSON 参数对象。
+    pub arguments: Value,
 }
 
 /// 附带当前笔记时由前端传入；**笔记正文出站裁决在 Rust**（任务 09）。
@@ -112,6 +134,9 @@ pub struct OllamaChatStreamStartArgs {
     /// 是否在 system 中注入内置语义检索摘录；默认 true（迭代 6.2）
     #[serde(default)]
     pub semantic_context_enabled: Option<bool>,
+    /// 是否启用 Tool Calling Loop（P2）；默认 false 走原文字流路径。
+    #[serde(default)]
+    pub tools_enabled: bool,
 }
 
 /// 深化轮次的上下文（由邀请 UI 传入）。
@@ -359,6 +384,7 @@ fn assemble_ollama_messages(
         out.push(LlmChatMessage {
             role: "system".to_string(),
             content: system_content,
+            ..Default::default()
         });
     }
 
@@ -371,6 +397,7 @@ fn assemble_ollama_messages(
             out.push(LlmChatMessage {
                 role: "system".to_string(),
                 content: build_thought_focus_system_block(tf, has_note),
+                ..Default::default()
             });
         }
     }
@@ -441,6 +468,7 @@ fn assemble_ollama_messages(
                     out.push(LlmChatMessage {
                         role: "system".to_string(),
                         content: vault_block,
+                        ..Default::default()
                     });
                 } else {
                     reply_context_sources.vault_keyword = Some(ReplyVaultKeywordSource {
@@ -485,6 +513,7 @@ fn assemble_ollama_messages(
                         out.push(LlmChatMessage {
                             role: "system".to_string(),
                             content: sem_res.block,
+                            ..Default::default()
                         });
                     }
                 }
@@ -498,6 +527,7 @@ fn assemble_ollama_messages(
         out.push(LlmChatMessage {
             role: "system".to_string(),
             content: depth_instruction,
+            ..Default::default()
         });
     }
 
@@ -521,6 +551,7 @@ fn assemble_ollama_messages(
         out.push(LlmChatMessage {
             role: "system".to_string(),
             content: ctx,
+            ..Default::default()
         });
     }
 
@@ -532,12 +563,14 @@ fn assemble_ollama_messages(
                   If the user writes in English, respond in English. \
                   Match the user's language exactly."
             .to_string(),
+        ..Default::default()
     });
 
     // 叠词 / 重复词抑制：无笔记上下文时仅靠本条生效；与深度指令互补
     out.push(LlmChatMessage {
         role: "system".to_string(),
         content: CHAT_ANTI_REPETITION_SYSTEM.to_string(),
+        ..Default::default()
     });
 
     for m in &args.messages {
@@ -548,6 +581,7 @@ fn assemble_ollama_messages(
         out.push(LlmChatMessage {
             role: role.to_string(),
             content: m.content.clone(),
+            ..Default::default()
         });
     }
     Ok(AssembleOutcome {
@@ -600,6 +634,8 @@ pub async fn start_ollama_chat_stream(
     app: AppHandle,
     workspace: State<'_, crate::WorkspaceState>,
     sessions: State<'_, Arc<LlmSessionState>>,
+    registry: State<'_, Arc<ToolRegistry>>,
+    ctx_factory: State<'_, Arc<ToolContextFactory>>,
     args: OllamaChatStreamStartArgs,
 ) -> Result<OllamaChatStreamStartResponse, String> {
     let root = lock_workspace_root(&workspace)?;
@@ -618,7 +654,8 @@ pub async fn start_ollama_chat_stream(
 
     let cache = semantic_index::default_model_cache_dir();
     let bundle = semantic_index::resolve_bundle_model_dir(&app);
-    let embed_paths = Some((cache, bundle));
+    let embed_paths = Some((cache.clone(), bundle.clone()));
+    let tools_enabled = args.tools_enabled;
     let outcome = assemble_ollama_messages(&root, &ai, &args, embed_paths)?;
     let messages = outcome.messages;
     let resolved_depth = outcome.resolved_depth;
@@ -662,20 +699,52 @@ pub async fn start_ollama_chat_stream(
     let timeout_ms = ai.request.timeout_ms;
     let temp = ai.parameters.temperature;
     let top_p = ai.parameters.top_p;
+    let registry_arc = Arc::clone(registry.inner());
+    let ctx_factory_arc = Arc::clone(ctx_factory.inner());
+    let workspace_root = root.clone();
+    let conversation_id = session_id.clone();
 
     tokio::spawn(async move {
-        run_chat_stream(
-            app_h.clone(),
-            sid.clone(),
-            base,
-            model,
-            messages,
-            temp,
-            top_p,
-            timeout_ms,
-            cancel,
-        )
-        .await;
+        if tools_enabled {
+            // 把工具 manifest 列表转成 Ollama tools 协议格式
+            let manifests = registry_arc.list_for_llm(ToolScope::Global);
+            let tools_json = agent_loop::list_for_llm_to_ollama_tools(&manifests);
+
+            agent_loop::run_agent_stream(
+                app_h.clone(),
+                sid.clone(),
+                messages,
+                tools_json,
+                registry_arc,
+                ctx_factory_arc,
+                workspace_root,
+                Some(cache),
+                Some(bundle),
+                base,
+                model,
+                temp,
+                top_p,
+                timeout_ms,
+                cancel,
+                agent_loop::AgentLoopConfig::default(),
+                conversation_id,
+            )
+            .await;
+        } else {
+            let _ = run_chat_stream(
+                app_h.clone(),
+                sid.clone(),
+                base,
+                model,
+                messages,
+                temp,
+                top_p,
+                timeout_ms,
+                cancel,
+                None,
+            )
+            .await;
+        }
         sessions_arc.remove_session(&sid);
     });
 
