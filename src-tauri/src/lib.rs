@@ -35,6 +35,7 @@ mod understanding_graph;
 mod link_recommendation;
 mod topic_network;
 mod tools;
+mod skills;
 
 /// 供前端展示的文件树节点（目录带 children，Markdown 文件为叶子）
 #[derive(Debug, Clone, Serialize)]
@@ -1612,6 +1613,7 @@ pub fn run() {
         .manage(Arc::new(llm::LlmSessionState::default()))
         .manage(Arc::new(llm::approval::ToolApprovalState::new()))
         .manage(Arc::new(tools::ToolRegistry::new()))
+        .manage(Arc::new(skills::SkillRegistry::new()))
         .manage({
             let audit_sink: Arc<dyn tools::context::AuditSink> = Arc::new(
                 tools::audit::NullAuditSink
@@ -1686,12 +1688,17 @@ pub fn run() {
             export_topic_index_markdown,
             add_manual_topic_semantic,
             tools::commands::list_tools,
-            tools::commands::invoke_tool
+            tools::commands::invoke_tool,
+            skills::commands::list_skills,
+            skills::commands::invoke_skill
         ])
         .setup(|app| {
             use tauri::Manager;
             let registry = app.state::<Arc<tools::ToolRegistry>>();
             tools::register_builtin_tools(&registry).expect("failed to register builtin tools");
+            let skill_registry = app.state::<Arc<skills::SkillRegistry>>();
+            skills::register_builtin_skills(&skill_registry, &registry)
+                .expect("failed to register builtin skills");
             Ok(())
         })
         .run(tauri::generate_context!())

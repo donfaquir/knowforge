@@ -38,7 +38,7 @@ impl Default for LlmSessionState {
 }
 
 impl LlmSessionState {
-    fn register(&self, id: String, token: CancellationToken) {
+    pub(crate) fn register(&self, id: String, token: CancellationToken) {
         let mut g = match self.inner.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
