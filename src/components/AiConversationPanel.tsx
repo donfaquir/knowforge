@@ -23,6 +23,9 @@ import { PrivacyChangeOverlay } from "./PrivacyChangeOverlay";
 import { AiToolApprovalDialog } from "./AiToolApprovalDialog";
 import type { ApprovalRequest } from "../types/toolTypes";
 import { respondToolApproval } from "../utils/toolInvoke";
+import { listSkills, invokeSkill } from "../utils/skillInvoke";
+import type { SkillManifestJson } from "../types/skillTypes";
+import { parseSlashCommand } from "../utils/parseSlashCommand";
 import { AiAssistantMarkdown } from "./AiAssistantMarkdown";
 import { StreamingTimer } from "./StreamingTimer";
 import { useCognitiveFrequencyControl } from "../hooks/useCognitiveFrequencyControl";
@@ -288,6 +291,17 @@ export function AiConversationPanel() {
   const [toolsEnabled, setToolsEnabled] = useState(false);
   /** 发送时快照：agent 模式下 stream-done 仅是中间信号，不能最终化助手消息 */
   const isAgentModeRef = useRef(false);
+
+  /** Iter 5 #3：内置 skill manifest 缓存。skill 在后端 setup() 注册一次后不变，挂载时取一次即可。 */
+  const [skillsCache, setSkillsCache] = useState<SkillManifestJson[]>([]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    listSkills()
+      .then(setSkillsCache)
+      .catch(() => {
+        /* 拉取失败不阻塞，handleSkillSend 会兜底报错 */
+      });
+  }, []);
 
   /** P3 审批：按到达顺序串行展示弹窗，避免并行 tool_calls 时 UI 叠加 */
   const approvalQueueRef = useRef<ApprovalRequest[]>([]);
@@ -989,12 +1003,138 @@ export function AiConversationPanel() {
     }, 2000);
   }, [setMessages]);
 
+  /** Iter 5 #3：渲染一条本地 assistant 气泡列出可用 skill。不发后端、不进 active session。 */
+  const handleSkillsList = useCallback(() => {
+    setInput("");
+    const lines = skillsCache.length === 0
+      ? `_${t("aiPanel.skillsListEmpty")}_`
+      : skillsCache
+          .map((s) => `- \`${s.id}\` (${s.name}) — ${s.description}`)
+          .join("\n");
+    const body = `**${t("aiPanel.skillsListTitle")}**\n\n${lines}`;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: body,
+      },
+    ]);
+  }, [skillsCache, setInput, setMessages, t]);
+
+  /** Iter 5 #3：触发后端 invoke_skill 子轮次。复用 activeSessionRef + isAgentModeRef，
+   *  现有 llm:* listeners 会自动按 sessionId 接管 skill 子流，UI 渲染按 meta.skillId 加 badge。 */
+  const handleSkillSend = useCallback(
+    async (skillId: string, body: string) => {
+      setCopyToast(null);
+      if (isStreaming || isVaultSearching) {
+        return;
+      }
+      if (!isTauri()) {
+        setErrorBanner(t("aiPanel.onlyDesktop"));
+        return;
+      }
+      if (!workspaceReady || !sessionReady || !conversationId) {
+        setErrorBanner(t("aiPanel.openFolder"));
+        return;
+      }
+
+      const manifest = skillsCache.find((s) => s.id === skillId);
+      if (!manifest) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: t("aiPanel.skillUnknown", { id: skillId }),
+          },
+        ]);
+        setInput("");
+        return;
+      }
+
+      setErrorBanner(null);
+      setInput("");
+      const userMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: body,
+        meta: { skillId, skillName: manifest.name },
+      };
+      setMessages((prev) => [...prev, userMsg]);
+
+      let modelName: string | undefined;
+      try {
+        const cfg = await invoke<VaultCfgForSend>("get_vault_config_for_ui");
+        const o = cfg.ai?.ollama;
+        modelName = (o?.lastUsedModel?.trim() || o?.defaultModel?.trim()) || undefined;
+      } catch {
+        /* 拉取失败时让后端用默认模型 */
+      }
+
+      try {
+        const res = await invokeSkill(skillId, body, conversationId, modelName);
+        activeSessionRef.current = res.sessionId;
+        // skill 一定走 agent loop（有自己的工具白名单），与 toolsEnabled 无关
+        isAgentModeRef.current = true;
+        setIsStreaming(true);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: "",
+            streaming: true,
+            meta: {
+              timing: { startMs: Date.now() },
+              skillId,
+              skillName: manifest.name,
+            },
+          },
+        ]);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: t("aiPanel.skillInvokeFailed", { message }),
+          },
+        ]);
+      }
+    },
+    [
+      conversationId,
+      isStreaming,
+      isVaultSearching,
+      sessionReady,
+      setIsStreaming,
+      setMessages,
+      skillsCache,
+      t,
+      workspaceReady,
+    ],
+  );
+
   const handleSend = useCallback(async () => {
     setCopyToast(null);
     const trimmed = input.trim();
     if (!trimmed || isStreaming || isVaultSearching) {
       return;
     }
+
+    // Iter 5 #3：斜杠命令分叉。优先于普通聊天路径处理。
+    const slash = parseSlashCommand(trimmed);
+    if (slash?.kind === "skills-list") {
+      handleSkillsList();
+      return;
+    }
+    if (slash?.kind === "skill") {
+      void handleSkillSend(slash.skillId, slash.body);
+      return;
+    }
+
     if (!isTauri()) {
       setErrorBanner(t("aiPanel.onlyDesktop"));
       return;
@@ -1020,7 +1160,11 @@ export function AiConversationPanel() {
       content: trimmed,
     };
     const nextChat = [...messages, userMsg];
-    const chatTurns = nextChat.map((m) => ({ role: m.role, content: m.content }));
+    // Iter 5 #3：兑现"独立子轮次,不污染主对话历史"——skill 子轮次的 user/assistant 消息
+    // 在 UI 中可见但不进 LLM context。运行时存活，刷新后退化为普通历史（详见 ChatMessage.meta 注释）。
+    const chatTurns = nextChat
+      .filter((m) => !m.meta?.skillId)
+      .map((m) => ({ role: m.role, content: m.content }));
     const noteContext =
       attachCurrentNote && ctx.kind === "attached"
         ? { relPath: ctx.relPath, markdownForGate: ctx.markdown }
@@ -1207,6 +1351,8 @@ export function AiConversationPanel() {
     toolsEnabled,
     t,
     schedulePassiveHighlightDetection,
+    handleSkillSend,
+    handleSkillsList,
   ]);
 
   const onComposerKeyDown = useCallback(
@@ -1573,6 +1719,11 @@ export function AiConversationPanel() {
               {...dragExcludeProps}
             >
               <div className={`ai-chat__bubble ai-chat__bubble--${m.role}`}>
+                {m.meta?.skillId ? (
+                  <span className="ai-chat__skill-badge" aria-label={t("aiPanel.skillBadge", { name: m.meta.skillName || m.meta.skillId })}>
+                    🧠 {m.meta.skillName || m.meta.skillId}
+                  </span>
+                ) : null}
                 {m.role === "assistant" ? (
                   <>
                     {m.meta?.toolCalls && m.meta.toolCalls.length > 0 ? (

@@ -122,6 +122,23 @@
 .ai-chat__tool-call--error .ai-chat__tool-call__icon {
   color: #dc2626;
 }
+
+/* Iter 5 #3：Skill 子轮次徽章（在 user/assistant 气泡顶部，渲染在 tool-calls 之前） */
+.ai-chat__skill-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--kf-accent, #6b5db7) 12%, transparent);
+  color: var(--kf-accent, #6b5db7);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  margin-bottom: 6px;
+  align-self: flex-start;
+}
+
 @keyframes ai-chat-tool-call-pulse {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }
