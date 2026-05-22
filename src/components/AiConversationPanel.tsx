@@ -18,6 +18,7 @@ import type {
 import type { DetectPassiveHighlightResponse, PassiveHighlightMarked } from "../types/passiveHighlight";
 import type { ActiveProvider, VaultConfigForUi } from "../types/vaultAiConfig";
 import { isChallengeInlineLlmReady } from "../utils/isChallengeReviewLlmReady";
+import { VAULT_CONFIG_UPDATED_EVENT } from "../utils/vaultConfigBroadcast";
 import { markdownTreatAsKfPrivateForUi } from "../utils/kfPrivateMarkdown";
 import { PrivacyChangeOverlay } from "./PrivacyChangeOverlay";
 import { AiToolApprovalDialog } from "./AiToolApprovalDialog";
@@ -287,8 +288,9 @@ export function AiConversationPanel() {
   const activeSessionRef = useRef<string | null>(null);
   const listEndRef = useRef<HTMLDivElement>(null);
 
-  /** P2 Tool Calling Loop：工具调用总开关（默认关闭，向后兼容） */
-  const [toolsEnabled, setToolsEnabled] = useState(false);
+  /** Iter 5 #4：工具调用总开关从 vault config 读取（默认 true,旧 vault 缺字段时取 true）。
+   *  通过 VAULT_CONFIG_UPDATED_EVENT 在设置保存后实时同步,无需重开会话。 */
+  const [toolsEnabled, setToolsEnabled] = useState(true);
   /** 发送时快照：agent 模式下 stream-done 仅是中间信号，不能最终化助手消息 */
   const isAgentModeRef = useRef(false);
 
@@ -312,6 +314,28 @@ export function AiConversationPanel() {
       .catch(() => {
         /* 拉取失败不阻塞，handleSkillSend 会兜底报错 */
       });
+  }, []);
+
+  /** Iter 5 #4：从 vault config 拉取 toolsEnabled,并订阅设置保存广播以热更新。 */
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    const reload = async () => {
+      try {
+        const cfg = await invoke<VaultConfigForUi>("get_vault_config_for_ui");
+        if (disposed) return;
+        setToolsEnabled(cfg.ai.toolsEnabled !== false);
+      } catch {
+        /* 加载失败保持默认 true,避免阻塞用户 */
+      }
+    };
+    void reload();
+    const onCfg = () => void reload();
+    window.addEventListener(VAULT_CONFIG_UPDATED_EVENT, onCfg);
+    return () => {
+      disposed = true;
+      window.removeEventListener(VAULT_CONFIG_UPDATED_EVENT, onCfg);
+    };
   }, []);
 
   /** Iter 5 #3 后续：斜杠命令自动补全。输入以 `/` 开头且仍在打 id 时弹下拉。 */
@@ -2125,21 +2149,6 @@ export function AiConversationPanel() {
             {...dragExcludeProps}
           />
           <span id="ai-chat-vault-hint">{t("aiPanel.vaultSearch")}</span>
-        </label>
-        {/* P2 Tool Calling Loop：工具调用总开关（默认关闭） */}
-        <label
-          className="ai-chat__attach ai-chat__attach--above-input"
-          title={t("aiPanel.toolsToggleTitle")}
-        >
-          <input
-            type="checkbox"
-            checked={toolsEnabled}
-            onChange={(e) => setToolsEnabled(e.target.checked)}
-            disabled={isStreaming || isVaultSearching}
-            aria-describedby="ai-chat-tools-hint"
-            {...dragExcludeProps}
-          />
-          <span id="ai-chat-tools-hint">{t("aiPanel.toolsToggle")}</span>
         </label>
         <div className="ai-chat__composer-field">
           <div className="ai-chat__composer-stack">

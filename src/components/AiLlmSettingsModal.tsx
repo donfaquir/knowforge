@@ -105,6 +105,7 @@ type FormState = {
   temperature: string;
   topP: string;
   allowPrivateContentInLocalLlm: boolean;
+  toolsEnabled: boolean;
   passiveHighlightEnabled: boolean;
   passiveHighlightConfidenceMin: string;
   writingCoachEnabled: boolean;
@@ -196,6 +197,7 @@ function defaultForm(): FormState {
     temperature: "0.7",
     topP: "",
     allowPrivateContentInLocalLlm: false,
+    toolsEnabled: true,
     passiveHighlightEnabled: true,
     passiveHighlightConfidenceMin: "0.55",
     writingCoachEnabled: true,
@@ -223,6 +225,7 @@ function aiFormEqualsPersisted(a: FormState, b: FormState): boolean {
     "temperature",
     "topP",
     "allowPrivateContentInLocalLlm",
+    "toolsEnabled",
     "passiveHighlightEnabled",
     "passiveHighlightConfidenceMin",
     "writingCoachEnabled",
@@ -262,6 +265,7 @@ function vaultConfigToForm(cfg: VaultConfigForUi): FormState {
     temperature: String(ai.parameters.temperature),
     topP: ai.parameters.topP != null ? String(ai.parameters.topP) : "",
     allowPrivateContentInLocalLlm: ai.privacy.allowPrivateContentInLocalLlm,
+    toolsEnabled: ai.toolsEnabled !== false,
     passiveHighlightEnabled: cognitive.passiveHighlightEnabled !== false,
     passiveHighlightConfidenceMin: String(cognitive.passiveHighlightConfidenceMin ?? 0.55),
     writingCoachEnabled: cognitive.writingCoachEnabled !== false,
@@ -592,6 +596,7 @@ export function AiLlmSettingsModal({
         privacy: {
           allowPrivateContentInLocalLlm: form.allowPrivateContentInLocalLlm,
         },
+        toolsEnabled: form.toolsEnabled,
       },
       cognitive: {
         passiveHighlightEnabled: form.passiveHighlightEnabled,
@@ -910,6 +915,24 @@ export function AiLlmSettingsModal({
                 />
                 {t("settings.allowPrivateLocal")}
               </label>
+            </fieldset>
+
+            <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
+              <legend className="ai-settings__legend">{t("settings.toolsSection")}</legend>
+              <label
+                className="ai-settings__check"
+                title={t("settings.toolsEnabledHint")}
+              >
+                <input
+                  type="checkbox"
+                  checked={form.toolsEnabled}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, toolsEnabled: e.target.checked }))
+                  }
+                />
+                {t("settings.toolsEnabled")}
+              </label>
+              <p className="app-modal__hint">{t("settings.toolsEnabledHint")}</p>
             </fieldset>
 
             <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>

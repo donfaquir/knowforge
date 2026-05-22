@@ -136,9 +136,10 @@ pub struct OllamaChatStreamStartArgs {
     /// 是否在 system 中注入内置语义检索摘录；默认 true（迭代 6.2）
     #[serde(default)]
     pub semantic_context_enabled: Option<bool>,
-    /// 是否启用 Tool Calling Loop（P2）；默认 false 走原文字流路径。
+    /// 是否启用 Tool Calling Loop（P2）；
+    /// `None` 时回退到 `AiConfig::tools_enabled`(Iter 5 #4 起改由配置页面控制)。
     #[serde(default)]
-    pub tools_enabled: bool,
+    pub tools_enabled: Option<bool>,
     /// 前端会话 ID（用于 ConfirmOncePerSession 审批缓存的作用域）；
     /// 缺省时退化为本次 stream 的 session_id（兼容旧客户端）。
     #[serde(default)]
@@ -606,7 +607,8 @@ fn assemble_ollama_messages(
     });
 
     // Iter 3.5 P0-2：开启工具调用时,明确告诉 LLM "先发现后读",避免按训练直觉假设文件在根目录。
-    if args.tools_enabled {
+    let tools_enabled_eff = args.tools_enabled.unwrap_or(ai.tools_enabled);
+    if tools_enabled_eff {
         out.push(LlmChatMessage {
             role: "system".to_string(),
             content: agent_loop::TOOL_USE_DISCOVERY_HINT.to_string(),
@@ -707,7 +709,7 @@ pub async fn start_ollama_chat_stream(
     let cache = semantic_index::default_model_cache_dir();
     let bundle = semantic_index::resolve_bundle_model_dir(&app);
     let embed_paths = Some((cache.clone(), bundle.clone()));
-    let tools_enabled = args.tools_enabled;
+    let tools_enabled = args.tools_enabled.unwrap_or(ai.tools_enabled);
     // Iter 5 #4: snapshot auto_invocable skills so assemble_ollama_messages can
     // surface them in the chat system prompt.
     let skills_for_prompt: Vec<(String, String, Option<String>)> = if tools_enabled {
