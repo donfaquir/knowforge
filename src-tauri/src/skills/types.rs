@@ -22,6 +22,15 @@ pub struct SkillManifest {
     pub ui_entry: SkillUiEntry,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Iter 5 #4 (Stage 1): allow LLM to invoke this skill as a tool.
+    /// When true, a `skill.<id>` tool wrapper is registered automatically
+    /// so the model can choose to call the skill mid-conversation.
+    #[serde(default)]
+    pub auto_invocable: bool,
+    /// Short hint shown in the skill list injected into the chat system prompt.
+    /// Helps the LLM decide when calling `skill.<id>` is appropriate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_to_use: Option<String>,
 }
 
 impl SkillManifest {
@@ -51,6 +60,8 @@ mod tests {
             timeout_secs: 30,
             ui_entry: SkillUiEntry::Standalone,
             tags: vec!["test".to_string()],
+            auto_invocable: false,
+            when_to_use: None,
         }
     }
 

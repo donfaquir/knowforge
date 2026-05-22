@@ -103,6 +103,58 @@ pub async fn run_skill(
     top_p: Option<f64>,
     cancel: CancellationToken,
 ) {
+    // Direct skill invocation from the dedicated `invoke_skill` command always
+    // starts at nesting depth 1 (the user, not another skill, triggered it —
+    // but downstream tools still see depth=1 to keep behavior identical to
+    // auto-invocation). See [`run_skill_with_depth`] for the explicit form.
+    run_skill_with_depth(
+        app,
+        session_id,
+        manifest,
+        parent_conversation_id,
+        workspace_root,
+        workspace_name,
+        user_input,
+        registry,
+        ctx_factory,
+        approval_state,
+        app_cache_dir,
+        app_bundle_resource_dir,
+        base_url,
+        model,
+        temperature,
+        top_p,
+        cancel,
+        1,
+    )
+    .await;
+}
+
+/// Iter 5 #4: same as [`run_skill`] but lets the caller pin the nesting depth
+/// stamped onto every ToolContext spawned inside the skill loop. Used by
+/// SkillAsTool so the depth=1 cap holds even when the parent call originated
+/// from the main agent loop at depth=0.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_skill_with_depth(
+    app: AppHandle,
+    session_id: String,
+    manifest: Arc<SkillManifest>,
+    parent_conversation_id: String,
+    workspace_root: PathBuf,
+    workspace_name: String,
+    user_input: String,
+    registry: Arc<ToolRegistry>,
+    ctx_factory: Arc<ToolContextFactory>,
+    approval_state: Arc<ToolApprovalState>,
+    app_cache_dir: Option<PathBuf>,
+    app_bundle_resource_dir: Option<PathBuf>,
+    base_url: String,
+    model: String,
+    temperature: f64,
+    top_p: Option<f64>,
+    cancel: CancellationToken,
+    nesting_depth: u8,
+) {
     let workspace_root_str = workspace_root.to_string_lossy().to_string();
     let messages = build_initial_messages(
         &manifest,
@@ -118,6 +170,7 @@ pub async fn run_skill(
         max_tool_calls: manifest.max_tool_calls,
         timeout_ms: manifest.timeout_secs.saturating_mul(1000),
         max_tool_result_chars: 8000,
+        nesting_depth,
     };
 
     let conv_id = skill_conversation_id(&manifest.id, &parent_conversation_id);
@@ -163,6 +216,8 @@ mod tests {
             timeout_secs: 25,
             ui_entry: SkillUiEntry::Standalone,
             tags: vec![],
+            auto_invocable: false,
+            when_to_use: None,
         }
     }
 

@@ -292,6 +292,17 @@ export function AiConversationPanel() {
   /** 发送时快照：agent 模式下 stream-done 仅是中间信号，不能最终化助手消息 */
   const isAgentModeRef = useRef(false);
 
+  /** Iter 5 #4: while a `skill.<id>` auto-invocation is in flight, save the
+   * parent session here so we can restore activeSessionRef once the skill
+   * sub-turn fires `agent-done`. Null when no skill is currently in progress. */
+  const parentSessionRef = useRef<string | null>(null);
+  /** Iter 5 #4: when the skill finishes and the parent stream resumes, the next
+   * chunk needs a fresh assistant bubble (not the skill bubble that just
+   * finalized). This flag delays creating the parent placeholder until we
+   * actually receive the first parent chunk — avoids leaving an empty bubble
+   * if the parent has nothing more to say. */
+  const needsParentBubbleAfterSkillRef = useRef(false);
+
   /** Iter 5 #3：内置 skill manifest 缓存。skill 在后端 setup() 注册一次后不变，挂载时取一次即可。 */
   const [skillsCache, setSkillsCache] = useState<SkillManifestJson[]>([]);
   useEffect(() => {
@@ -538,7 +549,19 @@ export function AiConversationPanel() {
           return;
         }
         setMessages((prev) => {
-          const next = [...prev];
+          let next = [...prev];
+          // Iter 5 #4: parent stream resumed after a skill sub-turn finished.
+          // Spawn a fresh parent assistant bubble for this chunk instead of
+          // appending into the just-finalized skill bubble.
+          if (needsParentBubbleAfterSkillRef.current) {
+            needsParentBubbleAfterSkillRef.current = false;
+            next.push({
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: "",
+              streaming: true,
+            });
+          }
           const last = next[next.length - 1];
           if (last?.role === "assistant" && last.streaming) {
             const isFirstToken = last.content === "";
@@ -735,6 +758,25 @@ export function AiConversationPanel() {
         if (p.sessionId !== activeSessionRef.current) {
           return;
         }
+        // Iter 5 #4: error during a skill sub-turn — finalize skill bubble and
+        // bubble up to the parent. The parent agent_loop will receive the
+        // SkillAsTool tool error in its tool_result and decide whether to
+        // recover. Don't tear down top-level streaming UI here.
+        if (parentSessionRef.current) {
+          const parent = parentSessionRef.current;
+          parentSessionRef.current = null;
+          activeSessionRef.current = parent;
+          needsParentBubbleAfterSkillRef.current = true;
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant" && last.streaming) {
+              next[next.length - 1] = { ...last, streaming: false };
+            }
+            return next;
+          });
+          return;
+        }
         markNeedPersist();
         activeSessionRef.current = null;
         isAgentModeRef.current = false;
@@ -847,9 +889,61 @@ export function AiConversationPanel() {
           return cur;
         });
       }),
+      // Iter 5 #4: 主对话自动调用 `skill.<id>` 时，后端发出 skill-spawn,
+      // 携带新 sessionId — 这里保存父 session、切换 active、追加 skill 占位气泡。
+      // 后续 stream-chunk / tool-call-* / agent-done 都按新 sessionId 路由,
+      // 直到 skill 子轮次结束（agent-done listener 中再切回父）。
+      listen<{
+        sessionId: string;
+        conversationId: string;
+        skillId: string;
+        skillName: string;
+      }>("llm:skill-spawn", (e) => {
+        const p = e.payload;
+        if (!activeSessionRef.current || activeSessionRef.current === p.sessionId) {
+          return;
+        }
+        // 只处理本会话发出的 skill-spawn — 后端 conversationId 是 ToolContext.conversation_id,
+        // 与前端 conversationId 一致。
+        if (conversationId && p.conversationId !== conversationId) {
+          return;
+        }
+        parentSessionRef.current = activeSessionRef.current;
+        activeSessionRef.current = p.sessionId;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: "",
+            streaming: true,
+            meta: { skillId: p.skillId, skillName: p.skillName },
+          },
+        ]);
+      }),
       // P2 Tool Calling Loop：Agent 轮次结束 → 最终化助手消息、清理 streaming 状态
       listen<{ sessionId: string }>("llm:agent-done", (e) => {
         if (e.payload.sessionId !== activeSessionRef.current) {
+          return;
+        }
+        // Iter 5 #4: if this is a skill sub-turn finishing under a parent
+        // session, finalize the skill bubble but DO NOT clear top-level
+        // streaming state — the parent run is still in flight waiting for
+        // the SkillAsTool tool result. Restore activeSessionRef to the
+        // parent so subsequent parent events route correctly.
+        if (parentSessionRef.current) {
+          const parent = parentSessionRef.current;
+          parentSessionRef.current = null;
+          activeSessionRef.current = parent;
+          needsParentBubbleAfterSkillRef.current = true;
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant" && last.streaming) {
+              next[next.length - 1] = { ...last, streaming: false };
+            }
+            return next;
+          });
           return;
         }
         markNeedPersist();
@@ -890,7 +984,15 @@ export function AiConversationPanel() {
       disposed = true;
       pending.forEach((u) => void u());
     };
-  }, [markNeedPersist, setMessages, setIsStreaming, freqCtrl, t, attachCitationToLastAssistant]);
+  }, [
+    markNeedPersist,
+    setMessages,
+    setIsStreaming,
+    freqCtrl,
+    t,
+    attachCitationToLastAssistant,
+    conversationId,
+  ]);
 
   const handleStop = useCallback(async () => {
     if (isVaultSearching) {
@@ -905,10 +1007,17 @@ export function AiConversationPanel() {
       return;
     }
 
+    // Iter 5 #4: while a skill sub-turn is in flight, abort BOTH the skill
+    // and its parent — cancelling only the skill leaves the parent agent loop
+    // blocked awaiting a tool result that will never arrive.
+    const parentSid = parentSessionRef.current;
+
     const hasComposerDraft = input.trim().length > 0;
 
     markNeedPersist();
     activeSessionRef.current = null;
+    parentSessionRef.current = null;
+    needsParentBubbleAfterSkillRef.current = false;
     isAgentModeRef.current = false;
     setIsStreaming(false);
     setErrorBanner(null);
@@ -938,6 +1047,9 @@ export function AiConversationPanel() {
     }
     try {
       await invoke("abort_llm_stream", { sessionId: sid });
+      if (parentSid && parentSid !== sid) {
+        await invoke("abort_llm_stream", { sessionId: parentSid });
+      }
     } catch {
       /* 中止失败不阻塞 UI */
     }

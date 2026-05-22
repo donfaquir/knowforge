@@ -20,6 +20,10 @@ pub struct ToolContext {
     pub app_cache_dir: Option<PathBuf>,
     /// Tauri app bundle resource directory（用于语义搜索模型 bundle 路径）
     pub app_bundle_resource_dir: Option<PathBuf>,
+    /// Iter 5 #4: how deeply nested this tool call is.
+    /// 0 = called from main agent loop. 1 = called from inside a skill sub-turn
+    /// (or another tool that recursed into agent_loop). Stage 1 caps this at 1.
+    pub nesting_depth: u8,
 }
 
 // ─── AuditSink trait ───────────────────────────────────────────────────────────
@@ -105,6 +109,26 @@ impl ToolContextFactory {
         app_cache_dir: Option<PathBuf>,
         app_bundle_resource_dir: Option<PathBuf>,
     ) -> ToolContext {
+        self.create_context_at_depth(
+            workspace_root,
+            conversation_id,
+            app_cache_dir,
+            app_bundle_resource_dir,
+            0,
+        )
+    }
+
+    /// Iter 5 #4: build a ToolContext that records the nesting depth.
+    /// Used by SkillAsTool to mark sub-turn calls (depth >= 1) so we can
+    /// short-circuit deeper nesting attempts.
+    pub fn create_context_at_depth(
+        &self,
+        workspace_root: PathBuf,
+        conversation_id: &str,
+        app_cache_dir: Option<PathBuf>,
+        app_bundle_resource_dir: Option<PathBuf>,
+        nesting_depth: u8,
+    ) -> ToolContext {
         ToolContext {
             workspace_root,
             conversation_id: conversation_id.to_string(),
@@ -114,6 +138,7 @@ impl ToolContextFactory {
             privacy_filter: self.privacy_filter.clone(),
             app_cache_dir,
             app_bundle_resource_dir,
+            nesting_depth,
         }
     }
 }

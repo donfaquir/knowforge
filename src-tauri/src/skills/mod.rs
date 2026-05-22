@@ -6,9 +6,16 @@
 pub mod commands;
 pub mod registry;
 pub mod runtime;
+pub mod skill_tool;
 pub mod types;
 
 pub use registry::SkillRegistry;
+pub use skill_tool::{SkillAsTool, SKILL_CONCURRENCY};
+
+use std::sync::Arc;
+
+use tauri::AppHandle;
+use tokio::sync::Semaphore;
 
 use crate::tools::registry::ToolRegistry;
 
@@ -51,6 +58,11 @@ fn writing_coach_manifest() -> SkillManifest {
         timeout_secs: 30,
         ui_entry: SkillUiEntry::EditorPanel,
         tags: vec!["writing".to_string(), "coach".to_string()],
+        auto_invocable: true,
+        when_to_use: Some(
+            "用户在打磨一段笔记/段落,希望就逻辑链条/术语/缺失前提获得追问,或想找到知识库中可能相关的其它笔记。"
+                .to_string(),
+        ),
     }
 }
 
@@ -70,6 +82,11 @@ fn challenge_review_manifest() -> SkillManifest {
         timeout_secs: 45,
         ui_entry: SkillUiEntry::ConversationMode,
         tags: vec!["review".to_string(), "coach".to_string()],
+        auto_invocable: true,
+        when_to_use: Some(
+            "用户提到过往的某条想法/某篇笔记并想做学习复盘,需要一个针对性的追问从对比/应用/质疑/迁移视角切入。"
+                .to_string(),
+        ),
     }
 }
 
@@ -79,6 +96,28 @@ pub fn register_builtin_skills(
 ) -> Result<(), SkillRegistryError> {
     skills.register(writing_coach_manifest(), tools)?;
     skills.register(challenge_review_manifest(), tools)?;
+    Ok(())
+}
+
+/// Iter 5 #4: register a `skill.<id>` tool wrapper for every auto_invocable
+/// skill so the main agent loop can call into them. Must be invoked AFTER
+/// [`register_builtin_skills`] (uses the SkillRegistry as the source of truth
+/// for which skills are auto_invocable).
+///
+/// Errors map to RegistryError from the tool layer (duplicate name, etc.) and
+/// are coerced into `String` for ergonomic startup wiring.
+pub fn register_skill_tools(
+    app: &AppHandle,
+    skills: &SkillRegistry,
+    tools: &ToolRegistry,
+    semaphore: Arc<Semaphore>,
+) -> Result<(), String> {
+    for manifest in skills.list().into_iter().filter(|m| m.auto_invocable) {
+        let tool = SkillAsTool::new(&manifest, app.clone(), semaphore.clone());
+        tools
+            .register(tool)
+            .map_err(|e| format!("register skill tool '{}': {e}", manifest.id))?;
+    }
     Ok(())
 }
 

@@ -1614,6 +1614,7 @@ pub fn run() {
         .manage(Arc::new(llm::approval::ToolApprovalState::new()))
         .manage(Arc::new(tools::ToolRegistry::new()))
         .manage(Arc::new(skills::SkillRegistry::new()))
+        .manage(Arc::new(tokio::sync::Semaphore::new(skills::SKILL_CONCURRENCY)))
         .manage({
             let audit_sink: Arc<dyn tools::context::AuditSink> = Arc::new(
                 tools::audit::NullAuditSink
@@ -1699,6 +1700,16 @@ pub fn run() {
             let skill_registry = app.state::<Arc<skills::SkillRegistry>>();
             skills::register_builtin_skills(&skill_registry, &registry)
                 .expect("failed to register builtin skills");
+            // Iter 5 #4: register `skill.<id>` tool wrappers AFTER skills + tools
+            // are populated, so the main agent loop can auto-invoke them.
+            let semaphore = app.state::<Arc<tokio::sync::Semaphore>>();
+            skills::register_skill_tools(
+                &app.handle().clone(),
+                &skill_registry,
+                &registry,
+                Arc::clone(&semaphore),
+            )
+            .expect("failed to register skill tool wrappers");
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -42,6 +42,9 @@ pub struct AgentLoopConfig {
     pub timeout_ms: u64,
     /// 整轮中累计追加给模型的 tool 结果总字符数上限（防止上下文爆炸）。
     pub max_tool_result_chars: usize,
+    /// Iter 5 #4: 本轮 agent loop 内 ToolContext.nesting_depth 的赋值。
+    /// 主对话默认 0；skill 子轮次为 1（由 [`crate::skills::runtime::run_skill_with_depth`] 设置）。
+    pub nesting_depth: u8,
 }
 
 impl Default for AgentLoopConfig {
@@ -50,6 +53,7 @@ impl Default for AgentLoopConfig {
             max_tool_calls: 8,
             timeout_ms: 60_000,
             max_tool_result_chars: 8000,
+            nesting_depth: 0,
         }
     }
 }
@@ -142,6 +146,7 @@ pub async fn run_agent_stream(
             let id = id.clone();
             let tc = tc.clone();
             async move {
+                let nesting_depth = config.nesting_depth;
                 tokio::select! {
                     res = tokio::time::timeout(tool_timeout, execute_tool(
                         &app,
@@ -156,6 +161,7 @@ pub async fn run_agent_stream(
                         &tc,
                         &approval_state,
                         &cancel,
+                        nesting_depth,
                     )) => {
                         match res {
                             Ok(tool_result) => tool_result,
@@ -255,6 +261,7 @@ async fn execute_tool(
     tc: &OllamaToolCallRaw,
     approval_state: &Arc<ToolApprovalState>,
     cancel: &CancellationToken,
+    nesting_depth: u8,
 ) -> Result<Value, String> {
     let tool = registry
         .get(&tc.function.name)
@@ -324,11 +331,12 @@ async fn execute_tool(
     tool.validate_input(&tc.function.arguments)
         .map_err(|e| format!("validation failed: {}", e.message))?;
 
-    let ctx = ctx_factory.create_context(
+    let ctx = ctx_factory.create_context_at_depth(
         workspace_root.clone(),
         conversation_id,
         app_cache_dir,
         app_bundle_resource_dir,
+        nesting_depth,
     );
 
     let manifest = tool.manifest().clone();

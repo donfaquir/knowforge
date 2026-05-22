@@ -8,6 +8,7 @@ use crate::depth_decisions;
 use crate::lock_workspace_root;
 use crate::note_privacy;
 use crate::semantic_index;
+use crate::skills::SkillRegistry;
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::{ToolRegistry, ToolScope};
 use crate::vault_config::{self, ActiveProvider, DepthMode};
@@ -357,12 +358,38 @@ fn build_depth_system_instruction(depth: DepthMode) -> String {
     }
 }
 
+/// Iter 5 #4: build the "Available skills" system block. Returns None when no
+/// auto_invocable skills are registered (so we don't add an empty section).
+fn build_skills_system_block(
+    skills: &[(String, String, Option<String>)],
+) -> Option<String> {
+    if skills.is_empty() {
+        return None;
+    }
+    let mut s = String::from(
+        "Available skills (call as tools via `skill.<id>` with a single string `input`):\n",
+    );
+    for (id, name, when) in skills {
+        if let Some(when) = when.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
+            s.push_str(&format!("- skill.{id} ({name}): {when}\n"));
+        } else {
+            s.push_str(&format!("- skill.{id} ({name})\n"));
+        }
+    }
+    s.push_str(
+        "Skills cannot invoke other skills. The skill streams its own output to the user;\n\
+         after `skill.<id>` returns, acknowledge briefly without repeating the skill's content.",
+    );
+    Some(s)
+}
+
 /// 合并 `note_context`、可选 `vault_context` 与对话轮次，并校验角色。
 fn assemble_ollama_messages(
     canonical_root: &Path,
     ai: &vault_config::AiConfig,
     args: &OllamaChatStreamStartArgs,
     embed_cache_bundle: Option<(PathBuf, PathBuf)>,
+    auto_invocable_skills: &[(String, String, Option<String>)],
 ) -> Result<AssembleOutcome, String> {
     let mut out: Vec<LlmChatMessage> = Vec::new();
     let mut reply_context_sources = ReplyContextSources::default();
@@ -585,6 +612,15 @@ fn assemble_ollama_messages(
             content: agent_loop::TOOL_USE_DISCOVERY_HINT.to_string(),
             ..Default::default()
         });
+        // Iter 5 #4: when auto_invocable skills are registered, surface them so
+        // the model can pick `skill.<id>` over recreating the workflow inline.
+        if let Some(block) = build_skills_system_block(auto_invocable_skills) {
+            out.push(LlmChatMessage {
+                role: "system".to_string(),
+                content: block,
+                ..Default::default()
+            });
+        }
     }
 
     for m in &args.messages {
@@ -651,6 +687,7 @@ pub async fn start_ollama_chat_stream(
     registry: State<'_, Arc<ToolRegistry>>,
     ctx_factory: State<'_, Arc<ToolContextFactory>>,
     approval: State<'_, Arc<approval::ToolApprovalState>>,
+    skills: State<'_, Arc<SkillRegistry>>,
     args: OllamaChatStreamStartArgs,
 ) -> Result<OllamaChatStreamStartResponse, String> {
     let root = lock_workspace_root(&workspace)?;
@@ -671,7 +708,19 @@ pub async fn start_ollama_chat_stream(
     let bundle = semantic_index::resolve_bundle_model_dir(&app);
     let embed_paths = Some((cache.clone(), bundle.clone()));
     let tools_enabled = args.tools_enabled;
-    let outcome = assemble_ollama_messages(&root, &ai, &args, embed_paths)?;
+    // Iter 5 #4: snapshot auto_invocable skills so assemble_ollama_messages can
+    // surface them in the chat system prompt.
+    let skills_for_prompt: Vec<(String, String, Option<String>)> = if tools_enabled {
+        skills
+            .list()
+            .into_iter()
+            .filter(|m| m.auto_invocable)
+            .map(|m| (m.id, m.name, m.when_to_use))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let outcome = assemble_ollama_messages(&root, &ai, &args, embed_paths, &skills_for_prompt)?;
     let messages = outcome.messages;
     let resolved_depth = outcome.resolved_depth;
     let reply_context_sources = outcome.reply_context_sources;
@@ -817,4 +866,35 @@ pub fn clear_conversation_approvals(
 ) -> Result<(), String> {
     approval.clear_conversation(&args.conversation_id);
     Ok(())
+}
+
+#[cfg(test)]
+mod skills_block_tests {
+    use super::build_skills_system_block;
+
+    #[test]
+    fn returns_none_when_empty() {
+        assert!(build_skills_system_block(&[]).is_none());
+    }
+
+    #[test]
+    fn includes_id_name_and_when_to_use() {
+        let skills = vec![
+            (
+                "writing_coach".to_string(),
+                "写作教练".to_string(),
+                Some("打磨笔记".to_string()),
+            ),
+            ("review".to_string(), "复盘".to_string(), None),
+        ];
+        let block = build_skills_system_block(&skills).expect("should build");
+        assert!(block.contains("skill.writing_coach"));
+        assert!(block.contains("写作教练"));
+        assert!(block.contains("打磨笔记"));
+        assert!(block.contains("skill.review"));
+        assert!(block.contains("复盘"));
+        // The trailing instruction must be present so the parent LLM does not
+        // re-render the skill's content.
+        assert!(block.contains("Skills cannot invoke other skills"));
+    }
 }

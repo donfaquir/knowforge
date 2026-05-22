@@ -129,6 +129,8 @@ mod tests {
             timeout_secs: 30,
             ui_entry: SkillUiEntry::Standalone,
             tags: vec![],
+            auto_invocable: false,
+            when_to_use: None,
         }
     }
 
