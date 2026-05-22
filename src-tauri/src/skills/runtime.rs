@@ -30,7 +30,8 @@ pub fn skill_conversation_id(skill_id: &str, parent_conversation_id: &str) -> St
 }
 
 /// Build the initial message stack injected into the agent loop for this Skill turn.
-/// Always starts with the rendered system prompt; adds language match + the user input.
+/// Always starts with the rendered system prompt; adds language match, the discover-
+/// before-read hint (Iter 3.5 P0-2), and the user input.
 pub fn build_initial_messages(
     manifest: &SkillManifest,
     workspace_name: &str,
@@ -47,6 +48,11 @@ pub fn build_initial_messages(
         LlmChatMessage {
             role: "system".to_string(),
             content: SKILL_LANGUAGE_MATCH_SYSTEM.to_string(),
+            ..Default::default()
+        },
+        LlmChatMessage {
+            role: "system".to_string(),
+            content: agent_loop::TOOL_USE_DISCOVERY_HINT.to_string(),
             ..Default::default()
         },
         LlmChatMessage {
@@ -164,12 +170,18 @@ mod tests {
     fn builds_messages_with_system_user() {
         let m = sample_manifest(vec!["time.now"]);
         let msgs = build_initial_messages(&m, "vault-x", "/tmp/v", "ask me");
-        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs.len(), 4);
         assert_eq!(msgs[0].role, "system");
         assert!(msgs[0].content.contains("vault-x"));
         assert_eq!(msgs[1].role, "system");
-        assert_eq!(msgs[2].role, "user");
-        assert_eq!(msgs[2].content, "ask me");
+        assert_eq!(msgs[2].role, "system");
+        assert!(
+            msgs[2].content.contains("note.list") && msgs[2].content.contains("vault.search_keyword"),
+            "expected discover-before-read hint at msgs[2], got: {}",
+            msgs[2].content,
+        );
+        assert_eq!(msgs[3].role, "user");
+        assert_eq!(msgs[3].content, "ask me");
     }
 
     #[test]

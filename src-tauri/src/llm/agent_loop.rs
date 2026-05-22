@@ -20,7 +20,18 @@ use super::ollama::{self, OllamaToolCallRaw};
 use super::{LlmChatMessage, LlmToolCall, LlmToolCallFunction};
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::types::{ApprovalPolicy, ToolManifest};
+use crate::tools::types::{ApprovalPolicy, ToolError, ToolManifest};
+
+/// Shared discovery hint injected at the top of any tool-using turn (Iter 3.5 P0-2).
+///
+/// When the user references a file by partial name or uncertain location, the model
+/// must locate the actual `rel_path` via `note.list` or `vault.search_keyword` BEFORE
+/// calling `note.read`. Mirrors the postmortem fix for the "append to subdirectory file"
+/// regression where the model defaulted to assuming files live at the workspace root.
+pub(crate) const TOOL_USE_DISCOVERY_HINT: &str = "TOOL USE: When the user references a file by partial name or unclear location, \
+FIRST call `note.list` or `vault.search_keyword` to locate the actual rel_path, \
+THEN call `note.read`. Never assume a file lives at the workspace root. \
+When a read or write tool returns NotFound, immediately try discovery (list/search) before guessing another path.";
 
 /// Agent Loop 上限配置；任一项达到上限即终止循环并 emit `llm:agent-done`。
 #[allow(dead_code)]
@@ -359,7 +370,21 @@ async fn execute_tool(
     match result {
         crate::tools::types::ToolResult::Ok { data, .. } => Ok(data),
         crate::tools::types::ToolResult::PartialOk { data, .. } => Ok(data),
-        crate::tools::types::ToolResult::Err { error } => Err(format!("{:?}", error.code)),
+        crate::tools::types::ToolResult::Err { error } => Err(format_tool_error_for_llm(&error)),
+    }
+}
+
+/// Build the error string fed back into the agent loop as `role=tool` content.
+///
+/// Includes both the machine-readable code and the human-readable message so the model
+/// can make a recovery decision (e.g. "NotFound: note not found: test_124.md" → call
+/// `note.list` instead of blindly retrying). Iter 3.5 root cause #1.
+fn format_tool_error_for_llm(error: &ToolError) -> String {
+    let msg = error.message.trim();
+    if msg.is_empty() {
+        format!("{:?}", error.code)
+    } else {
+        format!("{:?}: {}", error.code, msg)
     }
 }
 
@@ -460,6 +485,36 @@ fn summarize_tool_input(args: &Value) -> String {
         s.push_str("...");
     }
     s
+}
+
+#[cfg(test)]
+mod error_format_tests {
+    use super::*;
+    use crate::tools::types::ToolErrorCode;
+
+    fn err(code: ToolErrorCode, message: &str) -> ToolError {
+        ToolError {
+            code,
+            message: message.to_string(),
+            retryable: false,
+            cause: None,
+        }
+    }
+
+    #[test]
+    fn includes_message_when_present() {
+        let e = err(ToolErrorCode::NotFound, "note not found: test_124.md");
+        assert_eq!(
+            format_tool_error_for_llm(&e),
+            "NotFound: note not found: test_124.md"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_code_when_message_empty() {
+        let e = err(ToolErrorCode::Internal, "   ");
+        assert_eq!(format_tool_error_for_llm(&e), "Internal");
+    }
 }
 
 #[cfg(test)]

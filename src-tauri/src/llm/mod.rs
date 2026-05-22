@@ -578,6 +578,15 @@ fn assemble_ollama_messages(
         ..Default::default()
     });
 
+    // Iter 3.5 P0-2：开启工具调用时,明确告诉 LLM "先发现后读",避免按训练直觉假设文件在根目录。
+    if args.tools_enabled {
+        out.push(LlmChatMessage {
+            role: "system".to_string(),
+            content: agent_loop::TOOL_USE_DISCOVERY_HINT.to_string(),
+            ..Default::default()
+        });
+    }
+
     for m in &args.messages {
         let role = m.role.trim();
         if role != "user" && role != "assistant" {
