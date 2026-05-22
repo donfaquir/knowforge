@@ -143,3 +143,65 @@
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }
 }
+
+/* Iter 5 #3 后续：斜杠命令自动补全弹层。锚定在 composer-stack 上方。 */
+.ai-chat__composer-stack {
+  position: relative;
+}
+
+.ai-chat__slash-popup {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  z-index: 50;
+}
+
+.ai-chat__slash-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1.35;
+}
+
+.ai-chat__slash-option--active {
+  background: color-mix(in srgb, var(--kf-accent, #6366f1) 14%, transparent);
+}
+
+.ai-chat__slash-option__name {
+  font-family: var(--kf-mono-font, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--kf-accent, #6366f1);
+}
+
+.ai-chat__slash-option__desc {
+  font-size: 11px;
+  opacity: 0.7;
+  /* description 可能很长（skill.description），单行截断 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ai-chat__slash-popup {
+    background: #1f2937;
+    border-color: #374151;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+  .ai-chat__slash-option--active {
+    background: color-mix(in srgb, var(--kf-accent, #6366f1) 24%, transparent);
+  }
+}

@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useAiConversationSession } from "../contexts/AiConversationSessionContext";
 import type { ThoughtFocusContext } from "../types/aiConversation";
@@ -301,6 +301,49 @@ export function AiConversationPanel() {
       .catch(() => {
         /* 拉取失败不阻塞，handleSkillSend 会兜底报错 */
       });
+  }, []);
+
+  /** Iter 5 #3 后续：斜杠命令自动补全。输入以 `/` 开头且仍在打 id 时弹下拉。 */
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+
+  type SlashCandidate = { value: string; label: string; description: string };
+  const slashCandidates = useMemo<SlashCandidate[]>(() => {
+    // 仅当用户还在打 id 段（无空格 body）时给出建议；body 一旦开始就交给 parseSlashCommand。
+    const m = /^\/([a-z0-9_]*)$/i.exec(input);
+    if (!m) return [];
+    const query = m[1].toLowerCase();
+    const items: SlashCandidate[] = [];
+    for (const s of skillsCache) {
+      const idLc = s.id.toLowerCase();
+      const nameLc = s.name.toLowerCase();
+      if (!query || idLc.startsWith(query) || nameLc.includes(query)) {
+        items.push({
+          value: `/${s.id} `,
+          label: `/${s.id}`,
+          description: `${s.name} — ${s.description}`,
+        });
+      }
+    }
+    if (!query || "skills".startsWith(query)) {
+      items.push({
+        value: "/skills",
+        label: "/skills",
+        description: t("aiPanel.skillsListTitle"),
+      });
+    }
+    return items;
+  }, [input, skillsCache, t]);
+
+  const slashOpen = !slashDismissed && slashCandidates.length > 0;
+  const safeSlashIndex = Math.min(slashIndex, Math.max(0, slashCandidates.length - 1));
+
+  const acceptSlashCandidate = useCallback((c: SlashCandidate) => {
+    setInput(c.value);
+    setSlashDismissed(true);
+    setSlashIndex(0);
+    composerRef.current?.focus();
   }, []);
 
   /** P3 审批：按到达顺序串行展示弹窗，避免并行 tool_calls 时 UI 叠加 */
@@ -1125,7 +1168,11 @@ export function AiConversationPanel() {
     }
 
     // Iter 5 #3：斜杠命令分叉。优先于普通聊天路径处理。
-    const slash = parseSlashCommand(trimmed);
+    // 仅当 id 命中已注册 skill 时才走 skill 流；其余 `/...` 输入按普通消息发送（兜底，不报错）。
+    const slash = parseSlashCommand(
+      trimmed,
+      skillsCache.map((s) => s.id),
+    );
     if (slash?.kind === "skills-list") {
       handleSkillsList();
       return;
@@ -1353,10 +1400,34 @@ export function AiConversationPanel() {
     schedulePassiveHighlightDetection,
     handleSkillSend,
     handleSkillsList,
+    skillsCache,
   ]);
 
   const onComposerKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (slashOpen) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSlashIndex((i) => (i + 1) % slashCandidates.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSlashIndex((i) => (i - 1 + slashCandidates.length) % slashCandidates.length);
+          return;
+        }
+        if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+          e.preventDefault();
+          const c = slashCandidates[safeSlashIndex];
+          if (c) acceptSlashCandidate(c);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setSlashDismissed(true);
+          return;
+        }
+      }
       if (e.key !== "Enter" || e.shiftKey) {
         return;
       }
@@ -1366,7 +1437,15 @@ export function AiConversationPanel() {
       e.preventDefault();
       void handleSend();
     },
-    [handleSend, isStreaming, isVaultSearching],
+    [
+      handleSend,
+      isStreaming,
+      isVaultSearching,
+      slashOpen,
+      slashCandidates,
+      safeSlashIndex,
+      acceptSlashCandidate,
+    ],
   );
 
   const copyAssistant = useCallback(async (text: string) => {
@@ -1952,10 +2031,46 @@ export function AiConversationPanel() {
         </label>
         <div className="ai-chat__composer-field">
           <div className="ai-chat__composer-stack">
+            {slashOpen ? (
+              <ul
+                className="ai-chat__slash-popup"
+                role="listbox"
+                aria-label={t("aiPanel.slashPopupLabel")}
+              >
+                {slashCandidates.map((c, i) => {
+                  const active = i === safeSlashIndex;
+                  return (
+                    <li
+                      key={c.value}
+                      role="option"
+                      aria-selected={active}
+                      className={
+                        active
+                          ? "ai-chat__slash-option ai-chat__slash-option--active"
+                          : "ai-chat__slash-option"
+                      }
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        acceptSlashCandidate(c);
+                      }}
+                      onMouseEnter={() => setSlashIndex(i)}
+                    >
+                      <code className="ai-chat__slash-option__name">{c.label}</code>
+                      <span className="ai-chat__slash-option__desc">{c.description}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
             <textarea
+              ref={composerRef}
               className="ai-chat__input"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                setSlashDismissed(false);
+                setSlashIndex(0);
+              }}
               onKeyDown={onComposerKeyDown}
               placeholder={
                 !isTauri()
@@ -1969,6 +2084,8 @@ export function AiConversationPanel() {
               disabled={!isTauri() || !workspaceReady}
               rows={3}
               aria-label={t("aiPanel.messageLabel")}
+              aria-autocomplete="list"
+              aria-expanded={slashOpen}
             />
             <div className="ai-chat__composer-toolbar" {...dragExcludeProps}>
               {!savePopoverMsgId ? (
