@@ -843,6 +843,10 @@ export function AiConversationPanel() {
         setErrorBanner(p.message);
       }),
       // P2 Tool Calling Loop：工具调用开始 → 在末尾 assistant 消息中插入 running 状态项
+      // Iter 5 #4: 当 last 是已 finalize 的 skill 气泡(meta.skillId 存在且 streaming=false),
+      // 而当前事件是父会话发出的(skill 已结束、active 已切回父)时, 不能把父的工具调用
+      // 写到 skill 气泡里 — 需要先生成一个新的父气泡再挂载,否则父对话工具的状态会"嫁接"
+      // 到 skill 气泡上,且后续 tool-call-done 也找不到正确目标。
       listen<{ sessionId: string; toolCallId: string; toolName: string }>(
         "llm:tool-call-start",
         (e) => {
@@ -853,15 +857,31 @@ export function AiConversationPanel() {
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
-            if (last?.role !== "assistant") {
-              return prev;
-            }
-            const existing = last.meta?.toolCalls ?? [];
             const newCall: ToolCallDisplayInfo = {
               toolCallId: p.toolCallId,
               toolName: p.toolName,
               status: "running",
             };
+            // 父会话事件落在已完成的 skill 气泡之后 → 先开新父气泡再挂载
+            const lastIsFinalizedSkill =
+              last?.role === "assistant" && last.meta?.skillId && !last.streaming;
+            if (lastIsFinalizedSkill) {
+              needsParentBubbleAfterSkillRef.current = false;
+              return [
+                ...next,
+                {
+                  id: crypto.randomUUID(),
+                  role: "assistant",
+                  content: "",
+                  streaming: true,
+                  meta: { toolCalls: [newCall] },
+                },
+              ];
+            }
+            if (last?.role !== "assistant") {
+              return prev;
+            }
+            const existing = last.meta?.toolCalls ?? [];
             return [
               ...next.slice(0, -1),
               {
@@ -873,6 +893,9 @@ export function AiConversationPanel() {
         },
       ),
       // P2 Tool Calling Loop：工具调用完成 → 更新对应 toolCallId 的状态为 done/error
+      // Iter 5 #4: 不能再用 last —— 当 skill.<id> 工具的 done 事件抵达时,skill 气泡可能
+      // 已经插在 last 位置,而该 toolCallId 实际记录在更早的父气泡上。改为按 toolCallId
+      // 全消息检索定位目标。
       listen<{ sessionId: string; toolCallId: string; success: boolean }>(
         "llm:tool-call-done",
         (e) => {
@@ -881,21 +904,31 @@ export function AiConversationPanel() {
             return;
           }
           setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role !== "assistant") {
+            let foundIndex = -1;
+            for (let i = prev.length - 1; i >= 0; i -= 1) {
+              const m = prev[i];
+              if (m.role !== "assistant") continue;
+              const tcs = m.meta?.toolCalls;
+              if (tcs && tcs.some((tc) => tc.toolCallId === p.toolCallId)) {
+                foundIndex = i;
+                break;
+              }
+            }
+            if (foundIndex === -1) {
               return prev;
             }
-            const existing = last.meta?.toolCalls ?? [];
-            const updated = existing.map((tc) =>
+            const target = prev[foundIndex];
+            const updatedCalls = (target.meta?.toolCalls ?? []).map((tc) =>
               tc.toolCallId === p.toolCallId
                 ? { ...tc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"] }
                 : tc,
             );
-            return [
-              ...next.slice(0, -1),
-              { ...last, meta: { ...last.meta, toolCalls: updated } },
-            ];
+            const next = [...prev];
+            next[foundIndex] = {
+              ...target,
+              meta: { ...target.meta, toolCalls: updatedCalls },
+            };
+            return next;
           });
         },
       ),
@@ -934,16 +967,31 @@ export function AiConversationPanel() {
         }
         parentSessionRef.current = activeSessionRef.current;
         activeSessionRef.current = p.sessionId;
-        setMessages((prev) => [
-          ...prev,
-          {
+        setMessages((prev) => {
+          const next = [...prev];
+          // Iter 5 #4 修复:在追加 skill 气泡前,把当前流式中的父气泡收尾。
+          // 否则父气泡会一直 streaming=true(后续 agent-done 只 finalize last,
+          // 而 last 已经被 skill 气泡及之后的新父气泡顶掉),计时永远不停。
+          const lastIdx = next.length - 1;
+          const last = next[lastIdx];
+          if (last?.role === "assistant" && last.streaming) {
+            next[lastIdx] = {
+              ...last,
+              streaming: false,
+              meta: last.meta?.timing
+                ? { ...last.meta, timing: { ...last.meta.timing, endMs: Date.now() } }
+                : last.meta,
+            };
+          }
+          next.push({
             id: crypto.randomUUID(),
             role: "assistant",
             content: "",
             streaming: true,
             meta: { skillId: p.skillId, skillName: p.skillName },
-          },
-        ]);
+          });
+          return next;
+        });
       }),
       // P2 Tool Calling Loop：Agent 轮次结束 → 最终化助手消息、清理 streaming 状态
       listen<{ sessionId: string }>("llm:agent-done", (e) => {
