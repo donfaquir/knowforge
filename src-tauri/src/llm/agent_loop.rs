@@ -59,6 +59,11 @@ impl Default for AgentLoopConfig {
 }
 
 /// 启动 Tool Calling Loop。当 LLM 不再返回 tool_calls 时正常结束并 emit `llm:agent-done`。
+///
+/// Returns the **final assistant text** — the content from the iteration that ended without
+/// further tool_calls. Empty string when the loop terminates via error/cancel/limits.
+/// Used by [`crate::skills::skill_tool::SkillAsTool`] to surface the skill's reply as a tool
+/// result summary so the parent LLM can reference it (Iter 5 followup #1A).
 pub async fn run_agent_stream(
     app: AppHandle,
     session_id: String,
@@ -78,18 +83,18 @@ pub async fn run_agent_stream(
     config: AgentLoopConfig,
     conversation_id: String,
     approval_state: Arc<ToolApprovalState>,
-) {
+) -> String {
     let mut messages = initial_messages;
     let mut total_tool_result_chars: usize = 0;
     let mut tool_call_count: u8 = 0;
 
     loop {
         if cancel.is_cancelled() {
-            return;
+            return String::new();
         }
 
         // 1. 流式请求（携带 tools 字段；本轮文字会通过 emit_chunk/emit_done 推给前端）
-        let raw_tool_calls = match ollama::run_chat_stream(
+        let (raw_tool_calls, iter_content) = match ollama::run_chat_stream(
             app.clone(),
             session_id.clone(),
             base_url.clone(),
@@ -103,20 +108,20 @@ pub async fn run_agent_stream(
         )
         .await
         {
-            Ok(tc) => tc,
+            Ok(tup) => tup,
             Err(_) => {
                 // run_chat_stream 内部已 emit_error；此处补一个 agent-done 收尾。
                 emit_agent_done(&app, &session_id);
-                return;
+                return String::new();
             }
         };
 
-        // 2. 无工具调用 → agent 循环完成
+        // 2. 无工具调用 → agent 循环完成；本轮文本即 final answer
         let raw_calls = match raw_tool_calls {
             Some(calls) if !calls.is_empty() => calls,
             _ => {
                 emit_agent_done(&app, &session_id);
-                return;
+                return iter_content;
             }
         };
 
@@ -237,11 +242,11 @@ pub async fn run_agent_stream(
             || total_tool_result_chars >= config.max_tool_result_chars
         {
             emit_agent_done(&app, &session_id);
-            return;
+            return String::new();
         }
 
         if cancel.is_cancelled() {
-            return;
+            return String::new();
         }
         // 继续 loop：下一轮流式请求会带上完整的 messages 历史
     }

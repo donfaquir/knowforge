@@ -88,12 +88,16 @@ pub struct OllamaToolFunctionRaw {
 
 /// `Ok(Some(calls))` 本行携带工具调用；`Ok(None)` 仅含文本/控制信息；
 /// 返回负载中包含 `error` 字段时，函数内部会 `emit_error`，调用方可以允许返回 `Ok(None)` 后继续。
+///
+/// Side effect: appends any emitted text content for this line to `accumulated_content`
+/// so the caller can return the full assistant response (used by skill_tool to surface
+/// the skill's reply back to the parent LLM as a tool result summary).
 fn handle_json_line(
     app: &AppHandle,
     session_id: &str,
     line: &str,
+    accumulated_content: &mut String,
 ) -> Result<(Option<Vec<OllamaToolCallRaw>>, bool), String> {
-    // 返回的布尔表示 `should_stop`（遇到业务错误需提前终止）。
     let parsed: OllamaStreamLine =
         serde_json::from_str(line).map_err(|e| format!("NDJSON parse error: {e}"))?;
 
@@ -105,6 +109,7 @@ fn handle_json_line(
     let mut tool_calls_out: Option<Vec<OllamaToolCallRaw>> = None;
     if let Some(msg) = parsed.message {
         if let Some(content) = msg.content.filter(|c| !c.is_empty()) {
+            accumulated_content.push_str(&content);
             emit_chunk(app, session_id, &content);
         }
         if let Some(tc) = msg.tool_calls.filter(|v| !v.is_empty()) {
@@ -118,8 +123,9 @@ fn handle_json_line(
 /// 流式 chat：经 `emit` 推送增量；`cancel` 触发时尽快结束。
 ///
 /// 返回值语义：
-/// - `Ok(Some(calls))`：本轮流中累计到了 tool_calls，调用方（agent_loop）需执行并接续下一轮。
-/// - `Ok(None)`：仅产出了文本、并已 `emit_done`。
+/// - `Ok((Some(calls), text))`：本轮流中累计到了 tool_calls，调用方（agent_loop）需执行并接续下一轮。
+///   `text` 是本轮模型在 tool_calls 之外同时产出的文本（通常为空字符串）。
+/// - `Ok((None, text))`：仅产出了文本、并已 `emit_done`。`text` 是完整 assistant 回复。
 /// - `Err(msg)`：出现错误、已 `emit_error`。
 pub async fn run_chat_stream(
     app: AppHandle,
@@ -132,7 +138,7 @@ pub async fn run_chat_stream(
     timeout_ms: u64,
     cancel: CancellationToken,
     tools: Option<Vec<serde_json::Value>>,
-) -> Result<Option<Vec<OllamaToolCallRaw>>, String> {
+) -> Result<(Option<Vec<OllamaToolCallRaw>>, String), String> {
     let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
     let client = match http_client(timeout_ms) {
         Ok(c) => c,
@@ -215,6 +221,7 @@ pub async fn run_chat_stream(
     let mut stream = resp.bytes_stream();
     let mut line_buf = String::new();
     let mut accumulated_tool_calls: Vec<OllamaToolCallRaw> = Vec::new();
+    let mut accumulated_content = String::new();
 
     loop {
         tokio::select! {
@@ -251,7 +258,12 @@ pub async fn run_chat_stream(
                             if raw_line.is_empty() {
                                 continue;
                             }
-                            match handle_json_line(&app, &session_id, &raw_line) {
+                            match handle_json_line(
+                                &app,
+                                &session_id,
+                                &raw_line,
+                                &mut accumulated_content,
+                            ) {
                                 Ok((tc_opt, should_stop)) => {
                                     if let Some(mut tc) = tc_opt {
                                         accumulated_tool_calls.append(&mut tc);
@@ -274,7 +286,7 @@ pub async fn run_chat_stream(
 
     let tail = line_buf.trim();
     if !tail.is_empty() {
-        match handle_json_line(&app, &session_id, tail) {
+        match handle_json_line(&app, &session_id, tail, &mut accumulated_content) {
             Ok((tc_opt, should_stop)) => {
                 if let Some(mut tc) = tc_opt {
                     accumulated_tool_calls.append(&mut tc);
@@ -292,9 +304,9 @@ pub async fn run_chat_stream(
 
     let _ = emit_done(&app, &session_id);
     if accumulated_tool_calls.is_empty() {
-        Ok(None)
+        Ok((None, accumulated_content))
     } else {
-        Ok(Some(accumulated_tool_calls))
+        Ok((Some(accumulated_tool_calls), accumulated_content))
     }
 }
 

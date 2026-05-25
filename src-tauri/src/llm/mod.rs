@@ -784,7 +784,8 @@ pub async fn start_ollama_chat_stream(
             let manifests = registry_arc.list_for_llm(ToolScope::Global);
             let tools_json = agent_loop::list_for_llm_to_ollama_tools(&manifests);
 
-            agent_loop::run_agent_stream(
+            // Discard returned summary — only skill_tool needs it (followup #1A).
+            let _ = agent_loop::run_agent_stream(
                 app_h.clone(),
                 sid.clone(),
                 messages,

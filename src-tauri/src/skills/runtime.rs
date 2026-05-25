@@ -83,6 +83,9 @@ pub fn filter_tools_for_skill(registry: &ToolRegistry, manifest: &SkillManifest)
 
 /// Spawn the agent loop for this Skill turn. Returns once the agent loop completes;
 /// `llm:stream-chunk` / `llm:tool-*` / `llm:agent-done` events stream out under `session_id`.
+///
+/// Returns the skill's final assistant text (empty when the run was cancelled / errored /
+/// hit limits). Forwarded to `SkillAsTool` for parent-LLM tool-result summary.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_skill(
     app: AppHandle,
@@ -102,7 +105,7 @@ pub async fn run_skill(
     temperature: f64,
     top_p: Option<f64>,
     cancel: CancellationToken,
-) {
+) -> String {
     // Direct skill invocation from the dedicated `invoke_skill` command always
     // starts at nesting depth 1 (the user, not another skill, triggered it —
     // but downstream tools still see depth=1 to keep behavior identical to
@@ -127,13 +130,15 @@ pub async fn run_skill(
         cancel,
         1,
     )
-    .await;
+    .await
 }
 
 /// Iter 5 #4: same as [`run_skill`] but lets the caller pin the nesting depth
 /// stamped onto every ToolContext spawned inside the skill loop. Used by
 /// SkillAsTool so the depth=1 cap holds even when the parent call originated
 /// from the main agent loop at depth=0.
+///
+/// Returns the skill's final assistant text (forwarded from agent_loop).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_skill_with_depth(
     app: AppHandle,
@@ -154,7 +159,7 @@ pub async fn run_skill_with_depth(
     top_p: Option<f64>,
     cancel: CancellationToken,
     nesting_depth: u8,
-) {
+) -> String {
     let workspace_root_str = workspace_root.to_string_lossy().to_string();
     let messages = build_initial_messages(
         &manifest,
@@ -195,7 +200,7 @@ pub async fn run_skill_with_depth(
         conv_id,
         approval_state,
     )
-    .await;
+    .await
 }
 
 #[cfg(test)]

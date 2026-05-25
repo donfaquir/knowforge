@@ -249,7 +249,7 @@ impl Tool for SkillAsTool {
         let cache = semantic_index::default_model_cache_dir();
         let bundle = semantic_index::resolve_bundle_model_dir(&self.app);
 
-        runtime::run_skill_with_depth(
+        let summary = runtime::run_skill_with_depth(
             self.app.clone(),
             session_id.clone(),
             manifest.clone(),
@@ -274,12 +274,28 @@ impl Tool for SkillAsTool {
         sessions.remove_session(&session_id);
         drop(permit);
 
-        ToolResult::Ok {
-            data: json!({
+        // Iter 5 followup #1A: surface the skill's final assistant text so the parent LLM
+        // can reference its recommendations (e.g. quote a wikilink the skill suggested).
+        // Empty summary (cancel / error / hit limits) falls back to the original ack note —
+        // avoids feeding the parent partial/misleading state.
+        let trimmed = summary.trim();
+        let data = if trimmed.is_empty() {
+            json!({
                 "status": "completed",
                 "skill_id": self.skill_id,
                 "note": "Skill output streamed to user. Acknowledge briefly without repeating its content.",
-            }),
+            })
+        } else {
+            json!({
+                "status": "completed",
+                "skill_id": self.skill_id,
+                "summary": trimmed,
+                "note": "Skill output was streamed to the user separately. The 'summary' field above is the skill's full reply — you may reference its recommendations when continuing, but do not repeat it verbatim.",
+            })
+        };
+
+        ToolResult::Ok {
+            data,
             redacted_count: 0,
             warnings: vec![],
             metrics: ToolMetrics::default(),
