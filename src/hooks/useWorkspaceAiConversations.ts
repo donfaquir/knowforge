@@ -41,20 +41,27 @@ export type ChatMessage = {
     replyContextSources?: ReplyContextSources;
     /** P2 Tool Calling Loop：本轮发生的工具调用（运行时） */
     toolCalls?: ToolCallDisplayInfo[];
-    /** Iter 5 #3：本轮属于 Skill 子轮次。运行时存活，不持久化（PersistedChatMessage 白名单不含此字段）；
-     *  作用：(a) UI 渲染 🧠 badge；(b) 下一次主对话发送前从 chatTurns 过滤掉，兑现"独立子轮次,不污染主对话历史"。 */
+    /** Iter 5 #3：本轮属于 Skill 子轮次。已持久化到 PersistedChatMessage（followups #2）；
+     *  作用：(a) UI 渲染 🧠 badge；(b) 下一次主对话发送前从 chatTurns 过滤掉，兑现"独立子轮次,不污染主对话历史"。
+     *  即使关闭并重新打开 vault，徽章和过滤行为均保持一致。 */
     skillId?: string;
     skillName?: string;
   };
 };
 
 function bodyToMessages(body: ConversationBodyOut): ChatMessage[] {
-  return body.messages.map((m) => ({
-    id: m.id,
-    role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
-    content: m.content,
-    meta: m.replyContextSources ? { replyContextSources: m.replyContextSources } : undefined,
-  }));
+  return body.messages.map((m) => {
+    const meta: ChatMessage["meta"] = {};
+    if (m.replyContextSources) meta.replyContextSources = m.replyContextSources;
+    if (m.skillId) meta.skillId = m.skillId;
+    if (m.skillName) meta.skillName = m.skillName;
+    return {
+      id: m.id,
+      role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
+      content: m.content,
+      meta: Object.keys(meta).length > 0 ? meta : undefined,
+    };
+  });
 }
 
 function toPersistPayload(messages: ChatMessage[]): PersistedChatMessage[] {
@@ -65,6 +72,8 @@ function toPersistPayload(messages: ChatMessage[]): PersistedChatMessage[] {
       role: m.role,
       content: m.content,
       replyContextSources: m.meta?.replyContextSources,
+      skillId: m.meta?.skillId,
+      skillName: m.meta?.skillName,
     }));
 }
 
