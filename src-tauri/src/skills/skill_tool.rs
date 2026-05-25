@@ -231,6 +231,7 @@ impl Tool for SkillAsTool {
                 "conversationId": ctx.conversation_id,
                 "skillId": self.skill_id,
                 "skillName": self.skill_name,
+                "parentToolCallId": ctx.call_id,
             }),
         );
 

@@ -11,8 +11,8 @@ use super::types::ApprovalPolicy;
 pub struct ToolContext {
     pub workspace_root: PathBuf,
     pub conversation_id: String,
-    /// uuid v7
-    pub call_id: String,
+    /// agent_loop 分配的工具调用追踪 ID；默认 None，由 execute_tool / invoke_tool 设置。
+    pub call_id: Option<String>,
     pub user_approval_callback: Arc<dyn ApprovalCallback>,
     pub audit_sink: Arc<dyn AuditSink>,
     pub privacy_filter: Arc<dyn PrivacyFilter>,
@@ -132,7 +132,7 @@ impl ToolContextFactory {
         ToolContext {
             workspace_root,
             conversation_id: conversation_id.to_string(),
-            call_id: uuid::Uuid::now_v7().to_string(),
+            call_id: None,
             user_approval_callback: self.approval_callback.clone(),
             audit_sink: self.audit_sink.clone(),
             privacy_filter: self.privacy_filter.clone(),

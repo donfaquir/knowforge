@@ -132,7 +132,8 @@ pub async fn run_agent_stream(
             .collect();
 
         for (id, tc) in &calls_with_ids {
-            emit_tool_call_start(&app, &session_id, id, &tc.function.name);
+            let input_summary = summarize_tool_input(&tc.function.arguments);
+            emit_tool_call_start(&app, &session_id, id, &tc.function.name, &input_summary);
         }
 
         // 4. 并行执行工具（每个工具有独立超时，支持取消）
@@ -152,7 +153,8 @@ pub async fn run_agent_stream(
             let tc = tc.clone();
             async move {
                 let nesting_depth = config.nesting_depth;
-                tokio::select! {
+                let exec_start = std::time::Instant::now();
+                let result = tokio::select! {
                     res = tokio::time::timeout(tool_timeout, execute_tool(
                         &app,
                         &session_id,
@@ -176,14 +178,23 @@ pub async fn run_agent_stream(
                     _ = cancel.cancelled() => {
                         Err("cancelled".to_string())
                     }
-                }
+                };
+                let duration_ms = exec_start.elapsed().as_millis() as u64;
+                (result, duration_ms)
             }
         }))
         .await;
 
         for (i, (id, _)) in calls_with_ids.iter().enumerate() {
-            let success = results.get(i).map(|r| r.is_ok()).unwrap_or(false);
-            emit_tool_call_done(&app, &session_id, id, success);
+            if let Some((result, duration_ms)) = results.get(i) {
+                let success = result.is_ok();
+                let result_summary = match result {
+                    Ok(val) => truncate_str(&val.to_string(), 200),
+                    Err(e) => truncate_str(e, 200),
+                };
+                let error_message = result.as_ref().err().map(|e| e.as_str());
+                emit_tool_call_done(&app, &session_id, id, success, &result_summary, *duration_ms, error_message);
+            }
         }
 
         // 5. 把含 tool_calls 的 assistant 消息追加到历史
@@ -208,8 +219,8 @@ pub async fn run_agent_stream(
         // 6. 把每个 tool 结果以 role=tool 的消息追加到历史（tool_name 字段对齐 Ollama 协议）
         for (i, (_, tc)) in calls_with_ids.iter().enumerate() {
             let raw_content = match results.get(i) {
-                Some(Ok(val)) => val.to_string(),
-                Some(Err(e)) => format!("error: {}", e),
+                Some((Ok(val), _)) => val.to_string(),
+                Some((Err(e), _)) => format!("error: {}", e),
                 None => "error: no result".to_string(),
             };
             // 在 max_tool_result_chars 预算内截断本条结果，避免上下文爆炸
@@ -336,13 +347,14 @@ async fn execute_tool(
     tool.validate_input(&tc.function.arguments)
         .map_err(|e| format!("validation failed: {}", e.message))?;
 
-    let ctx = ctx_factory.create_context_at_depth(
+    let mut ctx = ctx_factory.create_context_at_depth(
         workspace_root.clone(),
         conversation_id,
         app_cache_dir,
         app_bundle_resource_dir,
         nesting_depth,
     );
+    ctx.call_id = Some(call_id.to_string());
 
     let manifest = tool.manifest().clone();
     let start = std::time::Instant::now();
@@ -369,7 +381,7 @@ async fn execute_tool(
     let entry = crate::tools::context::AuditEntry {
         ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         conversation_id: ctx.conversation_id.clone(),
-        call_id: ctx.call_id.clone(),
+        call_id: ctx.call_id.clone().unwrap_or_default(),
         tool_name: manifest.name.clone(),
         version: manifest.version.clone(),
         input_redacted: crate::tools::audit::redact_value(&tc.function.arguments),
@@ -431,24 +443,28 @@ pub fn list_for_llm_to_ollama_tools(manifests: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-fn emit_tool_call_start(app: &AppHandle, session_id: &str, tool_call_id: &str, tool_name: &str) {
+fn emit_tool_call_start(app: &AppHandle, session_id: &str, tool_call_id: &str, tool_name: &str, input_summary: &str) {
     let _ = app.emit(
         "llm:tool-call-start",
         json!({
             "sessionId": session_id,
             "toolCallId": tool_call_id,
             "toolName": tool_name,
+            "inputSummary": input_summary,
         }),
     );
 }
 
-fn emit_tool_call_done(app: &AppHandle, session_id: &str, tool_call_id: &str, success: bool) {
+fn emit_tool_call_done(app: &AppHandle, session_id: &str, tool_call_id: &str, success: bool, result_summary: &str, duration_ms: u64, error_message: Option<&str>) {
     let _ = app.emit(
         "llm:tool-call-done",
         json!({
             "sessionId": session_id,
             "toolCallId": tool_call_id,
             "success": success,
+            "resultSummary": result_summary,
+            "durationMs": duration_ms,
+            "errorMessage": error_message,
         }),
     );
 }
@@ -458,6 +474,19 @@ fn emit_agent_done(app: &AppHandle, session_id: &str) {
         "llm:agent-done",
         json!({ "sessionId": session_id }),
     );
+}
+
+/// Truncate a string to `max_len` bytes, appending "..." if truncated.
+/// Respects Unicode character boundaries.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s.to_string();
+    }
+    let mut end = max_len;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
 }
 
 /// 把 tool 输入序列化为审批弹窗展示用的字符串,

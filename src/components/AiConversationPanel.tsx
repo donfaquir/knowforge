@@ -298,12 +298,8 @@ export function AiConversationPanel() {
    * parent session here so we can restore activeSessionRef once the skill
    * sub-turn fires `agent-done`. Null when no skill is currently in progress. */
   const parentSessionRef = useRef<string | null>(null);
-  /** Iter 5 #4: when the skill finishes and the parent stream resumes, the next
-   * chunk needs a fresh assistant bubble (not the skill bubble that just
-   * finalized). This flag delays creating the parent placeholder until we
-   * actually receive the first parent chunk — avoids leaving an empty bubble
-   * if the parent has nothing more to say. */
-  const needsParentBubbleAfterSkillRef = useRef(false);
+  /** 映射：skillSessionId → { parentToolCallId } */
+  const skillSessionMapRef = useRef<Map<string, { parentToolCallId: string }>>(new Map());
 
   /** Iter 5 #3：内置 skill manifest 缓存。skill 在后端 setup() 注册一次后不变，挂载时取一次即可。 */
   const [skillsCache, setSkillsCache] = useState<SkillManifestJson[]>([]);
@@ -572,20 +568,36 @@ export function AiConversationPanel() {
         if (p.sessionId !== activeSessionRef.current) {
           return;
         }
+        const skillMapping = skillSessionMapRef.current.get(p.sessionId);
+        if (skillMapping) {
+          // Skill 会话的 chunk → 追加到父气泡的工具调用项的 skillContent
+          setMessages((prev) => {
+            const next = [...prev];
+            for (let i = next.length - 1; i >= 0; i--) {
+              const m = next[i];
+              if (m.role !== "assistant") continue;
+              const tcs = m.meta?.toolCalls;
+              if (!tcs) continue;
+              const tcIdx = tcs.findIndex((tc) => tc.toolCallId === skillMapping.parentToolCallId);
+              if (tcIdx === -1) continue;
+              const updatedCalls = [...tcs];
+              updatedCalls[tcIdx] = {
+                ...updatedCalls[tcIdx],
+                skillContent: (updatedCalls[tcIdx].skillContent || "") + p.delta,
+              };
+              next[i] = {
+                ...m,
+                meta: { ...m.meta, toolCalls: updatedCalls },
+              };
+              break;
+            }
+            return next;
+          });
+          return;
+        }
+        // 主会话的 chunk → 追加到气泡 content（原有逻辑）
         setMessages((prev) => {
           let next = [...prev];
-          // Iter 5 #4: parent stream resumed after a skill sub-turn finished.
-          // Spawn a fresh parent assistant bubble for this chunk instead of
-          // appending into the just-finalized skill bubble.
-          if (needsParentBubbleAfterSkillRef.current) {
-            needsParentBubbleAfterSkillRef.current = false;
-            next.push({
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: "",
-              streaming: true,
-            });
-          }
           const last = next[next.length - 1];
           if (last?.role === "assistant" && last.streaming) {
             const isFirstToken = last.content === "";
@@ -782,15 +794,13 @@ export function AiConversationPanel() {
         if (p.sessionId !== activeSessionRef.current) {
           return;
         }
-        // Iter 5 #4: error during a skill sub-turn — finalize skill bubble and
-        // bubble up to the parent. The parent agent_loop will receive the
-        // SkillAsTool tool error in its tool_result and decide whether to
-        // recover. Don't tear down top-level streaming UI here.
+        // Iter 5 #4: error during a skill sub-turn — restore parent session.
+        // The parent agent_loop will receive the SkillAsTool tool error in its
+        // tool_result and decide whether to recover. Don't tear down top-level streaming UI here.
         if (parentSessionRef.current) {
           const parent = parentSessionRef.current;
           parentSessionRef.current = null;
           activeSessionRef.current = parent;
-          needsParentBubbleAfterSkillRef.current = true;
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
@@ -843,44 +853,52 @@ export function AiConversationPanel() {
         setErrorBanner(p.message);
       }),
       // P2 Tool Calling Loop：工具调用开始 → 在末尾 assistant 消息中插入 running 状态项
-      // Iter 5 #4: 当 last 是已 finalize 的 skill 气泡(meta.skillId 存在且 streaming=false),
-      // 而当前事件是父会话发出的(skill 已结束、active 已切回父)时, 不能把父的工具调用
-      // 写到 skill 气泡里 — 需要先生成一个新的父气泡再挂载,否则父对话工具的状态会"嫁接"
-      // 到 skill 气泡上,且后续 tool-call-done 也找不到正确目标。
-      listen<{ sessionId: string; toolCallId: string; toolName: string }>(
+      // Skill 内部的工具调用路由到对应 toolCall 的 skillToolCalls
+      listen<{ sessionId: string; toolCallId: string; toolName: string; inputSummary?: string }>(
         "llm:tool-call-start",
         (e) => {
           const p = e.payload;
           if (p.sessionId !== activeSessionRef.current) {
             return;
           }
+          const skillMapping = skillSessionMapRef.current.get(p.sessionId);
+          const newCall: ToolCallDisplayInfo = {
+            toolCallId: p.toolCallId,
+            toolName: p.toolName,
+            status: "running",
+            inputSummary: p.inputSummary,
+          };
+          if (skillMapping) {
+            // Skill 内部的工具调用 → 添加到对应的 skillToolCalls
+            setMessages((prev) => {
+              const next = [...prev];
+              for (let i = next.length - 1; i >= 0; i--) {
+                const m = next[i];
+                if (m.role !== "assistant") continue;
+                const tcs = m.meta?.toolCalls;
+                if (!tcs) continue;
+                const tcIdx = tcs.findIndex((tc) => tc.toolCallId === skillMapping.parentToolCallId);
+                if (tcIdx === -1) continue;
+                const updatedCalls = [...tcs];
+                updatedCalls[tcIdx] = {
+                  ...updatedCalls[tcIdx],
+                  skillToolCalls: [...(updatedCalls[tcIdx].skillToolCalls || []), newCall],
+                };
+                next[i] = {
+                  ...m,
+                  meta: { ...m.meta, toolCalls: updatedCalls },
+                };
+                break;
+              }
+              return next;
+            });
+            return;
+          }
+          // 主会话的工具调用 → 添加到末尾 assistant 气泡的 toolCalls
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
-            const newCall: ToolCallDisplayInfo = {
-              toolCallId: p.toolCallId,
-              toolName: p.toolName,
-              status: "running",
-            };
-            // 父会话事件落在已完成的 skill 气泡之后 → 先开新父气泡再挂载
-            const lastIsFinalizedSkill =
-              last?.role === "assistant" && last.meta?.skillId && !last.streaming;
-            if (lastIsFinalizedSkill) {
-              needsParentBubbleAfterSkillRef.current = false;
-              return [
-                ...next,
-                {
-                  id: crypto.randomUUID(),
-                  role: "assistant",
-                  content: "",
-                  streaming: true,
-                  meta: { toolCalls: [newCall] },
-                },
-              ];
-            }
-            if (last?.role !== "assistant") {
-              return prev;
-            }
+            if (last?.role !== "assistant") return prev;
             const existing = last.meta?.toolCalls ?? [];
             return [
               ...next.slice(0, -1),
@@ -893,23 +911,47 @@ export function AiConversationPanel() {
         },
       ),
       // P2 Tool Calling Loop：工具调用完成 → 更新对应 toolCallId 的状态为 done/error
-      // Iter 5 #4: 不能再用 last —— 当 skill.<id> 工具的 done 事件抵达时,skill 气泡可能
-      // 已经插在 last 位置,而该 toolCallId 实际记录在更早的父气泡上。改为按 toolCallId
-      // 全消息检索定位目标。
-      listen<{ sessionId: string; toolCallId: string; success: boolean }>(
+      // 按新字段更新 resultSummary / durationMs / errorMessage，处理 Skill 内部工具调用
+      listen<{ sessionId: string; toolCallId: string; success: boolean; resultSummary?: string; durationMs?: number; errorMessage?: string }>(
         "llm:tool-call-done",
         (e) => {
           const p = e.payload;
           if (p.sessionId !== activeSessionRef.current) {
             return;
           }
+          const skillMapping = skillSessionMapRef.current.get(p.sessionId);
+          if (skillMapping) {
+            // Skill 内部的工具完成 → 更新对应的 skillToolCalls
+            setMessages((prev) => {
+              const next = [...prev];
+              for (let i = next.length - 1; i >= 0; i--) {
+                const m = next[i];
+                if (m.role !== "assistant") continue;
+                const tcs = m.meta?.toolCalls;
+                if (!tcs) continue;
+                const tcIdx = tcs.findIndex((tc) => tc.toolCallId === skillMapping.parentToolCallId);
+                if (tcIdx === -1) continue;
+                const updatedCalls = [...tcs];
+                const skillTcs = (updatedCalls[tcIdx].skillToolCalls || []).map((stc) =>
+                  stc.toolCallId === p.toolCallId
+                    ? { ...stc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage }
+                    : stc,
+                );
+                updatedCalls[tcIdx] = { ...updatedCalls[tcIdx], skillToolCalls: skillTcs };
+                next[i] = { ...m, meta: { ...m.meta, toolCalls: updatedCalls } };
+                break;
+              }
+              return next;
+            });
+            return;
+          }
+          // 主会话的工具完成 → 从后向前搜索 toolCallId
           setMessages((prev) => {
             let foundIndex = -1;
             for (let i = prev.length - 1; i >= 0; i -= 1) {
               const m = prev[i];
               if (m.role !== "assistant") continue;
-              const tcs = m.meta?.toolCalls;
-              if (tcs && tcs.some((tc) => tc.toolCallId === p.toolCallId)) {
+              if (m.meta?.toolCalls?.some((tc) => tc.toolCallId === p.toolCallId)) {
                 foundIndex = i;
                 break;
               }
@@ -920,7 +962,7 @@ export function AiConversationPanel() {
             const target = prev[foundIndex];
             const updatedCalls = (target.meta?.toolCalls ?? []).map((tc) =>
               tc.toolCallId === p.toolCallId
-                ? { ...tc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"] }
+                ? { ...tc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage }
                 : tc,
             );
             const next = [...prev];
@@ -947,77 +989,95 @@ export function AiConversationPanel() {
         });
       }),
       // Iter 5 #4: 主对话自动调用 `skill.<id>` 时，后端发出 skill-spawn,
-      // 携带新 sessionId — 这里保存父 session、切换 active、追加 skill 占位气泡。
-      // 后续 stream-chunk / tool-call-* / agent-done 都按新 sessionId 路由,
-      // 直到 skill 子轮次结束（agent-done listener 中再切回父）。
+      // 携带新 sessionId — 这里保存父 session、切换 active、更新父气泡中对应工具调用项的 skill 字段。
+      // 不再创建新气泡，Skill 内容内嵌到父气泡的工具调用项中。
       listen<{
         sessionId: string;
         conversationId: string;
         skillId: string;
         skillName: string;
+        parentToolCallId: string;
       }>("llm:skill-spawn", (e) => {
         const p = e.payload;
         if (!activeSessionRef.current || activeSessionRef.current === p.sessionId) {
           return;
         }
-        // 只处理本会话发出的 skill-spawn — 后端 conversationId 是 ToolContext.conversation_id,
-        // 与前端 conversationId 一致。
         if (conversationId && p.conversationId !== conversationId) {
           return;
         }
         parentSessionRef.current = activeSessionRef.current;
         activeSessionRef.current = p.sessionId;
+        // 记录 skill session → parent tool call 的映射
+        skillSessionMapRef.current.set(p.sessionId, {
+          parentToolCallId: p.parentToolCallId,
+        });
+        // 更新父气泡中对应工具调用项的 skill 字段（不创建新气泡）
         setMessages((prev) => {
           const next = [...prev];
-          // Iter 5 #4 修复:在追加 skill 气泡前,把当前流式中的父气泡收尾。
-          // 否则父气泡会一直 streaming=true(后续 agent-done 只 finalize last,
-          // 而 last 已经被 skill 气泡及之后的新父气泡顶掉),计时永远不停。
-          const lastIdx = next.length - 1;
-          const last = next[lastIdx];
-          if (last?.role === "assistant" && last.streaming) {
-            next[lastIdx] = {
-              ...last,
-              streaming: false,
-              meta: last.meta?.timing
-                ? { ...last.meta, timing: { ...last.meta.timing, endMs: Date.now() } }
-                : last.meta,
+          for (let i = next.length - 1; i >= 0; i--) {
+            const m = next[i];
+            if (m.role !== "assistant") continue;
+            const tcs = m.meta?.toolCalls;
+            if (!tcs) continue;
+            const tcIdx = tcs.findIndex((tc) => tc.toolCallId === p.parentToolCallId);
+            if (tcIdx === -1) continue;
+            const updatedCalls = [...tcs];
+            updatedCalls[tcIdx] = {
+              ...updatedCalls[tcIdx],
+              skillId: p.skillId,
+              skillName: p.skillName,
+              skillContent: "",
+              skillToolCalls: [],
+              skillStreaming: true,
             };
+            next[i] = {
+              ...m,
+              meta: { ...m.meta, toolCalls: updatedCalls },
+            };
+            break;
           }
-          next.push({
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: "",
-            streaming: true,
-            meta: { skillId: p.skillId, skillName: p.skillName },
-          });
           return next;
         });
       }),
       // P2 Tool Calling Loop：Agent 轮次结束 → 最终化助手消息、清理 streaming 状态
       listen<{ sessionId: string }>("llm:agent-done", (e) => {
-        if (e.payload.sessionId !== activeSessionRef.current) {
-          return;
-        }
-        // Iter 5 #4: if this is a skill sub-turn finishing under a parent
-        // session, finalize the skill bubble but DO NOT clear top-level
-        // streaming state — the parent run is still in flight waiting for
-        // the SkillAsTool tool result. Restore activeSessionRef to the
-        // parent so subsequent parent events route correctly.
-        if (parentSessionRef.current) {
-          const parent = parentSessionRef.current;
+        const sid = e.payload.sessionId;
+        const skillMapping = skillSessionMapRef.current.get(sid);
+
+        // Skill 子轮次完成：优先处理，不依赖 activeSessionRef
+        if (skillMapping) {
+          skillSessionMapRef.current.delete(sid);
+          if (activeSessionRef.current === sid) {
+            activeSessionRef.current = parentSessionRef.current;
+          }
           parentSessionRef.current = null;
-          activeSessionRef.current = parent;
-          needsParentBubbleAfterSkillRef.current = true;
+
           setMessages((prev) => {
             const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant" && last.streaming) {
-              next[next.length - 1] = { ...last, streaming: false };
+            for (let i = next.length - 1; i >= 0; i--) {
+              const m = next[i];
+              if (m.role !== "assistant") continue;
+              const tcs = m.meta?.toolCalls;
+              if (!tcs) continue;
+              const tcIdx = tcs.findIndex((tc) => tc.toolCallId === skillMapping.parentToolCallId);
+              if (tcIdx === -1) continue;
+
+              const updatedCalls = [...tcs];
+              updatedCalls[tcIdx] = { ...updatedCalls[tcIdx], skillStreaming: false };
+              next[i] = { ...m, meta: { ...m.meta, toolCalls: updatedCalls } };
+              break;
             }
             return next;
           });
           return;
         }
+
+        // 其余情况：保持原有顶层 agent-done 逻辑
+        if (sid !== activeSessionRef.current) {
+          return;
+        }
+
+        // 顶层 agent 循环完成
         markNeedPersist();
         activeSessionRef.current = null;
         isAgentModeRef.current = false;
@@ -1089,7 +1149,7 @@ export function AiConversationPanel() {
     markNeedPersist();
     activeSessionRef.current = null;
     parentSessionRef.current = null;
-    needsParentBubbleAfterSkillRef.current = false;
+    skillSessionMapRef.current.clear();
     isAgentModeRef.current = false;
     setIsStreaming(false);
     setErrorBanner(null);
@@ -1982,41 +2042,92 @@ export function AiConversationPanel() {
               {...dragExcludeProps}
             >
               <div className={`ai-chat__bubble ai-chat__bubble--${m.role}`}>
-                {m.meta?.skillId ? (
-                  <span className="ai-chat__skill-badge" aria-label={t("aiPanel.skillBadge", { name: m.meta.skillName || m.meta.skillId })}>
-                    🧠 {m.meta.skillName || m.meta.skillId}
-                  </span>
-                ) : null}
                 {m.role === "assistant" ? (
                   <>
                     {m.meta?.toolCalls && m.meta.toolCalls.length > 0 ? (
-                      <ul className="ai-chat__tool-calls" aria-label={t("aiPanel.toolCallsAria")}>
+                      <div className="ai-chat__tool-calls">
                         {m.meta.toolCalls.map((tc) => (
-                          <li
-                            key={tc.toolCallId}
-                            className={`ai-chat__tool-call ai-chat__tool-call--${tc.status}`}
-                          >
-                            <span
-                              className="ai-chat__tool-call__icon"
-                              aria-hidden={true}
-                            >
-                              {tc.status === "running"
-                                ? "⋯"
-                                : tc.status === "done"
-                                  ? "✓"
-                                  : "✗"}
-                            </span>
-                            <span className="ai-chat__tool-call__name">{tc.toolName}</span>
-                            <span className="ai-chat__tool-call__status">
-                              {tc.status === "running"
-                                ? t("aiPanel.toolCallRunning")
-                                : tc.status === "done"
-                                  ? t("aiPanel.toolCallDone")
-                                  : t("aiPanel.toolCallError")}
-                            </span>
-                          </li>
+                          <details key={tc.toolCallId} className="ai-chat__tool-call-details">
+                            <summary className={`ai-chat__tool-call ai-chat__tool-call--${tc.status}`}>
+                              <span className="ai-chat__tool-call__icon" aria-hidden={true}>
+                                {tc.status === "running" ? "⋯" : tc.status === "done" ? "✓" : "✗"}
+                              </span>
+                              <span className="ai-chat__tool-call__name">{tc.toolName}</span>
+                              {tc.durationMs != null && (
+                                <span className="ai-chat__tool-call__duration">
+                                  {(tc.durationMs / 1000).toFixed(1)}s
+                                </span>
+                              )}
+                            </summary>
+                            <div className="ai-chat__tool-call__detail">
+                              {tc.inputSummary && (
+                                <div className="ai-chat__tool-call__input">
+                                  <span className="ai-chat__tool-call__label">输入</span>
+                                  <code>{tc.inputSummary}</code>
+                                </div>
+                              )}
+                              {tc.skillId && (
+                                <div className="ai-chat__skill-inline">
+                                  <span className="ai-chat__skill-badge">🧠 {tc.skillName}</span>
+                                  <AiAssistantMarkdown content={tc.skillContent || ""} />
+                                  {tc.skillStreaming && <span className="ai-chat__typing">▌</span>}
+                                  {tc.skillToolCalls && tc.skillToolCalls.length > 0 && (
+                                    <div className="ai-chat__tool-calls">
+                                      {tc.skillToolCalls.map((stc) => (
+                                        <details key={stc.toolCallId} className="ai-chat__tool-call-details">
+                                          <summary className={`ai-chat__tool-call ai-chat__tool-call--${stc.status}`}>
+                                            <span className="ai-chat__tool-call__icon" aria-hidden={true}>
+                                              {stc.status === "running" ? "⋯" : stc.status === "done" ? "✓" : "✗"}
+                                            </span>
+                                            <span className="ai-chat__tool-call__name">{stc.toolName}</span>
+                                            {stc.durationMs != null && (
+                                              <span className="ai-chat__tool-call__duration">
+                                                {(stc.durationMs / 1000).toFixed(1)}s
+                                              </span>
+                                            )}
+                                          </summary>
+                                          <div className="ai-chat__tool-call__detail">
+                                            {stc.inputSummary && (
+                                              <div className="ai-chat__tool-call__input">
+                                                <span className="ai-chat__tool-call__label">输入</span>
+                                                <code>{stc.inputSummary}</code>
+                                              </div>
+                                            )}
+                                            {stc.resultSummary && (
+                                              <div className="ai-chat__tool-call__result">
+                                                <span className="ai-chat__tool-call__label">结果</span>
+                                                <code>{stc.resultSummary}</code>
+                                              </div>
+                                            )}
+                                            {stc.errorMessage && (
+                                              <div className="ai-chat__tool-call__error">
+                                                <span className="ai-chat__tool-call__label">错误</span>
+                                                <code>{stc.errorMessage}</code>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </details>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {tc.resultSummary && (
+                                <div className="ai-chat__tool-call__result">
+                                  <span className="ai-chat__tool-call__label">结果</span>
+                                  <code>{tc.resultSummary}</code>
+                                </div>
+                              )}
+                              {tc.errorMessage && (
+                                <div className="ai-chat__tool-call__error">
+                                  <span className="ai-chat__tool-call__label">错误</span>
+                                  <code>{tc.errorMessage}</code>
+                                </div>
+                              )}
+                            </div>
+                          </details>
                         ))}
-                      </ul>
+                      </div>
                     ) : null}
                     <AiAssistantMarkdown content={m.content} />
                     {!m.streaming && m.meta?.thoughtCitation && !m.meta.thoughtCitation.privateOmitted ? (

@@ -23,6 +23,17 @@ export type ToolCallDisplayInfo = {
   toolCallId: string;
   toolName: string;
   status: "running" | "done" | "error";
+  /** 可解释性字段 */
+  inputSummary?: string;
+  resultSummary?: string;
+  durationMs?: number;
+  errorMessage?: string;
+  /** Skill 内嵌内容（仅 skill.* 工具有值） */
+  skillId?: string;
+  skillName?: string;
+  skillContent?: string;
+  skillToolCalls?: ToolCallDisplayInfo[];
+  skillStreaming?: boolean;
 };
 
 export type ChatMessage = {
