@@ -131,6 +131,14 @@ impl ToolRegistry {
         self.tools.get(name).map(|r| r.value().clone())
     }
 
+    /// 注销一个工具（用于动态移除 Skill Tool 包装）
+    pub fn unregister(&self, name: &str) -> Result<(), String> {
+        self.tools
+            .remove(name)
+            .ok_or_else(|| format!("tool '{}' not found", name))?;
+        Ok(())
+    }
+
     pub fn list(&self, filter: ListFilter) -> Vec<ToolManifest> {
         self.tools
             .iter()

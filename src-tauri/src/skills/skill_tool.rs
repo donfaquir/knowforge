@@ -315,6 +315,29 @@ fn tool_err(code: ToolErrorCode, message: &str) -> ToolResult {
     }
 }
 
+/// 注册单个 Skill 的 Tool 包装到 ToolRegistry（用于动态添加）
+pub fn register_single_skill_tool(
+    app: &AppHandle,
+    manifest: &SkillManifest,
+    tool_registry: &ToolRegistry,
+    semaphore: Arc<Semaphore>,
+) -> Result<(), String> {
+    if !manifest.auto_invocable {
+        return Ok(());
+    }
+    let tool = SkillAsTool::new(manifest, app.clone(), semaphore);
+    tool_registry.register(tool).map_err(|e| format!("{}", e))
+}
+
+/// 注销单个 Skill 的 Tool 包装
+pub fn unregister_skill_tool(
+    skill_id: &str,
+    tool_registry: &ToolRegistry,
+) -> Result<(), String> {
+    let tool_name = format!("skill.{}", skill_id);
+    tool_registry.unregister(&tool_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

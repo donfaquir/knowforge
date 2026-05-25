@@ -23,15 +23,253 @@ use super::types::SkillManifest;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SkillListItem {
+    #[serde(flatten)]
+    pub manifest: SkillManifest,
+    pub is_builtin: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListSkillsResponse {
-    pub skills: Vec<SkillManifest>,
+    pub skills: Vec<SkillListItem>,
 }
 
 #[tauri::command]
 pub fn list_skills(registry: State<'_, Arc<SkillRegistry>>) -> ListSkillsResponse {
     ListSkillsResponse {
-        skills: registry.list(),
+        skills: registry
+            .list()
+            .into_iter()
+            .map(|m| {
+                let is_builtin = registry.is_builtin(&m.id);
+                SkillListItem {
+                    manifest: m,
+                    is_builtin,
+                }
+            })
+            .collect(),
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSkillArgs {
+    pub manifest: SkillManifest,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSkillArgs {
+    pub manifest: SkillManifest,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSkillArgs {
+    pub skill_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillLoadFailure {
+    pub file: String,
+    pub error: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloadSkillsResponse {
+    pub loaded: Vec<String>,
+    pub failed: Vec<SkillLoadFailure>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolSummary {
+    pub name: String,
+    pub description: String,
+}
+
+#[tauri::command]
+pub async fn create_custom_skill(
+    app: AppHandle,
+    workspace: State<'_, WorkspaceState>,
+    skills: State<'_, Arc<SkillRegistry>>,
+    tools: State<'_, Arc<ToolRegistry>>,
+    semaphore: State<'_, Arc<tokio::sync::Semaphore>>,
+    args: CreateSkillArgs,
+) -> Result<(), String> {
+    let manifest = args.manifest;
+
+    let root = workspace
+        .root
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "no workspace open".to_string())?;
+
+    let skills_dir = root.join(".knowforge").join("skills");
+    std::fs::create_dir_all(&skills_dir).map_err(|e| format!("create dir: {}", e))?;
+
+    skills
+        .register(manifest.clone(), &tools)
+        .map_err(|e| format!("{}", e))?;
+
+    let file_path = skills_dir.join(format!("{}.md", manifest.id));
+    let content = crate::skills::loader::serialize_skill_markdown(&manifest);
+    std::fs::write(&file_path, content).map_err(|e| format!("write file: {}", e))?;
+
+    crate::skills::skill_tool::register_single_skill_tool(
+        &app,
+        &manifest,
+        &tools,
+        Arc::clone(&semaphore),
+    )?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_custom_skill(
+    app: AppHandle,
+    workspace: State<'_, WorkspaceState>,
+    skills: State<'_, Arc<SkillRegistry>>,
+    tools: State<'_, Arc<ToolRegistry>>,
+    semaphore: State<'_, Arc<tokio::sync::Semaphore>>,
+    args: UpdateSkillArgs,
+) -> Result<(), String> {
+    let manifest = args.manifest;
+
+    let root = workspace
+        .root
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "no workspace open".to_string())?;
+
+    let _ = crate::skills::skill_tool::unregister_skill_tool(&manifest.id, &tools);
+
+    skills
+        .update(manifest.clone(), &tools)
+        .map_err(|e| format!("{}", e))?;
+
+    let skills_dir = root.join(".knowforge").join("skills");
+    let file_path = skills_dir.join(format!("{}.md", manifest.id));
+    let content = crate::skills::loader::serialize_skill_markdown(&manifest);
+    std::fs::write(&file_path, content).map_err(|e| format!("write file: {}", e))?;
+
+    crate::skills::skill_tool::register_single_skill_tool(
+        &app,
+        &manifest,
+        &tools,
+        Arc::clone(&semaphore),
+    )?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_custom_skill(
+    workspace: State<'_, WorkspaceState>,
+    skills: State<'_, Arc<SkillRegistry>>,
+    tools: State<'_, Arc<ToolRegistry>>,
+    args: DeleteSkillArgs,
+) -> Result<(), String> {
+    let _ = crate::skills::skill_tool::unregister_skill_tool(&args.skill_id, &tools);
+
+    skills
+        .unregister(&args.skill_id)
+        .map_err(|e| format!("{}", e))?;
+
+    let root = workspace
+        .root
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "no workspace open".to_string())?;
+    let file_path = root
+        .join(".knowforge")
+        .join("skills")
+        .join(format!("{}.md", args.skill_id));
+    if file_path.exists() {
+        std::fs::remove_file(&file_path).map_err(|e| format!("delete file: {}", e))?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn reload_custom_skills(
+    app: AppHandle,
+    workspace: State<'_, WorkspaceState>,
+    skills: State<'_, Arc<SkillRegistry>>,
+    tools: State<'_, Arc<ToolRegistry>>,
+    semaphore: State<'_, Arc<tokio::sync::Semaphore>>,
+) -> Result<ReloadSkillsResponse, String> {
+    let root = workspace
+        .root
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "no workspace open".to_string())?;
+
+    let current_skills = skills.list();
+    for skill in &current_skills {
+        if !skills.is_builtin(&skill.id) {
+            let _ = crate::skills::skill_tool::unregister_skill_tool(&skill.id, &tools);
+            let _ = skills.unregister(&skill.id);
+        }
+    }
+
+    let skills_dir = root.join(".knowforge").join("skills");
+    let results = crate::skills::load_custom_skills(&skills_dir, &skills, &tools);
+
+    let mut loaded = vec![];
+    let mut failed = vec![];
+
+    for r in results {
+        match r {
+            crate::skills::SkillLoadResult::Loaded(id) => {
+                if let Some(manifest) = skills.get(&id) {
+                    let _ = crate::skills::skill_tool::register_single_skill_tool(
+                        &app,
+                        &manifest,
+                        &tools,
+                        Arc::clone(&semaphore),
+                    );
+                }
+                loaded.push(id);
+            }
+            crate::skills::SkillLoadResult::Failed { file, error } => {
+                failed.push(SkillLoadFailure { file, error });
+            }
+        }
+    }
+
+    Ok(ReloadSkillsResponse { loaded, failed })
+}
+
+#[tauri::command]
+pub fn list_available_tools(
+    registry: State<'_, Arc<ToolRegistry>>,
+) -> Vec<ToolSummary> {
+    registry
+        .list_for_llm(crate::tools::registry::ToolScope::Global)
+        .into_iter()
+        .filter_map(|v| {
+            let name = v.get("name")?.as_str()?.to_string();
+            let description = v
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("")
+                .to_string();
+            if name.starts_with("skill.") {
+                return None;
+            }
+            Some(ToolSummary { name, description })
+        })
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]

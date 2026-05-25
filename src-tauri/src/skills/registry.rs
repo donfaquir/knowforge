@@ -1,5 +1,6 @@
 use dashmap::DashMap;
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use crate::tools::registry::ToolRegistry;
 
@@ -12,6 +13,8 @@ pub enum SkillRegistryError {
     EmptyAllowedTools(String),
     UnknownTool { skill_id: String, tool: String },
     InvalidVersion(String),
+    BuiltinReadonly(String),
+    NotFound(String),
 }
 
 impl std::fmt::Display for SkillRegistryError {
@@ -24,6 +27,10 @@ impl std::fmt::Display for SkillRegistryError {
                 write!(f, "skill '{skill_id}' references unknown tool '{tool}'")
             }
             Self::InvalidVersion(id) => write!(f, "skill '{id}' has invalid semver version"),
+            Self::BuiltinReadonly(id) => {
+                write!(f, "skill '{id}' is built-in and cannot be modified or removed")
+            }
+            Self::NotFound(id) => write!(f, "skill '{id}' not found"),
         }
     }
 }
@@ -48,13 +55,57 @@ fn is_valid_skill_id(id: &str) -> bool {
 
 pub struct SkillRegistry {
     skills: DashMap<String, Arc<SkillManifest>>,
+    builtin_ids: Mutex<HashSet<String>>,
 }
 
 impl SkillRegistry {
     pub fn new() -> Self {
         Self {
             skills: DashMap::new(),
+            builtin_ids: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// 注册内置 Skill（标记为不可删改）
+    pub fn register_builtin(
+        &self,
+        manifest: SkillManifest,
+        tools: &ToolRegistry,
+    ) -> Result<(), SkillRegistryError> {
+        self.builtin_ids
+            .lock()
+            .unwrap()
+            .insert(manifest.id.clone());
+        self.register(manifest, tools)
+    }
+
+    /// 注销 Skill（仅允许自定义 Skill）
+    pub fn unregister(&self, id: &str) -> Result<(), SkillRegistryError> {
+        if self.builtin_ids.lock().unwrap().contains(id) {
+            return Err(SkillRegistryError::BuiltinReadonly(id.to_string()));
+        }
+        self.skills
+            .remove(id)
+            .ok_or_else(|| SkillRegistryError::NotFound(id.to_string()))?;
+        Ok(())
+    }
+
+    /// 更新 Skill（仅允许自定义 Skill，先注销再注册）
+    pub fn update(
+        &self,
+        manifest: SkillManifest,
+        tools: &ToolRegistry,
+    ) -> Result<(), SkillRegistryError> {
+        if self.builtin_ids.lock().unwrap().contains(&manifest.id) {
+            return Err(SkillRegistryError::BuiltinReadonly(manifest.id.clone()));
+        }
+        self.skills.remove(&manifest.id); // 允许同 ID 更新
+        self.register(manifest, tools)
+    }
+
+    /// 检查是否为内置 Skill
+    pub fn is_builtin(&self, id: &str) -> bool {
+        self.builtin_ids.lock().unwrap().contains(id)
     }
 
     /// Register a skill manifest. Validates id format, semver, non-empty allowed_tools,

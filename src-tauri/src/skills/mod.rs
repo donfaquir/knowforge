@@ -4,6 +4,7 @@
 //! sub-turn with its own system prompt, tool whitelist, and limits.
 
 pub mod commands;
+pub mod loader;
 pub mod registry;
 pub mod runtime;
 pub mod skill_tool;
@@ -94,9 +95,52 @@ pub fn register_builtin_skills(
     skills: &SkillRegistry,
     tools: &ToolRegistry,
 ) -> Result<(), SkillRegistryError> {
-    skills.register(writing_coach_manifest(), tools)?;
-    skills.register(challenge_review_manifest(), tools)?;
+    skills.register_builtin(writing_coach_manifest(), tools)?;
+    skills.register_builtin(challenge_review_manifest(), tools)?;
     Ok(())
+}
+
+/// 自定义 Skill 加载结果
+pub enum SkillLoadResult {
+    /// 成功加载的 Skill ID
+    Loaded(String),
+    /// 加载失败
+    Failed { file: String, error: String },
+}
+
+/// 从工作区 `.knowforge/skills/` 加载自定义 Skill
+pub fn load_custom_skills(
+    skills_dir: &std::path::Path,
+    skill_registry: &SkillRegistry,
+    tool_registry: &ToolRegistry,
+) -> Vec<SkillLoadResult> {
+    if !skills_dir.exists() {
+        return vec![];
+    }
+
+    let file_results = loader::load_skills_from_dir(skills_dir);
+    let mut outcomes = vec![];
+
+    for (filename, result) in file_results {
+        match result {
+            Ok(manifest) => {
+                let id = manifest.id.clone();
+                match skill_registry.register(manifest, tool_registry) {
+                    Ok(()) => outcomes.push(SkillLoadResult::Loaded(id)),
+                    Err(e) => outcomes.push(SkillLoadResult::Failed {
+                        file: filename,
+                        error: format!("skill '{}': {}", id, e),
+                    }),
+                }
+            }
+            Err(e) => outcomes.push(SkillLoadResult::Failed {
+                file: filename,
+                error: e.to_string(),
+            }),
+        }
+    }
+
+    outcomes
 }
 
 /// Iter 5 #4: register a `skill.<id>` tool wrapper for every auto_invocable

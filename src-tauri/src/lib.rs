@@ -231,6 +231,10 @@ fn lock_workspace_root(state: &tauri::State<'_, WorkspaceState>) -> Result<PathB
 async fn open_workspace(
     root: String,
     state: tauri::State<'_, WorkspaceState>,
+    skill_registry: tauri::State<'_, Arc<skills::SkillRegistry>>,
+    tool_registry: tauri::State<'_, Arc<tools::ToolRegistry>>,
+    semaphore: tauri::State<'_, Arc<tokio::sync::Semaphore>>,
+    app_handle: AppHandle,
 ) -> Result<Vec<TreeNode>, String> {
     {
         {
@@ -276,6 +280,47 @@ async fn open_workspace(
         }
     };
     *guard = Some(canonical_root.clone());
+    drop(guard);
+
+    // 加载工作区下的自定义 Skills（setup 阶段 workspace root 尚未设置，必须放到此处）
+    {
+        let skills_dir = canonical_root.join(".knowforge").join("skills");
+        if skills_dir.is_dir() {
+            // 切换工作区场景：先清除已注册的旧自定义 Skill
+            let current = skill_registry.list();
+            for skill in &current {
+                if !skill_registry.is_builtin(&skill.id) {
+                    let _ = crate::skills::skill_tool::unregister_skill_tool(
+                        &skill.id,
+                        &tool_registry,
+                    );
+                    let _ = skill_registry.unregister(&skill.id);
+                }
+            }
+
+            // 加载新工作区中的自定义 Skills
+            let results =
+                crate::skills::load_custom_skills(&skills_dir, &skill_registry, &tool_registry);
+            for r in &results {
+                match r {
+                    crate::skills::SkillLoadResult::Loaded(id) => {
+                        if let Some(manifest) = skill_registry.get(id) {
+                            let _ = crate::skills::skill_tool::register_single_skill_tool(
+                                &app_handle,
+                                &manifest,
+                                &tool_registry,
+                                Arc::clone(&semaphore),
+                            );
+                        }
+                    }
+                    crate::skills::SkillLoadResult::Failed { file, error } => {
+                        eprintln!("[skills] failed to load '{}': {}", file, error);
+                    }
+                }
+            }
+        }
+    }
+
     let reconcile_root = canonical_root.clone();
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(e) = thought_reconcile::reconcile_thought_rel_paths_blocking(&reconcile_root) {
@@ -1691,7 +1736,12 @@ pub fn run() {
             tools::commands::list_tools,
             tools::commands::invoke_tool,
             skills::commands::list_skills,
-            skills::commands::invoke_skill
+            skills::commands::invoke_skill,
+            skills::commands::create_custom_skill,
+            skills::commands::update_custom_skill,
+            skills::commands::delete_custom_skill,
+            skills::commands::reload_custom_skills,
+            skills::commands::list_available_tools
         ])
         .setup(|app| {
             use tauri::Manager;
@@ -1700,6 +1750,7 @@ pub fn run() {
             let skill_registry = app.state::<Arc<skills::SkillRegistry>>();
             skills::register_builtin_skills(&skill_registry, &registry)
                 .expect("failed to register builtin skills");
+            // 自定义 Skill 在 open_workspace 命令中加载（setup 阶段 workspace root 尚未设置）
             // Iter 5 #4: register `skill.<id>` tool wrappers AFTER skills + tools
             // are populated, so the main agent loop can auto-invoke them.
             let semaphore = app.state::<Arc<tokio::sync::Semaphore>>();
