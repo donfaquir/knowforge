@@ -11,11 +11,8 @@ pub async fn list_tools(
     scope: Option<String>,
     registry: State<'_, Arc<ToolRegistry>>,
 ) -> Result<Vec<Value>, String> {
-    let scope = match scope.as_deref() {
-        Some(s) if s.starts_with("conv:") => ToolScope::Conversation(s[5..].to_string()),
-        _ => ToolScope::Global,
-    };
-    Ok(registry.list_for_llm(scope))
+    let _ = scope;
+    Ok(registry.list_for_llm(ToolScope::Global))
 }
 
 #[tauri::command]

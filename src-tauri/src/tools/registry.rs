@@ -2,7 +2,7 @@ use dashmap::DashMap;
 use serde_json::Value;
 use std::sync::Arc;
 
-use super::types::{Effect, Risk, Tool, ToolManifest};
+use super::types::{Effect, Tool};
 
 // ─── RegistryError ─────────────────────────────────────────────────────────────
 
@@ -28,19 +28,10 @@ impl std::fmt::Display for RegistryError {
 
 impl std::error::Error for RegistryError {}
 
-// ─── ListFilter ────────────────────────────────────────────────────────────────
-
-pub struct ListFilter {
-    pub effects: Option<Vec<Effect>>,
-    pub risk: Option<Vec<Risk>>,
-    pub tags: Option<Vec<String>>,
-}
-
 // ─── ToolScope ─────────────────────────────────────────────────────────────────
 
 pub enum ToolScope {
     Global,
-    Conversation(String),
 }
 
 // ─── name regex ────────────────────────────────────────────────────────────────
@@ -137,32 +128,6 @@ impl ToolRegistry {
             .remove(name)
             .ok_or_else(|| format!("tool '{}' not found", name))?;
         Ok(())
-    }
-
-    pub fn list(&self, filter: ListFilter) -> Vec<ToolManifest> {
-        self.tools
-            .iter()
-            .filter(|entry| {
-                let m = entry.value().manifest();
-                if let Some(ref effects) = filter.effects {
-                    if !effects.iter().any(|e| m.effects.contains(e)) {
-                        return false;
-                    }
-                }
-                if let Some(ref risks) = filter.risk {
-                    if !risks.contains(&m.risk) {
-                        return false;
-                    }
-                }
-                if let Some(ref tags) = filter.tags {
-                    if !tags.iter().any(|t| m.tags.contains(t)) {
-                        return false;
-                    }
-                }
-                true
-            })
-            .map(|entry| entry.value().manifest().clone())
-            .collect()
     }
 
     /// 精简 manifest，只含 name/description/input_schema/examples，用于 LLM tool 目录

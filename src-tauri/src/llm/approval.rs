@@ -25,12 +25,6 @@ pub struct ApprovalPendingGuard {
     approval_id: String,
 }
 
-impl ApprovalPendingGuard {
-    pub fn approval_id(&self) -> &str {
-        &self.approval_id
-    }
-}
-
 impl Drop for ApprovalPendingGuard {
     fn drop(&mut self) {
         self.state.discard_pending(&self.approval_id);

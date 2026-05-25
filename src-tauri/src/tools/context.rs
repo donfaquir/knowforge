@@ -4,8 +4,6 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::types::ApprovalPolicy;
-
 // ─── ToolContext ───────────────────────────────────────────────────────────────
 
 pub struct ToolContext {
@@ -13,7 +11,6 @@ pub struct ToolContext {
     pub conversation_id: String,
     /// agent_loop 分配的工具调用追踪 ID；默认 None，由 execute_tool / invoke_tool 设置。
     pub call_id: Option<String>,
-    pub user_approval_callback: Arc<dyn ApprovalCallback>,
     pub audit_sink: Arc<dyn AuditSink>,
     pub privacy_filter: Arc<dyn PrivacyFilter>,
     /// Tauri app cache directory（用于语义搜索模型缓存路径）
@@ -36,37 +33,7 @@ pub trait AuditSink: Send + Sync {
 // ─── PrivacyFilter trait ───────────────────────────────────────────────────────
 
 pub trait PrivacyFilter: Send + Sync {
-    fn filter_note_content(&self, content: &str) -> (String, u32);
     fn is_private_path(&self, rel_path: &str, workspace_root: &Path) -> bool;
-}
-
-// ─── ApprovalCallback trait ────────────────────────────────────────────────────
-
-#[async_trait]
-pub trait ApprovalCallback: Send + Sync {
-    async fn request_approval(
-        &self,
-        tool_name: &str,
-        policy: &ApprovalPolicy,
-        input_summary: &str,
-    ) -> bool;
-}
-
-// ─── AutoApprovalCallback ──────────────────────────────────────────────────────
-// v1.0 默认实现：Auto/ConfirmOncePerSession/ConfirmEach 均通过；Forbidden 拒绝
-
-pub struct AutoApprovalCallback;
-
-#[async_trait]
-impl ApprovalCallback for AutoApprovalCallback {
-    async fn request_approval(
-        &self,
-        _tool_name: &str,
-        policy: &ApprovalPolicy,
-        _input_summary: &str,
-    ) -> bool {
-        *policy != ApprovalPolicy::Forbidden
-    }
 }
 
 // ─── AuditEntry ────────────────────────────────────────────────────────────────
@@ -90,7 +57,6 @@ pub struct AuditEntry {
 pub struct ToolContextFactory {
     pub audit_sink: Arc<dyn AuditSink>,
     pub privacy_filter: Arc<dyn PrivacyFilter>,
-    pub approval_callback: Arc<dyn ApprovalCallback>,
 }
 
 impl ToolContextFactory {
@@ -98,7 +64,6 @@ impl ToolContextFactory {
         Self {
             audit_sink,
             privacy_filter,
-            approval_callback: Arc::new(AutoApprovalCallback),
         }
     }
 
@@ -133,7 +98,6 @@ impl ToolContextFactory {
             workspace_root,
             conversation_id: conversation_id.to_string(),
             call_id: None,
-            user_approval_callback: self.approval_callback.clone(),
             audit_sink: self.audit_sink.clone(),
             privacy_filter: self.privacy_filter.clone(),
             app_cache_dir,

@@ -117,11 +117,7 @@ mod mod_tests {
             result.err()
         );
         // 确认工具总数：1(time.now) + 8(P1) + 3(P3 写操作) = 12
-        let tools = registry.list(crate::tools::registry::ListFilter {
-            effects: None,
-            risk: None,
-            tags: None,
-        });
+        let tools = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
         assert_eq!(tools.len(), 12, "expected 12 registered tools, got {}", tools.len());
     }
 }

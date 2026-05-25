@@ -283,8 +283,15 @@ async fn execute_tool(
         .get(&tc.function.name)
         .ok_or_else(|| format!("tool not found: {}", tc.function.name))?;
 
-    // 审批门控：根据 manifest 的 default_approval 决定是否需要用户确认。
-    let policy = tool.manifest().default_approval.clone();
+    // 审批门控：Tool 自主审批 与 manifest 策略取并集（任一方要求即触发审批）
+    let tool_requires = tool.requires_approval(&tc.function.arguments);
+    let manifest_policy = tool.manifest().default_approval.clone();
+    let policy = if tool_requires && manifest_policy == ApprovalPolicy::Auto {
+        // Tool 动态升级：manifest 为 Auto 但 Tool 要求审批 → 升级为 ConfirmEach
+        ApprovalPolicy::ConfirmEach
+    } else {
+        manifest_policy
+    };
     match &policy {
         ApprovalPolicy::Auto => { /* 直接放行 */ }
         ApprovalPolicy::Forbidden => {

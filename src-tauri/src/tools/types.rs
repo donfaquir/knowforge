@@ -161,4 +161,11 @@ pub trait Tool: Send + Sync {
     fn validate_input(&self, input: &Value) -> Result<(), ToolError> {
         crate::tools::validation::validate(&self.manifest().input_schema, input)
     }
+
+    /// Tool 根据具体输入动态判断是否需要用户审批。
+    /// 返回 true 表示此次调用需要审批确认（即使 manifest 声明为 Auto）。
+    /// 默认实现返回 false（遵循 manifest 策略）。
+    fn requires_approval(&self, _input: &Value) -> bool {
+        false
+    }
 }
