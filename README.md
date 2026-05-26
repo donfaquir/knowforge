@@ -94,6 +94,16 @@ npm run tauri dev
 | `npm run tauri build` | 打包桌面安装包 / 可分发产物 |
 | `cd src-tauri && cargo test` | Rust 单元与集成测试 |
 
+### macOS 安全提示
+
+如果从 GitHub 下载安装后，macOS 提示应用"已损坏，无法打开"，这是因为应用尚未进行 Apple 公证（notarization）。请在终端执行以下命令解除限制：
+
+```bash
+xattr -cr /Applications/Knowforge.app
+```
+
+然后重新打开应用即可。
+
 ### 仓库结构（节选）
 
 ```
@@ -205,6 +215,16 @@ npm run tauri dev
 | `npm run tauri dev` | Tauri development mode |
 | `npm run tauri build` | Package the desktop app |
 | `cd src-tauri && cargo test` | Rust tests |
+
+### macOS Security Notice
+
+If macOS shows "app is damaged and can't be opened" after downloading from GitHub, this is because the app has not been notarized by Apple yet. Run the following command in Terminal to bypass:
+
+```bash
+xattr -cr /Applications/Knowforge.app
+```
+
+Then reopen the app.
 
 ### Repository layout (partial)
 
