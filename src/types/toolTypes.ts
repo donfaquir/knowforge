@@ -100,3 +100,17 @@ export type ToolResultJson = ToolResultOk | ToolResultPartialOk | ToolResultErr;
 
 // ToolScope（用于 list_tools 的 scope 参数）
 export type ToolScope = "global" | `conv:${string}`;
+
+// 后端在执行非 Auto 策略的工具前 emit `llm:tool-approval-request`，
+// 前端弹窗展示后通过 `respond_tool_approval` 回送 Allow/Deny。
+export interface ApprovalRequest {
+  sessionId: string;
+  conversationId: string;
+  approvalId: string;
+  toolCallId: string;
+  toolName: string;
+  policy: ApprovalPolicy;
+  inputSummary: string;
+  risk: Risk;
+  effects: Effect[];
+}

@@ -42,6 +42,8 @@ export type AiConfigForUi = {
   request: AiRequest;
   parameters: AiParameters;
   privacy: AiPrivacy;
+  /** Iter 5 #4: 主对话工具调用总开关(含内置 skills 暴露)。旧 vault 缺该字段时后端默认 true。 */
+  toolsEnabled: boolean;
 };
 
 export type SemanticConfigForUi = {
@@ -93,6 +95,7 @@ export type AiConfigSavePatch = {
   privacy: {
     allowPrivateContentInLocalLlm: boolean;
   };
+  toolsEnabled: boolean;
 };
 
 export type SemanticConfigSavePatch = {

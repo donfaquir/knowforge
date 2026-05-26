@@ -245,6 +245,14 @@ pub struct AiConfig {
     pub parameters: AiParameters,
     #[serde(default)]
     pub privacy: AiPrivacy,
+    /// Iter 5 #4: 主对话工具调用总开关。默认 true,使内置 skills (`skill.<id>`) 与
+    /// 其它工具对主 LLM 可见。旧 vault 缺该字段时通过 disk partial 显式默认 true。
+    #[serde(default = "default_tools_enabled")]
+    pub tools_enabled: bool,
+}
+
+fn default_tools_enabled() -> bool {
+    true
 }
 
 impl Default for AiConfig {
@@ -263,6 +271,7 @@ impl Default for AiConfig {
             },
             parameters: AiParameters::default(),
             privacy: AiPrivacy::default(),
+            tools_enabled: true,
         }
     }
 }
@@ -509,6 +518,7 @@ struct AiDiskPartial {
     request: Option<AiRequestPartial>,
     parameters: Option<AiParametersPartial>,
     privacy: Option<AiPrivacyPartial>,
+    tools_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -569,6 +579,7 @@ pub struct AiConfigPatch {
     pub request: Option<AiRequestPatch>,
     pub parameters: Option<AiParametersPatch>,
     pub privacy: Option<AiPrivacyPatch>,
+    pub tools_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -704,6 +715,7 @@ pub struct AiConfigForUi {
     pub request: AiRequest,
     pub parameters: AiParameters,
     pub privacy: AiPrivacy,
+    pub tools_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -835,6 +847,9 @@ fn merge_ai_from_disk_partial(mut cfg: AiConfig, partial: AiDiskPartial) -> AiCo
             cfg.privacy.allow_private_content_in_local_llm = v;
         }
     }
+    if let Some(v) = partial.tools_enabled {
+        cfg.tools_enabled = v;
+    }
     normalize_ai(&mut cfg);
     cfg
 }
@@ -907,6 +922,7 @@ fn to_ai_for_ui(ai: AiConfig) -> AiConfigForUi {
         request: ai.request,
         parameters: ai.parameters,
         privacy: ai.privacy,
+        tools_enabled: ai.tools_enabled,
     }
 }
 
@@ -1187,6 +1203,9 @@ fn apply_ai_patch(cfg: &mut AiConfig, patch: AiConfigPatch) {
         if let Some(v) = p.allow_private_content_in_local_llm {
             cfg.privacy.allow_private_content_in_local_llm = v;
         }
+    }
+    if let Some(v) = patch.tools_enabled {
+        cfg.tools_enabled = v;
     }
 }
 

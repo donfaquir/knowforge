@@ -69,9 +69,7 @@
 
 /* P2 Tool Calling Loop：工具调用状态行。在 assistant 气泡顶部、文本之前。 */
 .ai-chat__tool-calls {
-  list-style: none;
   margin: 0 0 8px 0;
-  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -102,6 +100,82 @@
 .ai-chat__tool-call__status {
   opacity: 0.65;
 }
+
+/* ---- Tool call collapsible details ---- */
+.ai-chat__tool-call-details {
+  margin-bottom: 4px;
+}
+
+.ai-chat__tool-call-details > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.ai-chat__tool-call-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ai-chat__tool-call__duration {
+  margin-left: auto;
+  color: var(--text-muted, #888);
+  font-size: 11px;
+}
+
+.ai-chat__tool-call__detail {
+  margin: 4px 0 8px 18px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.03));
+  font-size: 12px;
+}
+
+.ai-chat__tool-call__input,
+.ai-chat__tool-call__result,
+.ai-chat__tool-call__error {
+  margin-bottom: 4px;
+}
+
+.ai-chat__tool-call__label {
+  display: inline-block;
+  min-width: 32px;
+  font-weight: 600;
+  color: var(--text-muted, #888);
+  margin-right: 6px;
+  font-size: 11px;
+}
+
+.ai-chat__tool-call__input code,
+.ai-chat__tool-call__result code,
+.ai-chat__tool-call__error code {
+  font-size: 11px;
+  word-break: break-all;
+  color: var(--text-primary, #333);
+}
+
+.ai-chat__tool-call__error code {
+  color: #dc2626;
+}
+
+/* ---- Skill inline embed ---- */
+.ai-chat__skill-inline {
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-left: 3px solid rgba(59, 130, 246, 0.5);
+  border-radius: 0 6px 6px 0;
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.02));
+}
+
+.ai-chat__skill-inline .ai-chat__skill-badge {
+  display: inline-block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-accent, #3b82f6);
+}
+
+.ai-chat__skill-inline .ai-chat__tool-calls {
+  margin-top: 6px;
+}
 .ai-chat__tool-call--running {
   border-color: color-mix(in srgb, var(--kf-accent, #3b82f6) 60%, transparent);
 }
@@ -122,7 +196,86 @@
 .ai-chat__tool-call--error .ai-chat__tool-call__icon {
   color: #dc2626;
 }
+
+/* Iter 5 #3：Skill 子轮次徽章（在 user/assistant 气泡顶部，渲染在 tool-calls 之前） */
+.ai-chat__skill-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--kf-accent, #6b5db7) 12%, transparent);
+  color: var(--kf-accent, #6b5db7);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  margin-bottom: 6px;
+  align-self: flex-start;
+}
+
 @keyframes ai-chat-tool-call-pulse {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }
+}
+
+/* Iter 5 #3 后续：斜杠命令自动补全弹层。锚定在 composer-stack 上方。 */
+.ai-chat__composer-stack {
+  position: relative;
+}
+
+.ai-chat__slash-popup {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  z-index: 50;
+}
+
+.ai-chat__slash-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1.35;
+}
+
+.ai-chat__slash-option--active {
+  background: color-mix(in srgb, var(--kf-accent, #6366f1) 14%, transparent);
+}
+
+.ai-chat__slash-option__name {
+  font-family: var(--kf-mono-font, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--kf-accent, #6366f1);
+}
+
+.ai-chat__slash-option__desc {
+  font-size: 11px;
+  opacity: 0.7;
+  /* description 可能很长（skill.description），单行截断 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ai-chat__slash-popup {
+    background: #1f2937;
+    border-color: #374151;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+  .ai-chat__slash-option--active {
+    background: color-mix(in srgb, var(--kf-accent, #6366f1) 24%, transparent);
+  }
 }

@@ -11,11 +11,8 @@ pub async fn list_tools(
     scope: Option<String>,
     registry: State<'_, Arc<ToolRegistry>>,
 ) -> Result<Vec<Value>, String> {
-    let scope = match scope.as_deref() {
-        Some(s) if s.starts_with("conv:") => ToolScope::Conversation(s[5..].to_string()),
-        _ => ToolScope::Global,
-    };
-    Ok(registry.list_for_llm(scope))
+    let _ = scope;
+    Ok(registry.list_for_llm(ToolScope::Global))
 }
 
 #[tauri::command]
@@ -39,12 +36,13 @@ pub async fn invoke_tool(
     let cache_dir = crate::semantic_index::default_model_cache_dir();
     let bundle_dir = crate::semantic_index::resolve_bundle_model_dir(&app);
 
-    let ctx = ctx_factory.create_context(
+    let mut ctx = ctx_factory.create_context(
         workspace_root,
         conversation_id.as_deref().unwrap_or(""),
         Some(cache_dir),
         Some(bundle_dir),
     );
+    ctx.call_id = Some(uuid::Uuid::now_v7().to_string());
 
     let manifest = tool.manifest().clone();
     let start = std::time::Instant::now();
@@ -73,7 +71,7 @@ pub async fn invoke_tool(
     let entry = crate::tools::context::AuditEntry {
         ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         conversation_id: ctx.conversation_id.clone(),
-        call_id: ctx.call_id.clone(),
+        call_id: ctx.call_id.clone().unwrap_or_default(),
         tool_name: manifest.name.clone(),
         version: manifest.version.clone(),
         input_redacted: crate::tools::audit::redact_value(&input),

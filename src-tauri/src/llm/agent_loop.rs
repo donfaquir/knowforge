@@ -15,11 +15,23 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
+use super::approval::ToolApprovalState;
 use super::ollama::{self, OllamaToolCallRaw};
 use super::{LlmChatMessage, LlmToolCall, LlmToolCallFunction};
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::types::ToolManifest;
+use crate::tools::types::{ApprovalPolicy, ToolError, ToolManifest};
+
+/// Shared discovery hint injected at the top of any tool-using turn (Iter 3.5 P0-2).
+///
+/// When the user references a file by partial name or uncertain location, the model
+/// must locate the actual `rel_path` via `note.list` or `vault.search_keyword` BEFORE
+/// calling `note.read`. Mirrors the postmortem fix for the "append to subdirectory file"
+/// regression where the model defaulted to assuming files live at the workspace root.
+pub(crate) const TOOL_USE_DISCOVERY_HINT: &str = "TOOL USE: When the user references a file by partial name or unclear location, \
+FIRST call `note.list` or `vault.search_keyword` to locate the actual rel_path, \
+THEN call `note.read`. Never assume a file lives at the workspace root. \
+When a read or write tool returns NotFound, immediately try discovery (list/search) before guessing another path.";
 
 /// Agent Loop 上限配置；任一项达到上限即终止循环并 emit `llm:agent-done`。
 #[allow(dead_code)]
@@ -30,6 +42,9 @@ pub struct AgentLoopConfig {
     pub timeout_ms: u64,
     /// 整轮中累计追加给模型的 tool 结果总字符数上限（防止上下文爆炸）。
     pub max_tool_result_chars: usize,
+    /// Iter 5 #4: 本轮 agent loop 内 ToolContext.nesting_depth 的赋值。
+    /// 主对话默认 0；skill 子轮次为 1（由 [`crate::skills::runtime::run_skill_with_depth`] 设置）。
+    pub nesting_depth: u8,
 }
 
 impl Default for AgentLoopConfig {
@@ -38,11 +53,17 @@ impl Default for AgentLoopConfig {
             max_tool_calls: 8,
             timeout_ms: 60_000,
             max_tool_result_chars: 8000,
+            nesting_depth: 0,
         }
     }
 }
 
 /// 启动 Tool Calling Loop。当 LLM 不再返回 tool_calls 时正常结束并 emit `llm:agent-done`。
+///
+/// Returns the **final assistant text** — the content from the iteration that ended without
+/// further tool_calls. Empty string when the loop terminates via error/cancel/limits.
+/// Used by [`crate::skills::skill_tool::SkillAsTool`] to surface the skill's reply as a tool
+/// result summary so the parent LLM can reference it (Iter 5 followup #1A).
 pub async fn run_agent_stream(
     app: AppHandle,
     session_id: String,
@@ -61,18 +82,19 @@ pub async fn run_agent_stream(
     cancel: CancellationToken,
     config: AgentLoopConfig,
     conversation_id: String,
-) {
+    approval_state: Arc<ToolApprovalState>,
+) -> String {
     let mut messages = initial_messages;
     let mut total_tool_result_chars: usize = 0;
     let mut tool_call_count: u8 = 0;
 
     loop {
         if cancel.is_cancelled() {
-            return;
+            return String::new();
         }
 
         // 1. 流式请求（携带 tools 字段；本轮文字会通过 emit_chunk/emit_done 推给前端）
-        let raw_tool_calls = match ollama::run_chat_stream(
+        let (raw_tool_calls, iter_content) = match ollama::run_chat_stream(
             app.clone(),
             session_id.clone(),
             base_url.clone(),
@@ -86,20 +108,20 @@ pub async fn run_agent_stream(
         )
         .await
         {
-            Ok(tc) => tc,
+            Ok(tup) => tup,
             Err(_) => {
                 // run_chat_stream 内部已 emit_error；此处补一个 agent-done 收尾。
                 emit_agent_done(&app, &session_id);
-                return;
+                return String::new();
             }
         };
 
-        // 2. 无工具调用 → agent 循环完成
+        // 2. 无工具调用 → agent 循环完成；本轮文本即 final answer
         let raw_calls = match raw_tool_calls {
             Some(calls) if !calls.is_empty() => calls,
             _ => {
                 emit_agent_done(&app, &session_id);
-                return;
+                return iter_content;
             }
         };
 
@@ -110,7 +132,8 @@ pub async fn run_agent_stream(
             .collect();
 
         for (id, tc) in &calls_with_ids {
-            emit_tool_call_start(&app, &session_id, id, &tc.function.name);
+            let input_summary = summarize_tool_input(&tc.function.arguments);
+            emit_tool_call_start(&app, &session_id, id, &tc.function.name, &input_summary);
         }
 
         // 4. 并行执行工具（每个工具有独立超时，支持取消）
@@ -123,11 +146,18 @@ pub async fn run_agent_stream(
             let app_cache_dir = app_cache_dir.clone();
             let app_bundle_resource_dir = app_bundle_resource_dir.clone();
             let conversation_id = conversation_id.clone();
+            let approval_state = approval_state.clone();
+            let app = app.clone();
+            let session_id = session_id.clone();
             let id = id.clone();
             let tc = tc.clone();
             async move {
-                tokio::select! {
+                let nesting_depth = config.nesting_depth;
+                let exec_start = std::time::Instant::now();
+                let result = tokio::select! {
                     res = tokio::time::timeout(tool_timeout, execute_tool(
+                        &app,
+                        &session_id,
                         &registry,
                         &ctx_factory,
                         &workspace_root,
@@ -136,6 +166,9 @@ pub async fn run_agent_stream(
                         &conversation_id,
                         &id,
                         &tc,
+                        &approval_state,
+                        &cancel,
+                        nesting_depth,
                     )) => {
                         match res {
                             Ok(tool_result) => tool_result,
@@ -145,14 +178,23 @@ pub async fn run_agent_stream(
                     _ = cancel.cancelled() => {
                         Err("cancelled".to_string())
                     }
-                }
+                };
+                let duration_ms = exec_start.elapsed().as_millis() as u64;
+                (result, duration_ms)
             }
         }))
         .await;
 
         for (i, (id, _)) in calls_with_ids.iter().enumerate() {
-            let success = results.get(i).map(|r| r.is_ok()).unwrap_or(false);
-            emit_tool_call_done(&app, &session_id, id, success);
+            if let Some((result, duration_ms)) = results.get(i) {
+                let success = result.is_ok();
+                let result_summary = match result {
+                    Ok(val) => truncate_str(&val.to_string(), 200),
+                    Err(e) => truncate_str(e, 200),
+                };
+                let error_message = result.as_ref().err().map(|e| e.as_str());
+                emit_tool_call_done(&app, &session_id, id, success, &result_summary, *duration_ms, error_message);
+            }
         }
 
         // 5. 把含 tool_calls 的 assistant 消息追加到历史
@@ -177,8 +219,8 @@ pub async fn run_agent_stream(
         // 6. 把每个 tool 结果以 role=tool 的消息追加到历史（tool_name 字段对齐 Ollama 协议）
         for (i, (_, tc)) in calls_with_ids.iter().enumerate() {
             let raw_content = match results.get(i) {
-                Some(Ok(val)) => val.to_string(),
-                Some(Err(e)) => format!("error: {}", e),
+                Some((Ok(val), _)) => val.to_string(),
+                Some((Err(e), _)) => format!("error: {}", e),
                 None => "error: no result".to_string(),
             };
             // 在 max_tool_result_chars 预算内截断本条结果，避免上下文爆炸
@@ -211,39 +253,115 @@ pub async fn run_agent_stream(
             || total_tool_result_chars >= config.max_tool_result_chars
         {
             emit_agent_done(&app, &session_id);
-            return;
+            return String::new();
         }
 
         if cancel.is_cancelled() {
-            return;
+            return String::new();
         }
         // 继续 loop：下一轮流式请求会带上完整的 messages 历史
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_tool(
+    app: &AppHandle,
+    session_id: &str,
     registry: &Arc<ToolRegistry>,
     ctx_factory: &Arc<ToolContextFactory>,
     workspace_root: &PathBuf,
     app_cache_dir: Option<PathBuf>,
     app_bundle_resource_dir: Option<PathBuf>,
     conversation_id: &str,
-    _call_id: &str,
+    call_id: &str,
     tc: &OllamaToolCallRaw,
+    approval_state: &Arc<ToolApprovalState>,
+    cancel: &CancellationToken,
+    nesting_depth: u8,
 ) -> Result<Value, String> {
     let tool = registry
         .get(&tc.function.name)
         .ok_or_else(|| format!("tool not found: {}", tc.function.name))?;
 
+    // 审批门控：Tool 自主审批 与 manifest 策略取并集（任一方要求即触发审批）
+    let tool_requires = tool.requires_approval(&tc.function.arguments);
+    let manifest_policy = tool.manifest().default_approval.clone();
+    let policy = if tool_requires && manifest_policy == ApprovalPolicy::Auto {
+        // Tool 动态升级：manifest 为 Auto 但 Tool 要求审批 → 升级为 ConfirmEach
+        ApprovalPolicy::ConfirmEach
+    } else {
+        manifest_policy
+    };
+    match &policy {
+        ApprovalPolicy::Auto => { /* 直接放行 */ }
+        ApprovalPolicy::Forbidden => {
+            return Err(format!("tool '{}' is forbidden", tc.function.name));
+        }
+        ApprovalPolicy::ConfirmOncePerSession
+            if approval_state.is_pre_approved(conversation_id, &tc.function.name) =>
+        {
+            // 会话级缓存命中,放行
+        }
+        ApprovalPolicy::ConfirmEach | ApprovalPolicy::ConfirmOncePerSession => {
+            let (approval_id, rx, _guard) = approval_state.register();
+            let manifest = tool.manifest();
+            let _ = app.emit(
+                "llm:tool-approval-request",
+                json!({
+                    "sessionId": session_id,
+                    "conversationId": conversation_id,
+                    "approvalId": approval_id,
+                    "toolCallId": call_id,
+                    "toolName": tc.function.name,
+                    "policy": &policy,
+                    "inputSummary": summarize_tool_input(&tc.function.arguments),
+                    "risk": &manifest.risk,
+                    "effects": &manifest.effects,
+                }),
+            );
+
+            let decision = tokio::select! {
+                res = tokio::time::timeout(Duration::from_secs(30), rx) => res,
+                _ = cancel.cancelled() => {
+                    // _guard drop 时会自动清理 pending
+                    return Err("cancelled".to_string());
+                }
+            };
+
+            match decision {
+                Ok(Ok(true)) => {
+                    if matches!(policy, ApprovalPolicy::ConfirmOncePerSession) {
+                        approval_state.remember_approval(conversation_id, &tc.function.name);
+                    }
+                    // sender 已被 resolve 移除;_guard drop 时 discard_pending 是 no-op
+                }
+                Ok(Ok(false)) => {
+                    return Err(format!("user denied approval for tool '{}'", tc.function.name));
+                }
+                Ok(Err(_)) => {
+                    return Err("approval channel closed unexpectedly".to_string());
+                }
+                Err(_) => {
+                    return Err(format!(
+                        "approval timed out for tool '{}'",
+                        tc.function.name
+                    ));
+                }
+            }
+        }
+    }
+
     tool.validate_input(&tc.function.arguments)
         .map_err(|e| format!("validation failed: {}", e.message))?;
 
-    let ctx = ctx_factory.create_context(
+    let mut ctx = ctx_factory.create_context_at_depth(
         workspace_root.clone(),
         conversation_id,
         app_cache_dir,
         app_bundle_resource_dir,
+        nesting_depth,
     );
+    ctx.call_id = Some(call_id.to_string());
 
     let manifest = tool.manifest().clone();
     let start = std::time::Instant::now();
@@ -270,7 +388,7 @@ async fn execute_tool(
     let entry = crate::tools::context::AuditEntry {
         ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         conversation_id: ctx.conversation_id.clone(),
-        call_id: ctx.call_id.clone(),
+        call_id: ctx.call_id.clone().unwrap_or_default(),
         tool_name: manifest.name.clone(),
         version: manifest.version.clone(),
         input_redacted: crate::tools::audit::redact_value(&tc.function.arguments),
@@ -284,7 +402,21 @@ async fn execute_tool(
     match result {
         crate::tools::types::ToolResult::Ok { data, .. } => Ok(data),
         crate::tools::types::ToolResult::PartialOk { data, .. } => Ok(data),
-        crate::tools::types::ToolResult::Err { error } => Err(format!("{:?}", error.code)),
+        crate::tools::types::ToolResult::Err { error } => Err(format_tool_error_for_llm(&error)),
+    }
+}
+
+/// Build the error string fed back into the agent loop as `role=tool` content.
+///
+/// Includes both the machine-readable code and the human-readable message so the model
+/// can make a recovery decision (e.g. "NotFound: note not found: test_124.md" → call
+/// `note.list` instead of blindly retrying). Iter 3.5 root cause #1.
+fn format_tool_error_for_llm(error: &ToolError) -> String {
+    let msg = error.message.trim();
+    if msg.is_empty() {
+        format!("{:?}", error.code)
+    } else {
+        format!("{:?}: {}", error.code, msg)
     }
 }
 
@@ -318,24 +450,28 @@ pub fn list_for_llm_to_ollama_tools(manifests: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-fn emit_tool_call_start(app: &AppHandle, session_id: &str, tool_call_id: &str, tool_name: &str) {
+fn emit_tool_call_start(app: &AppHandle, session_id: &str, tool_call_id: &str, tool_name: &str, input_summary: &str) {
     let _ = app.emit(
         "llm:tool-call-start",
         json!({
             "sessionId": session_id,
             "toolCallId": tool_call_id,
             "toolName": tool_name,
+            "inputSummary": input_summary,
         }),
     );
 }
 
-fn emit_tool_call_done(app: &AppHandle, session_id: &str, tool_call_id: &str, success: bool) {
+fn emit_tool_call_done(app: &AppHandle, session_id: &str, tool_call_id: &str, success: bool, result_summary: &str, duration_ms: u64, error_message: Option<&str>) {
     let _ = app.emit(
         "llm:tool-call-done",
         json!({
             "sessionId": session_id,
             "toolCallId": tool_call_id,
             "success": success,
+            "resultSummary": result_summary,
+            "durationMs": duration_ms,
+            "errorMessage": error_message,
         }),
     );
 }
@@ -345,4 +481,113 @@ fn emit_agent_done(app: &AppHandle, session_id: &str) {
         "llm:agent-done",
         json!({ "sessionId": session_id }),
     );
+}
+
+/// Truncate a string to `max_len` bytes, appending "..." if truncated.
+/// Respects Unicode character boundaries.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s.to_string();
+    }
+    let mut end = max_len;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
+}
+
+/// 把 tool 输入序列化为审批弹窗展示用的字符串,
+/// 总长截断到 200 char,过长字符串值替换为 `<...N chars>`。
+fn summarize_tool_input(args: &Value) -> String {
+    const MAX_TOTAL_LEN: usize = 200;
+    const MAX_VALUE_LEN: usize = 80;
+
+    fn shorten(v: &Value) -> Value {
+        match v {
+            Value::String(s) if s.len() > MAX_VALUE_LEN => {
+                let mut end = MAX_VALUE_LEN;
+                while end > 0 && !s.is_char_boundary(end) {
+                    end -= 1;
+                }
+                Value::String(format!("{}<...{} chars>", &s[..end], s.len() - end))
+            }
+            Value::Array(arr) => Value::Array(arr.iter().map(shorten).collect()),
+            Value::Object(obj) => {
+                let mut out = serde_json::Map::with_capacity(obj.len());
+                for (k, val) in obj {
+                    out.insert(k.clone(), shorten(val));
+                }
+                Value::Object(out)
+            }
+            other => other.clone(),
+        }
+    }
+
+    let shortened = shorten(args);
+    let mut s = shortened.to_string();
+    if s.len() > MAX_TOTAL_LEN {
+        let mut end = MAX_TOTAL_LEN;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+        s.push_str("...");
+    }
+    s
+}
+
+#[cfg(test)]
+mod error_format_tests {
+    use super::*;
+    use crate::tools::types::ToolErrorCode;
+
+    fn err(code: ToolErrorCode, message: &str) -> ToolError {
+        ToolError {
+            code,
+            message: message.to_string(),
+            retryable: false,
+            cause: None,
+        }
+    }
+
+    #[test]
+    fn includes_message_when_present() {
+        let e = err(ToolErrorCode::NotFound, "note not found: test_124.md");
+        assert_eq!(
+            format_tool_error_for_llm(&e),
+            "NotFound: note not found: test_124.md"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_code_when_message_empty() {
+        let e = err(ToolErrorCode::Internal, "   ");
+        assert_eq!(format_tool_error_for_llm(&e), "Internal");
+    }
+}
+
+#[cfg(test)]
+mod summarize_tests {
+    use super::*;
+
+    #[test]
+    fn shortens_long_string_values() {
+        let v = json!({"content": "a".repeat(200), "title": "ok"});
+        let s = summarize_tool_input(&v);
+        assert!(s.contains("<...120 chars>"));
+        assert!(s.contains("\"title\":\"ok\""));
+    }
+
+    #[test]
+    fn truncates_overall_length() {
+        let v = json!({"a": "x", "b": "y", "c": "z", "d": "w", "long_key_aaaaaaaa": "yyyyyyyyyy".repeat(20)});
+        let s = summarize_tool_input(&v);
+        assert!(s.len() <= 203, "got len={}: {}", s.len(), s); // 200 + "..."
+    }
+
+    #[test]
+    fn preserves_short_input() {
+        let v = json!({"k": "v"});
+        assert_eq!(summarize_tool_input(&v), "{\"k\":\"v\"}");
+    }
 }

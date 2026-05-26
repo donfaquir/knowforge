@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useAiConversationSession } from "../contexts/AiConversationSessionContext";
 import type { ThoughtFocusContext } from "../types/aiConversation";
@@ -18,8 +18,15 @@ import type {
 import type { DetectPassiveHighlightResponse, PassiveHighlightMarked } from "../types/passiveHighlight";
 import type { ActiveProvider, VaultConfigForUi } from "../types/vaultAiConfig";
 import { isChallengeInlineLlmReady } from "../utils/isChallengeReviewLlmReady";
+import { VAULT_CONFIG_UPDATED_EVENT } from "../utils/vaultConfigBroadcast";
 import { markdownTreatAsKfPrivateForUi } from "../utils/kfPrivateMarkdown";
 import { PrivacyChangeOverlay } from "./PrivacyChangeOverlay";
+import { AiToolApprovalDialog } from "./AiToolApprovalDialog";
+import type { ApprovalRequest } from "../types/toolTypes";
+import { respondToolApproval } from "../utils/toolInvoke";
+import { listSkills, invokeSkill } from "../utils/skillInvoke";
+import type { SkillManifestJson } from "../types/skillTypes";
+import { parseSlashCommand } from "../utils/parseSlashCommand";
 import { AiAssistantMarkdown } from "./AiAssistantMarkdown";
 import { StreamingTimer } from "./StreamingTimer";
 import { useCognitiveFrequencyControl } from "../hooks/useCognitiveFrequencyControl";
@@ -281,10 +288,117 @@ export function AiConversationPanel() {
   const activeSessionRef = useRef<string | null>(null);
   const listEndRef = useRef<HTMLDivElement>(null);
 
-  /** P2 Tool Calling Loop：工具调用总开关（默认关闭，向后兼容） */
-  const [toolsEnabled, setToolsEnabled] = useState(false);
+  /** Iter 5 #4：工具调用总开关从 vault config 读取（默认 true,旧 vault 缺字段时取 true）。
+   *  通过 VAULT_CONFIG_UPDATED_EVENT 在设置保存后实时同步,无需重开会话。 */
+  const [toolsEnabled, setToolsEnabled] = useState(true);
   /** 发送时快照：agent 模式下 stream-done 仅是中间信号，不能最终化助手消息 */
   const isAgentModeRef = useRef(false);
+
+  /** Iter 5 #4: while a `skill.<id>` auto-invocation is in flight, save the
+   * parent session here so we can restore activeSessionRef once the skill
+   * sub-turn fires `agent-done`. Null when no skill is currently in progress. */
+  const parentSessionRef = useRef<string | null>(null);
+  /** 映射：skillSessionId → { parentToolCallId } */
+  const skillSessionMapRef = useRef<Map<string, { parentToolCallId: string }>>(new Map());
+
+  /** Iter 5 #3：内置 skill manifest 缓存。skill 在后端 setup() 注册一次后不变，挂载时取一次即可。 */
+  const [skillsCache, setSkillsCache] = useState<SkillManifestJson[]>([]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    listSkills()
+      .then(setSkillsCache)
+      .catch(() => {
+        /* 拉取失败不阻塞，handleSkillSend 会兜底报错 */
+      });
+  }, []);
+
+  /** Iter 5 #4：从 vault config 拉取 toolsEnabled,并订阅设置保存广播以热更新。 */
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    const reload = async () => {
+      try {
+        const cfg = await invoke<VaultConfigForUi>("get_vault_config_for_ui");
+        if (disposed) return;
+        setToolsEnabled(cfg.ai.toolsEnabled !== false);
+      } catch {
+        /* 加载失败保持默认 true,避免阻塞用户 */
+      }
+    };
+    void reload();
+    const onCfg = () => void reload();
+    window.addEventListener(VAULT_CONFIG_UPDATED_EVENT, onCfg);
+    return () => {
+      disposed = true;
+      window.removeEventListener(VAULT_CONFIG_UPDATED_EVENT, onCfg);
+    };
+  }, []);
+
+  /** Iter 5 #3 后续：斜杠命令自动补全。输入以 `/` 开头且仍在打 id 时弹下拉。 */
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+
+  type SlashCandidate = { value: string; label: string; description: string };
+  const slashCandidates = useMemo<SlashCandidate[]>(() => {
+    // 仅当用户还在打 id 段（无空格 body）时给出建议；body 一旦开始就交给 parseSlashCommand。
+    const m = /^\/([a-z0-9_]*)$/i.exec(input);
+    if (!m) return [];
+    const query = m[1].toLowerCase();
+    const items: SlashCandidate[] = [];
+    for (const s of skillsCache) {
+      const idLc = s.id.toLowerCase();
+      const nameLc = s.name.toLowerCase();
+      if (!query || idLc.startsWith(query) || nameLc.includes(query)) {
+        items.push({
+          value: `/${s.id} `,
+          label: `/${s.id}`,
+          description: `${s.name} — ${s.description}`,
+        });
+      }
+    }
+    if (!query || "skills".startsWith(query)) {
+      items.push({
+        value: "/skills",
+        label: "/skills",
+        description: t("aiPanel.skillsListTitle"),
+      });
+    }
+    return items;
+  }, [input, skillsCache, t]);
+
+  const slashOpen = !slashDismissed && slashCandidates.length > 0;
+  const safeSlashIndex = Math.min(slashIndex, Math.max(0, slashCandidates.length - 1));
+
+  const acceptSlashCandidate = useCallback((c: SlashCandidate) => {
+    setInput(c.value);
+    setSlashDismissed(true);
+    setSlashIndex(0);
+    composerRef.current?.focus();
+  }, []);
+
+  /** P3 审批：按到达顺序串行展示弹窗，避免并行 tool_calls 时 UI 叠加 */
+  const approvalQueueRef = useRef<ApprovalRequest[]>([]);
+  const [activeApproval, setActiveApproval] = useState<ApprovalRequest | null>(null);
+  const dequeueNextApproval = useCallback(() => {
+    setActiveApproval(() => {
+      const q = approvalQueueRef.current;
+      return q.length > 0 ? q.shift()! : null;
+    });
+  }, []);
+  const handleApprovalResolve = useCallback(
+    (approvalId: string, decision: boolean) => {
+      void respondToolApproval(approvalId, decision).catch(() => {});
+      dequeueNextApproval();
+    },
+    [dequeueNextApproval],
+  );
+  // 切换会话时清掉 UI 状态；后端 ConfirmOncePerSession 缓存按 conv_id 维度保留，
+  // 用户切回原会话时仍生效。
+  useEffect(() => {
+    approvalQueueRef.current = [];
+    setActiveApproval(null);
+  }, [conversationId]);
 
   /** invite-after-answer 状态 */
   const [inviteData, setInviteData] = useState<InviteData | null>(null);
@@ -454,8 +568,36 @@ export function AiConversationPanel() {
         if (p.sessionId !== activeSessionRef.current) {
           return;
         }
+        const skillMapping = skillSessionMapRef.current.get(p.sessionId);
+        if (skillMapping) {
+          // Skill 会话的 chunk → 追加到父气泡的工具调用项的 skillContent
+          setMessages((prev) => {
+            const next = [...prev];
+            for (let i = next.length - 1; i >= 0; i--) {
+              const m = next[i];
+              if (m.role !== "assistant") continue;
+              const tcs = m.meta?.toolCalls;
+              if (!tcs) continue;
+              const tcIdx = tcs.findIndex((tc) => tc.toolCallId === skillMapping.parentToolCallId);
+              if (tcIdx === -1) continue;
+              const updatedCalls = [...tcs];
+              updatedCalls[tcIdx] = {
+                ...updatedCalls[tcIdx],
+                skillContent: (updatedCalls[tcIdx].skillContent || "") + p.delta,
+              };
+              next[i] = {
+                ...m,
+                meta: { ...m.meta, toolCalls: updatedCalls },
+              };
+              break;
+            }
+            return next;
+          });
+          return;
+        }
+        // 主会话的 chunk → 追加到气泡 content（原有逻辑）
         setMessages((prev) => {
-          const next = [...prev];
+          let next = [...prev];
           const last = next[next.length - 1];
           if (last?.role === "assistant" && last.streaming) {
             const isFirstToken = last.content === "";
@@ -652,6 +794,23 @@ export function AiConversationPanel() {
         if (p.sessionId !== activeSessionRef.current) {
           return;
         }
+        // Iter 5 #4: error during a skill sub-turn — restore parent session.
+        // The parent agent_loop will receive the SkillAsTool tool error in its
+        // tool_result and decide whether to recover. Don't tear down top-level streaming UI here.
+        if (parentSessionRef.current) {
+          const parent = parentSessionRef.current;
+          parentSessionRef.current = null;
+          activeSessionRef.current = parent;
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant" && last.streaming) {
+              next[next.length - 1] = { ...last, streaming: false };
+            }
+            return next;
+          });
+          return;
+        }
         markNeedPersist();
         activeSessionRef.current = null;
         isAgentModeRef.current = false;
@@ -694,25 +853,53 @@ export function AiConversationPanel() {
         setErrorBanner(p.message);
       }),
       // P2 Tool Calling Loop：工具调用开始 → 在末尾 assistant 消息中插入 running 状态项
-      listen<{ sessionId: string; toolCallId: string; toolName: string }>(
+      // Skill 内部的工具调用路由到对应 toolCall 的 skillToolCalls
+      listen<{ sessionId: string; toolCallId: string; toolName: string; inputSummary?: string }>(
         "llm:tool-call-start",
         (e) => {
           const p = e.payload;
           if (p.sessionId !== activeSessionRef.current) {
             return;
           }
+          const skillMapping = skillSessionMapRef.current.get(p.sessionId);
+          const newCall: ToolCallDisplayInfo = {
+            toolCallId: p.toolCallId,
+            toolName: p.toolName,
+            status: "running",
+            inputSummary: p.inputSummary,
+          };
+          if (skillMapping) {
+            // Skill 内部的工具调用 → 添加到对应的 skillToolCalls
+            setMessages((prev) => {
+              const next = [...prev];
+              for (let i = next.length - 1; i >= 0; i--) {
+                const m = next[i];
+                if (m.role !== "assistant") continue;
+                const tcs = m.meta?.toolCalls;
+                if (!tcs) continue;
+                const tcIdx = tcs.findIndex((tc) => tc.toolCallId === skillMapping.parentToolCallId);
+                if (tcIdx === -1) continue;
+                const updatedCalls = [...tcs];
+                updatedCalls[tcIdx] = {
+                  ...updatedCalls[tcIdx],
+                  skillToolCalls: [...(updatedCalls[tcIdx].skillToolCalls || []), newCall],
+                };
+                next[i] = {
+                  ...m,
+                  meta: { ...m.meta, toolCalls: updatedCalls },
+                };
+                break;
+              }
+              return next;
+            });
+            return;
+          }
+          // 主会话的工具调用 → 添加到末尾 assistant 气泡的 toolCalls
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
-            if (last?.role !== "assistant") {
-              return prev;
-            }
+            if (last?.role !== "assistant") return prev;
             const existing = last.meta?.toolCalls ?? [];
-            const newCall: ToolCallDisplayInfo = {
-              toolCallId: p.toolCallId,
-              toolName: p.toolName,
-              status: "running",
-            };
             return [
               ...next.slice(0, -1),
               {
@@ -724,37 +911,173 @@ export function AiConversationPanel() {
         },
       ),
       // P2 Tool Calling Loop：工具调用完成 → 更新对应 toolCallId 的状态为 done/error
-      listen<{ sessionId: string; toolCallId: string; success: boolean }>(
+      // 按新字段更新 resultSummary / durationMs / errorMessage，处理 Skill 内部工具调用
+      listen<{ sessionId: string; toolCallId: string; success: boolean; resultSummary?: string; durationMs?: number; errorMessage?: string }>(
         "llm:tool-call-done",
         (e) => {
           const p = e.payload;
           if (p.sessionId !== activeSessionRef.current) {
             return;
           }
+          const skillMapping = skillSessionMapRef.current.get(p.sessionId);
+          if (skillMapping) {
+            // Skill 内部的工具完成 → 更新对应的 skillToolCalls
+            setMessages((prev) => {
+              const next = [...prev];
+              for (let i = next.length - 1; i >= 0; i--) {
+                const m = next[i];
+                if (m.role !== "assistant") continue;
+                const tcs = m.meta?.toolCalls;
+                if (!tcs) continue;
+                const tcIdx = tcs.findIndex((tc) => tc.toolCallId === skillMapping.parentToolCallId);
+                if (tcIdx === -1) continue;
+                const updatedCalls = [...tcs];
+                const skillTcs = (updatedCalls[tcIdx].skillToolCalls || []).map((stc) =>
+                  stc.toolCallId === p.toolCallId
+                    ? { ...stc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage }
+                    : stc,
+                );
+                updatedCalls[tcIdx] = { ...updatedCalls[tcIdx], skillToolCalls: skillTcs };
+                next[i] = { ...m, meta: { ...m.meta, toolCalls: updatedCalls } };
+                break;
+              }
+              return next;
+            });
+            return;
+          }
+          // 主会话的工具完成 → 从后向前搜索 toolCallId
           setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role !== "assistant") {
+            let foundIndex = -1;
+            for (let i = prev.length - 1; i >= 0; i -= 1) {
+              const m = prev[i];
+              if (m.role !== "assistant") continue;
+              if (m.meta?.toolCalls?.some((tc) => tc.toolCallId === p.toolCallId)) {
+                foundIndex = i;
+                break;
+              }
+            }
+            if (foundIndex === -1) {
               return prev;
             }
-            const existing = last.meta?.toolCalls ?? [];
-            const updated = existing.map((tc) =>
+            const target = prev[foundIndex];
+            const updatedCalls = (target.meta?.toolCalls ?? []).map((tc) =>
               tc.toolCallId === p.toolCallId
-                ? { ...tc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"] }
+                ? { ...tc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage }
                 : tc,
             );
-            return [
-              ...next.slice(0, -1),
-              { ...last, meta: { ...last.meta, toolCalls: updated } },
-            ];
+            const next = [...prev];
+            next[foundIndex] = {
+              ...target,
+              meta: { ...target.meta, toolCalls: updatedCalls },
+            };
+            return next;
           });
         },
       ),
-      // P2 Tool Calling Loop：Agent 轮次结束 → 最终化助手消息、清理 streaming 状态
-      listen<{ sessionId: string }>("llm:agent-done", (e) => {
-        if (e.payload.sessionId !== activeSessionRef.current) {
+      // P3 审批：后端在执行非 Auto 工具前请求用户决策
+      listen<ApprovalRequest>("llm:tool-approval-request", (e) => {
+        const p = e.payload;
+        if (p.sessionId !== activeSessionRef.current) {
           return;
         }
+        setActiveApproval((cur) => {
+          if (cur === null) {
+            return p;
+          }
+          approvalQueueRef.current.push(p);
+          return cur;
+        });
+      }),
+      // Iter 5 #4: 主对话自动调用 `skill.<id>` 时，后端发出 skill-spawn,
+      // 携带新 sessionId — 这里保存父 session、切换 active、更新父气泡中对应工具调用项的 skill 字段。
+      // 不再创建新气泡，Skill 内容内嵌到父气泡的工具调用项中。
+      listen<{
+        sessionId: string;
+        conversationId: string;
+        skillId: string;
+        skillName: string;
+        parentToolCallId: string;
+      }>("llm:skill-spawn", (e) => {
+        const p = e.payload;
+        if (!activeSessionRef.current || activeSessionRef.current === p.sessionId) {
+          return;
+        }
+        if (conversationId && p.conversationId !== conversationId) {
+          return;
+        }
+        parentSessionRef.current = activeSessionRef.current;
+        activeSessionRef.current = p.sessionId;
+        // 记录 skill session → parent tool call 的映射
+        skillSessionMapRef.current.set(p.sessionId, {
+          parentToolCallId: p.parentToolCallId,
+        });
+        // 更新父气泡中对应工具调用项的 skill 字段（不创建新气泡）
+        setMessages((prev) => {
+          const next = [...prev];
+          for (let i = next.length - 1; i >= 0; i--) {
+            const m = next[i];
+            if (m.role !== "assistant") continue;
+            const tcs = m.meta?.toolCalls;
+            if (!tcs) continue;
+            const tcIdx = tcs.findIndex((tc) => tc.toolCallId === p.parentToolCallId);
+            if (tcIdx === -1) continue;
+            const updatedCalls = [...tcs];
+            updatedCalls[tcIdx] = {
+              ...updatedCalls[tcIdx],
+              skillId: p.skillId,
+              skillName: p.skillName,
+              skillContent: "",
+              skillToolCalls: [],
+              skillStreaming: true,
+            };
+            next[i] = {
+              ...m,
+              meta: { ...m.meta, toolCalls: updatedCalls },
+            };
+            break;
+          }
+          return next;
+        });
+      }),
+      // P2 Tool Calling Loop：Agent 轮次结束 → 最终化助手消息、清理 streaming 状态
+      listen<{ sessionId: string }>("llm:agent-done", (e) => {
+        const sid = e.payload.sessionId;
+        const skillMapping = skillSessionMapRef.current.get(sid);
+
+        // Skill 子轮次完成：优先处理，不依赖 activeSessionRef
+        if (skillMapping) {
+          skillSessionMapRef.current.delete(sid);
+          if (activeSessionRef.current === sid) {
+            activeSessionRef.current = parentSessionRef.current;
+          }
+          parentSessionRef.current = null;
+
+          setMessages((prev) => {
+            const next = [...prev];
+            for (let i = next.length - 1; i >= 0; i--) {
+              const m = next[i];
+              if (m.role !== "assistant") continue;
+              const tcs = m.meta?.toolCalls;
+              if (!tcs) continue;
+              const tcIdx = tcs.findIndex((tc) => tc.toolCallId === skillMapping.parentToolCallId);
+              if (tcIdx === -1) continue;
+
+              const updatedCalls = [...tcs];
+              updatedCalls[tcIdx] = { ...updatedCalls[tcIdx], skillStreaming: false };
+              next[i] = { ...m, meta: { ...m.meta, toolCalls: updatedCalls } };
+              break;
+            }
+            return next;
+          });
+          return;
+        }
+
+        // 其余情况：保持原有顶层 agent-done 逻辑
+        if (sid !== activeSessionRef.current) {
+          return;
+        }
+
+        // 顶层 agent 循环完成
         markNeedPersist();
         activeSessionRef.current = null;
         isAgentModeRef.current = false;
@@ -793,7 +1116,15 @@ export function AiConversationPanel() {
       disposed = true;
       pending.forEach((u) => void u());
     };
-  }, [markNeedPersist, setMessages, setIsStreaming, freqCtrl, t, attachCitationToLastAssistant]);
+  }, [
+    markNeedPersist,
+    setMessages,
+    setIsStreaming,
+    freqCtrl,
+    t,
+    attachCitationToLastAssistant,
+    conversationId,
+  ]);
 
   const handleStop = useCallback(async () => {
     if (isVaultSearching) {
@@ -808,10 +1139,17 @@ export function AiConversationPanel() {
       return;
     }
 
+    // Iter 5 #4: while a skill sub-turn is in flight, abort BOTH the skill
+    // and its parent — cancelling only the skill leaves the parent agent loop
+    // blocked awaiting a tool result that will never arrive.
+    const parentSid = parentSessionRef.current;
+
     const hasComposerDraft = input.trim().length > 0;
 
     markNeedPersist();
     activeSessionRef.current = null;
+    parentSessionRef.current = null;
+    skillSessionMapRef.current.clear();
     isAgentModeRef.current = false;
     setIsStreaming(false);
     setErrorBanner(null);
@@ -841,6 +1179,9 @@ export function AiConversationPanel() {
     }
     try {
       await invoke("abort_llm_stream", { sessionId: sid });
+      if (parentSid && parentSid !== sid) {
+        await invoke("abort_llm_stream", { sessionId: parentSid });
+      }
     } catch {
       /* 中止失败不阻塞 UI */
     }
@@ -949,12 +1290,142 @@ export function AiConversationPanel() {
     }, 2000);
   }, [setMessages]);
 
+  /** Iter 5 #3：渲染一条本地 assistant 气泡列出可用 skill。不发后端、不进 active session。 */
+  const handleSkillsList = useCallback(() => {
+    setInput("");
+    const lines = skillsCache.length === 0
+      ? `_${t("aiPanel.skillsListEmpty")}_`
+      : skillsCache
+          .map((s) => `- \`${s.id}\` (${s.name}) — ${s.description}`)
+          .join("\n");
+    const body = `**${t("aiPanel.skillsListTitle")}**\n\n${lines}`;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: body,
+      },
+    ]);
+  }, [skillsCache, setInput, setMessages, t]);
+
+  /** Iter 5 #3：触发后端 invoke_skill 子轮次。复用 activeSessionRef + isAgentModeRef，
+   *  现有 llm:* listeners 会自动按 sessionId 接管 skill 子流，UI 渲染按 meta.skillId 加 badge。 */
+  const handleSkillSend = useCallback(
+    async (skillId: string, body: string) => {
+      setCopyToast(null);
+      if (isStreaming || isVaultSearching) {
+        return;
+      }
+      if (!isTauri()) {
+        setErrorBanner(t("aiPanel.onlyDesktop"));
+        return;
+      }
+      if (!workspaceReady || !sessionReady || !conversationId) {
+        setErrorBanner(t("aiPanel.openFolder"));
+        return;
+      }
+
+      const manifest = skillsCache.find((s) => s.id === skillId);
+      if (!manifest) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: t("aiPanel.skillUnknown", { id: skillId }),
+          },
+        ]);
+        setInput("");
+        return;
+      }
+
+      setErrorBanner(null);
+      setInput("");
+      const userMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: body,
+        meta: { skillId, skillName: manifest.name },
+      };
+      setMessages((prev) => [...prev, userMsg]);
+
+      let modelName: string | undefined;
+      try {
+        const cfg = await invoke<VaultCfgForSend>("get_vault_config_for_ui");
+        const o = cfg.ai?.ollama;
+        modelName = (o?.lastUsedModel?.trim() || o?.defaultModel?.trim()) || undefined;
+      } catch {
+        /* 拉取失败时让后端用默认模型 */
+      }
+
+      try {
+        const res = await invokeSkill(skillId, body, conversationId, modelName);
+        activeSessionRef.current = res.sessionId;
+        // skill 一定走 agent loop（有自己的工具白名单），与 toolsEnabled 无关
+        isAgentModeRef.current = true;
+        setIsStreaming(true);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: "",
+            streaming: true,
+            meta: {
+              timing: { startMs: Date.now() },
+              skillId,
+              skillName: manifest.name,
+            },
+          },
+        ]);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: t("aiPanel.skillInvokeFailed", { message }),
+          },
+        ]);
+      }
+    },
+    [
+      conversationId,
+      isStreaming,
+      isVaultSearching,
+      sessionReady,
+      setIsStreaming,
+      setMessages,
+      skillsCache,
+      t,
+      workspaceReady,
+    ],
+  );
+
   const handleSend = useCallback(async () => {
     setCopyToast(null);
     const trimmed = input.trim();
     if (!trimmed || isStreaming || isVaultSearching) {
       return;
     }
+
+    // Iter 5 #3：斜杠命令分叉。优先于普通聊天路径处理。
+    // 仅当 id 命中已注册 skill 时才走 skill 流；其余 `/...` 输入按普通消息发送（兜底，不报错）。
+    const slash = parseSlashCommand(
+      trimmed,
+      skillsCache.map((s) => s.id),
+    );
+    if (slash?.kind === "skills-list") {
+      handleSkillsList();
+      return;
+    }
+    if (slash?.kind === "skill") {
+      void handleSkillSend(slash.skillId, slash.body);
+      return;
+    }
+
     if (!isTauri()) {
       setErrorBanner(t("aiPanel.onlyDesktop"));
       return;
@@ -980,7 +1451,11 @@ export function AiConversationPanel() {
       content: trimmed,
     };
     const nextChat = [...messages, userMsg];
-    const chatTurns = nextChat.map((m) => ({ role: m.role, content: m.content }));
+    // Iter 5 #3：兑现"独立子轮次,不污染主对话历史"——skill 子轮次的 user/assistant 消息
+    // 在 UI 中可见但不进 LLM context。运行时存活，刷新后退化为普通历史（详见 ChatMessage.meta 注释）。
+    const chatTurns = nextChat
+      .filter((m) => !m.meta?.skillId)
+      .map((m) => ({ role: m.role, content: m.content }));
     const noteContext =
       attachCurrentNote && ctx.kind === "attached"
         ? { relPath: ctx.relPath, markdownForGate: ctx.markdown }
@@ -1088,7 +1563,13 @@ export function AiConversationPanel() {
         depthMode: typeof depthMode;
         thoughtFocusContext?: ThoughtFocusContext;
         toolsEnabled?: boolean;
-      } = { messages: chatTurns, depthMode, toolsEnabled };
+        conversationId?: string;
+      } = {
+        messages: chatTurns,
+        depthMode,
+        toolsEnabled,
+        conversationId: conversationId ?? undefined,
+      };
       if (noteContext) {
         streamArgs.noteContext = noteContext;
       }
@@ -1161,10 +1642,36 @@ export function AiConversationPanel() {
     toolsEnabled,
     t,
     schedulePassiveHighlightDetection,
+    handleSkillSend,
+    handleSkillsList,
+    skillsCache,
   ]);
 
   const onComposerKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (slashOpen) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSlashIndex((i) => (i + 1) % slashCandidates.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSlashIndex((i) => (i - 1 + slashCandidates.length) % slashCandidates.length);
+          return;
+        }
+        if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+          e.preventDefault();
+          const c = slashCandidates[safeSlashIndex];
+          if (c) acceptSlashCandidate(c);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setSlashDismissed(true);
+          return;
+        }
+      }
       if (e.key !== "Enter" || e.shiftKey) {
         return;
       }
@@ -1174,7 +1681,15 @@ export function AiConversationPanel() {
       e.preventDefault();
       void handleSend();
     },
-    [handleSend, isStreaming, isVaultSearching],
+    [
+      handleSend,
+      isStreaming,
+      isVaultSearching,
+      slashOpen,
+      slashCandidates,
+      safeSlashIndex,
+      acceptSlashCandidate,
+    ],
   );
 
   const copyAssistant = useCallback(async (text: string) => {
@@ -1236,7 +1751,13 @@ export function AiConversationPanel() {
           depthMode: typeof depthMode;
           inviteContext?: { question: string; thoughtExcerpt?: string };
           thoughtFocusContext?: ThoughtFocusContext;
-        } = { messages: chatTurns, depthMode, inviteContext };
+          conversationId?: string;
+        } = {
+          messages: chatTurns,
+          depthMode,
+          inviteContext,
+          conversationId: conversationId ?? undefined,
+        };
         if (
           thoughtFocusContext != null &&
           thoughtFocusContext.thoughtId.trim() !== "" &&
@@ -1524,33 +2045,89 @@ export function AiConversationPanel() {
                 {m.role === "assistant" ? (
                   <>
                     {m.meta?.toolCalls && m.meta.toolCalls.length > 0 ? (
-                      <ul className="ai-chat__tool-calls" aria-label={t("aiPanel.toolCallsAria")}>
+                      <div className="ai-chat__tool-calls">
                         {m.meta.toolCalls.map((tc) => (
-                          <li
-                            key={tc.toolCallId}
-                            className={`ai-chat__tool-call ai-chat__tool-call--${tc.status}`}
-                          >
-                            <span
-                              className="ai-chat__tool-call__icon"
-                              aria-hidden={true}
-                            >
-                              {tc.status === "running"
-                                ? "⋯"
-                                : tc.status === "done"
-                                  ? "✓"
-                                  : "✗"}
-                            </span>
-                            <span className="ai-chat__tool-call__name">{tc.toolName}</span>
-                            <span className="ai-chat__tool-call__status">
-                              {tc.status === "running"
-                                ? t("aiPanel.toolCallRunning")
-                                : tc.status === "done"
-                                  ? t("aiPanel.toolCallDone")
-                                  : t("aiPanel.toolCallError")}
-                            </span>
-                          </li>
+                          <details key={tc.toolCallId} className="ai-chat__tool-call-details">
+                            <summary className={`ai-chat__tool-call ai-chat__tool-call--${tc.status}`}>
+                              <span className="ai-chat__tool-call__icon" aria-hidden={true}>
+                                {tc.status === "running" ? "⋯" : tc.status === "done" ? "✓" : "✗"}
+                              </span>
+                              <span className="ai-chat__tool-call__name">{tc.toolName}</span>
+                              {tc.durationMs != null && (
+                                <span className="ai-chat__tool-call__duration">
+                                  {(tc.durationMs / 1000).toFixed(1)}s
+                                </span>
+                              )}
+                            </summary>
+                            <div className="ai-chat__tool-call__detail">
+                              {tc.inputSummary && (
+                                <div className="ai-chat__tool-call__input">
+                                  <span className="ai-chat__tool-call__label">输入</span>
+                                  <code>{tc.inputSummary}</code>
+                                </div>
+                              )}
+                              {tc.skillId && (
+                                <div className="ai-chat__skill-inline">
+                                  <span className="ai-chat__skill-badge">🧠 {tc.skillName}</span>
+                                  <AiAssistantMarkdown content={tc.skillContent || ""} />
+                                  {tc.skillStreaming && <span className="ai-chat__typing">▌</span>}
+                                  {tc.skillToolCalls && tc.skillToolCalls.length > 0 && (
+                                    <div className="ai-chat__tool-calls">
+                                      {tc.skillToolCalls.map((stc) => (
+                                        <details key={stc.toolCallId} className="ai-chat__tool-call-details">
+                                          <summary className={`ai-chat__tool-call ai-chat__tool-call--${stc.status}`}>
+                                            <span className="ai-chat__tool-call__icon" aria-hidden={true}>
+                                              {stc.status === "running" ? "⋯" : stc.status === "done" ? "✓" : "✗"}
+                                            </span>
+                                            <span className="ai-chat__tool-call__name">{stc.toolName}</span>
+                                            {stc.durationMs != null && (
+                                              <span className="ai-chat__tool-call__duration">
+                                                {(stc.durationMs / 1000).toFixed(1)}s
+                                              </span>
+                                            )}
+                                          </summary>
+                                          <div className="ai-chat__tool-call__detail">
+                                            {stc.inputSummary && (
+                                              <div className="ai-chat__tool-call__input">
+                                                <span className="ai-chat__tool-call__label">输入</span>
+                                                <code>{stc.inputSummary}</code>
+                                              </div>
+                                            )}
+                                            {stc.resultSummary && (
+                                              <div className="ai-chat__tool-call__result">
+                                                <span className="ai-chat__tool-call__label">结果</span>
+                                                <code>{stc.resultSummary}</code>
+                                              </div>
+                                            )}
+                                            {stc.errorMessage && (
+                                              <div className="ai-chat__tool-call__error">
+                                                <span className="ai-chat__tool-call__label">错误</span>
+                                                <code>{stc.errorMessage}</code>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </details>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {tc.resultSummary && (
+                                <div className="ai-chat__tool-call__result">
+                                  <span className="ai-chat__tool-call__label">结果</span>
+                                  <code>{tc.resultSummary}</code>
+                                </div>
+                              )}
+                              {tc.errorMessage && (
+                                <div className="ai-chat__tool-call__error">
+                                  <span className="ai-chat__tool-call__label">错误</span>
+                                  <code>{tc.errorMessage}</code>
+                                </div>
+                              )}
+                            </div>
+                          </details>
                         ))}
-                      </ul>
+                      </div>
                     ) : null}
                     <AiAssistantMarkdown content={m.content} />
                     {!m.streaming && m.meta?.thoughtCitation && !m.meta.thoughtCitation.privateOmitted ? (
@@ -1732,27 +2309,48 @@ export function AiConversationPanel() {
           />
           <span id="ai-chat-vault-hint">{t("aiPanel.vaultSearch")}</span>
         </label>
-        {/* P2 Tool Calling Loop：工具调用总开关（默认关闭） */}
-        <label
-          className="ai-chat__attach ai-chat__attach--above-input"
-          title={t("aiPanel.toolsToggleTitle")}
-        >
-          <input
-            type="checkbox"
-            checked={toolsEnabled}
-            onChange={(e) => setToolsEnabled(e.target.checked)}
-            disabled={isStreaming || isVaultSearching}
-            aria-describedby="ai-chat-tools-hint"
-            {...dragExcludeProps}
-          />
-          <span id="ai-chat-tools-hint">{t("aiPanel.toolsToggle")}</span>
-        </label>
         <div className="ai-chat__composer-field">
           <div className="ai-chat__composer-stack">
+            {slashOpen ? (
+              <ul
+                className="ai-chat__slash-popup"
+                role="listbox"
+                aria-label={t("aiPanel.slashPopupLabel")}
+              >
+                {slashCandidates.map((c, i) => {
+                  const active = i === safeSlashIndex;
+                  return (
+                    <li
+                      key={c.value}
+                      role="option"
+                      aria-selected={active}
+                      className={
+                        active
+                          ? "ai-chat__slash-option ai-chat__slash-option--active"
+                          : "ai-chat__slash-option"
+                      }
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        acceptSlashCandidate(c);
+                      }}
+                      onMouseEnter={() => setSlashIndex(i)}
+                    >
+                      <code className="ai-chat__slash-option__name">{c.label}</code>
+                      <span className="ai-chat__slash-option__desc">{c.description}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
             <textarea
+              ref={composerRef}
               className="ai-chat__input"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                setSlashDismissed(false);
+                setSlashIndex(0);
+              }}
               onKeyDown={onComposerKeyDown}
               placeholder={
                 !isTauri()
@@ -1766,6 +2364,8 @@ export function AiConversationPanel() {
               disabled={!isTauri() || !workspaceReady}
               rows={3}
               aria-label={t("aiPanel.messageLabel")}
+              aria-autocomplete="list"
+              aria-expanded={slashOpen}
             />
             <div className="ai-chat__composer-toolbar" {...dragExcludeProps}>
               {!savePopoverMsgId ? (
@@ -1851,6 +2451,8 @@ export function AiConversationPanel() {
           onContinue={() => setPrivacyChangeWarning(null)}
         />
       ) : null}
+
+      <AiToolApprovalDialog request={activeApproval} onResolve={handleApprovalResolve} />
     </section>
   );
 }

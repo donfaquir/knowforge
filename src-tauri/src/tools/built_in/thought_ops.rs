@@ -159,3 +159,113 @@ impl Tool for ThoughtListTool {
         }
     }
 }
+
+// ─── ThoughtCreateTool ────────────────────────────────────────────────────────
+
+pub struct ThoughtCreateTool {
+    manifest: ToolManifest,
+}
+
+impl ThoughtCreateTool {
+    pub fn new() -> Self {
+        Self {
+            manifest: ToolManifest {
+                name: "thought.create".to_string(),
+                version: "1.0.0".to_string(),
+                protocol_version: "1.0".to_string(),
+                description: "创建一条新的独立想法（Thought）条目".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "required": ["content"],
+                    "properties": {
+                        "content": { "type": "string", "description": "想法正文" },
+                        "summary": { "type": "string", "description": "一句话摘要（可选）" }
+                    },
+                    "additionalProperties": false
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "thought_id": { "type": "string" }
+                    }
+                }),
+                effects: vec![Effect::Write],
+                risk: Risk::Caution,
+                privacy_aware: true,
+                requires_workspace: true,
+                default_approval: ApprovalPolicy::ConfirmOncePerSession,
+                examples: vec![],
+                tags: vec!["thought".to_string(), "create".to_string()],
+                deprecated: None,
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for ThoughtCreateTool {
+    fn manifest(&self) -> &ToolManifest {
+        &self.manifest
+    }
+
+    async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {
+        let start = std::time::Instant::now();
+
+        let content = match input.get("content").and_then(|v| v.as_str()) {
+            Some(c) if !c.trim().is_empty() => c.to_string(),
+            _ => {
+                return ToolResult::Err {
+                    error: ToolError {
+                        code: ToolErrorCode::InvalidInput,
+                        message: "content is required and must not be empty".to_string(),
+                        retryable: false,
+                        cause: None,
+                    },
+                }
+            }
+        };
+        let summary = input
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let root = ctx.workspace_root.clone();
+
+        let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+            let conn = crate::vault_thoughts_db::open_thoughts_db(&root)?;
+            crate::vault_thoughts_db::create_standalone_thought(
+                &conn,
+                &content,
+                summary.as_deref(),
+            )
+        })
+        .await;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(Ok(thought_id)) => ToolResult::Ok {
+                data: serde_json::json!({ "thought_id": thought_id }),
+                redacted_count: 0,
+                warnings: vec![],
+                metrics: ToolMetrics { duration_ms, ..Default::default() },
+            },
+            Ok(Err(e)) => ToolResult::Err {
+                error: ToolError {
+                    code: ToolErrorCode::Internal,
+                    message: e,
+                    retryable: true,
+                    cause: None,
+                },
+            },
+            Err(e) => ToolResult::Err {
+                error: ToolError {
+                    code: ToolErrorCode::Internal,
+                    message: e.to_string(),
+                    retryable: true,
+                    cause: None,
+                },
+            },
+        }
+    }
+}

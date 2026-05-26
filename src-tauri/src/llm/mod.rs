@@ -2,11 +2,13 @@
 
 pub(crate) mod ollama;
 pub(crate) mod agent_loop;
+pub mod approval;
 
 use crate::depth_decisions;
 use crate::lock_workspace_root;
 use crate::note_privacy;
 use crate::semantic_index;
+use crate::skills::SkillRegistry;
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::{ToolRegistry, ToolScope};
 use crate::vault_config::{self, ActiveProvider, DepthMode};
@@ -37,7 +39,7 @@ impl Default for LlmSessionState {
 }
 
 impl LlmSessionState {
-    fn register(&self, id: String, token: CancellationToken) {
+    pub(crate) fn register(&self, id: String, token: CancellationToken) {
         let mut g = match self.inner.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -134,9 +136,14 @@ pub struct OllamaChatStreamStartArgs {
     /// 是否在 system 中注入内置语义检索摘录；默认 true（迭代 6.2）
     #[serde(default)]
     pub semantic_context_enabled: Option<bool>,
-    /// 是否启用 Tool Calling Loop（P2）；默认 false 走原文字流路径。
+    /// 是否启用 Tool Calling Loop（P2）；
+    /// `None` 时回退到 `AiConfig::tools_enabled`(Iter 5 #4 起改由配置页面控制)。
     #[serde(default)]
-    pub tools_enabled: bool,
+    pub tools_enabled: Option<bool>,
+    /// 前端会话 ID（用于 ConfirmOncePerSession 审批缓存的作用域）；
+    /// 缺省时退化为本次 stream 的 session_id（兼容旧客户端）。
+    #[serde(default)]
+    pub conversation_id: Option<String>,
 }
 
 /// 深化轮次的上下文（由邀请 UI 传入）。
@@ -352,12 +359,38 @@ fn build_depth_system_instruction(depth: DepthMode) -> String {
     }
 }
 
+/// Iter 5 #4: build the "Available skills" system block. Returns None when no
+/// auto_invocable skills are registered (so we don't add an empty section).
+fn build_skills_system_block(
+    skills: &[(String, String, Option<String>)],
+) -> Option<String> {
+    if skills.is_empty() {
+        return None;
+    }
+    let mut s = String::from(
+        "Available skills (call as tools via `skill.<id>` with a single string `input`):\n",
+    );
+    for (id, name, when) in skills {
+        if let Some(when) = when.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
+            s.push_str(&format!("- skill.{id} ({name}): {when}\n"));
+        } else {
+            s.push_str(&format!("- skill.{id} ({name})\n"));
+        }
+    }
+    s.push_str(
+        "Skills cannot invoke other skills. The skill streams its own output to the user;\n\
+         after `skill.<id>` returns, acknowledge briefly without repeating the skill's content.",
+    );
+    Some(s)
+}
+
 /// 合并 `note_context`、可选 `vault_context` 与对话轮次，并校验角色。
 fn assemble_ollama_messages(
     canonical_root: &Path,
     ai: &vault_config::AiConfig,
     args: &OllamaChatStreamStartArgs,
     embed_cache_bundle: Option<(PathBuf, PathBuf)>,
+    auto_invocable_skills: &[(String, String, Option<String>)],
 ) -> Result<AssembleOutcome, String> {
     let mut out: Vec<LlmChatMessage> = Vec::new();
     let mut reply_context_sources = ReplyContextSources::default();
@@ -573,6 +606,25 @@ fn assemble_ollama_messages(
         ..Default::default()
     });
 
+    // Iter 3.5 P0-2：开启工具调用时,明确告诉 LLM "先发现后读",避免按训练直觉假设文件在根目录。
+    let tools_enabled_eff = args.tools_enabled.unwrap_or(ai.tools_enabled);
+    if tools_enabled_eff {
+        out.push(LlmChatMessage {
+            role: "system".to_string(),
+            content: agent_loop::TOOL_USE_DISCOVERY_HINT.to_string(),
+            ..Default::default()
+        });
+        // Iter 5 #4: when auto_invocable skills are registered, surface them so
+        // the model can pick `skill.<id>` over recreating the workflow inline.
+        if let Some(block) = build_skills_system_block(auto_invocable_skills) {
+            out.push(LlmChatMessage {
+                role: "system".to_string(),
+                content: block,
+                ..Default::default()
+            });
+        }
+    }
+
     for m in &args.messages {
         let role = m.role.trim();
         if role != "user" && role != "assistant" {
@@ -636,6 +688,8 @@ pub async fn start_ollama_chat_stream(
     sessions: State<'_, Arc<LlmSessionState>>,
     registry: State<'_, Arc<ToolRegistry>>,
     ctx_factory: State<'_, Arc<ToolContextFactory>>,
+    approval: State<'_, Arc<approval::ToolApprovalState>>,
+    skills: State<'_, Arc<SkillRegistry>>,
     args: OllamaChatStreamStartArgs,
 ) -> Result<OllamaChatStreamStartResponse, String> {
     let root = lock_workspace_root(&workspace)?;
@@ -655,8 +709,20 @@ pub async fn start_ollama_chat_stream(
     let cache = semantic_index::default_model_cache_dir();
     let bundle = semantic_index::resolve_bundle_model_dir(&app);
     let embed_paths = Some((cache.clone(), bundle.clone()));
-    let tools_enabled = args.tools_enabled;
-    let outcome = assemble_ollama_messages(&root, &ai, &args, embed_paths)?;
+    let tools_enabled = args.tools_enabled.unwrap_or(ai.tools_enabled);
+    // Iter 5 #4: snapshot auto_invocable skills so assemble_ollama_messages can
+    // surface them in the chat system prompt.
+    let skills_for_prompt: Vec<(String, String, Option<String>)> = if tools_enabled {
+        skills
+            .list()
+            .into_iter()
+            .filter(|m| m.auto_invocable)
+            .map(|m| (m.id, m.name, m.when_to_use))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let outcome = assemble_ollama_messages(&root, &ai, &args, embed_paths, &skills_for_prompt)?;
     let messages = outcome.messages;
     let resolved_depth = outcome.resolved_depth;
     let reply_context_sources = outcome.reply_context_sources;
@@ -701,8 +767,16 @@ pub async fn start_ollama_chat_stream(
     let top_p = ai.parameters.top_p;
     let registry_arc = Arc::clone(registry.inner());
     let ctx_factory_arc = Arc::clone(ctx_factory.inner());
+    let approval_arc = Arc::clone(approval.inner());
     let workspace_root = root.clone();
-    let conversation_id = session_id.clone();
+    // 优先使用前端传入的 conversationId（用于审批缓存作用域）；缺省退化为 session_id。
+    let conversation_id = args
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| session_id.clone());
 
     tokio::spawn(async move {
         if tools_enabled {
@@ -710,7 +784,8 @@ pub async fn start_ollama_chat_stream(
             let manifests = registry_arc.list_for_llm(ToolScope::Global);
             let tools_json = agent_loop::list_for_llm_to_ollama_tools(&manifests);
 
-            agent_loop::run_agent_stream(
+            // Discard returned summary — only skill_tool needs it (followup #1A).
+            let _ = agent_loop::run_agent_stream(
                 app_h.clone(),
                 sid.clone(),
                 messages,
@@ -728,6 +803,7 @@ pub async fn start_ollama_chat_stream(
                 cancel,
                 agent_loop::AgentLoopConfig::default(),
                 conversation_id,
+                approval_arc,
             )
             .await;
         } else {
@@ -761,4 +837,67 @@ pub fn abort_llm_stream(session_id: String, sessions: State<'_, Arc<LlmSessionSt
         token.cancel();
     }
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RespondToolApprovalArgs {
+    pub approval_id: String,
+    pub decision: bool,
+}
+
+/// 前端响应一次审批请求（Allow / Deny）。
+#[tauri::command]
+pub fn respond_tool_approval(
+    args: RespondToolApprovalArgs,
+    approval: State<'_, Arc<approval::ToolApprovalState>>,
+) -> Result<(), String> {
+    approval.resolve(&args.approval_id, args.decision)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearConversationApprovalsArgs {
+    pub conversation_id: String,
+}
+
+/// 切换或删除会话时清理该会话的 ConfirmOncePerSession 缓存。
+#[tauri::command]
+pub fn clear_conversation_approvals(
+    args: ClearConversationApprovalsArgs,
+    approval: State<'_, Arc<approval::ToolApprovalState>>,
+) -> Result<(), String> {
+    approval.clear_conversation(&args.conversation_id);
+    Ok(())
+}
+
+#[cfg(test)]
+mod skills_block_tests {
+    use super::build_skills_system_block;
+
+    #[test]
+    fn returns_none_when_empty() {
+        assert!(build_skills_system_block(&[]).is_none());
+    }
+
+    #[test]
+    fn includes_id_name_and_when_to_use() {
+        let skills = vec![
+            (
+                "writing_coach".to_string(),
+                "写作教练".to_string(),
+                Some("打磨笔记".to_string()),
+            ),
+            ("review".to_string(), "复盘".to_string(), None),
+        ];
+        let block = build_skills_system_block(&skills).expect("should build");
+        assert!(block.contains("skill.writing_coach"));
+        assert!(block.contains("写作教练"));
+        assert!(block.contains("打磨笔记"));
+        assert!(block.contains("skill.review"));
+        assert!(block.contains("复盘"));
+        // The trailing instruction must be present so the parent LLM does not
+        // re-render the skill's content.
+        assert!(block.contains("Skills cannot invoke other skills"));
+    }
 }

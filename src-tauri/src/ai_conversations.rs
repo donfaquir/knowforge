@@ -116,6 +116,12 @@ struct PersistedMessageDisk {
     content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reply_context_sources: Option<Value>,
+    /// Skill 子轮次标识。`None` = 主对话消息；`Some(id)` = 该消息属于某次 Skill 调用的子对话，
+    /// 用于前端渲染徽章并在主对话发送前从 prompt 历史中过滤掉。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    skill_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    skill_name: Option<String>,
 }
 
 /// 会话级「想法聚焦」上下文（磁盘与 LLM 字段对齐）
@@ -239,6 +245,10 @@ pub struct PersistedMessageOut {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_context_sources: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -285,6 +295,10 @@ pub struct PersistedMessageIn {
     pub streaming: Option<bool>,
     #[serde(default)]
     pub reply_context_sources: Option<Value>,
+    #[serde(default)]
+    pub skill_id: Option<String>,
+    #[serde(default)]
+    pub skill_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -342,6 +356,8 @@ fn validate_messages_for_save(msgs: &[PersistedMessageIn]) -> Result<Vec<Persist
             role,
             content: m.content.clone(),
             reply_context_sources: m.reply_context_sources.clone(),
+            skill_id: m.skill_id.clone(),
+            skill_name: m.skill_name.clone(),
         });
     }
     Ok(out)
@@ -455,6 +471,8 @@ fn load_ai_conversation_for_subdir(root: &Path, subdir: &str, args: LoadAiConver
             role: m.role,
             content: m.content,
             reply_context_sources: m.reply_context_sources,
+            skill_id: m.skill_id,
+            skill_name: m.skill_name,
         })
         .collect();
     Ok(ConversationBodyOut {
@@ -622,6 +640,8 @@ mod tests {
                         content: "Hello world".to_string(),
                         streaming: None,
                         reply_context_sources: None,
+                        skill_id: None,
+                        skill_name: None,
                     },
                     PersistedMessageIn {
                         id: "a1".to_string(),
@@ -629,6 +649,8 @@ mod tests {
                         content: "Hi".to_string(),
                         streaming: None,
                         reply_context_sources: None,
+                        skill_id: None,
+                        skill_name: None,
                     },
                 ],
                 set_as_active: Some(true),
@@ -656,6 +678,8 @@ mod tests {
             role: "assistant".to_string(),
             content: "only".to_string(),
             reply_context_sources: None,
+            skill_id: None,
+            skill_name: None,
         }];
         assert_eq!(compute_title_from_messages(&msgs), "New chat");
     }

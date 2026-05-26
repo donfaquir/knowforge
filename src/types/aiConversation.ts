@@ -15,6 +15,11 @@ export type PersistedChatMessage = {
   content: string;
   /** 本轮模型实际注入的上下文来源（用于历史会话回显引用来源） */
   replyContextSources?: ReplyContextSources;
+  /** Skill 子轮次标识：标记该消息属于哪个 Skill 的子对话；
+   *  持久化目的：(a) 重新打开 vault 后保留 🧠 徽章；
+   *  (b) 主对话发送时按此过滤掉 skill 子轮次，避免污染 prompt context。 */
+  skillId?: string;
+  skillName?: string;
 };
 
 /** 与 Rust `ThoughtFocusContextDisk` / LLM `thought_focus_context` 对齐 */
