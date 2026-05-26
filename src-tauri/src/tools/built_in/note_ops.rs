@@ -730,6 +730,178 @@ impl Tool for NoteCreateTool {
     }
 }
 
+// ─── NoteAppendTool ───────────────────────────────────────────────────────────
+
+pub struct NoteAppendTool {
+    manifest: ToolManifest,
+}
+
+impl NoteAppendTool {
+    pub fn new() -> Self {
+        Self {
+            manifest: ToolManifest {
+                name: "note.append".to_string(),
+                version: "1.0.0".to_string(),
+                protocol_version: "1.0".to_string(),
+                description: "在已有笔记文件末尾追加内容。适用于向文件尾部添加新段落、列表项或引用，无需读取并覆写整个文件。".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "required": ["rel_path", "content"],
+                    "properties": {
+                        "rel_path": { "type": "string", "description": "笔记相对路径（相对于工作区根目录）" },
+                        "content": { "type": "string", "description": "要追加的内容文本" }
+                    },
+                    "additionalProperties": false
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "rel_path": { "type": "string" },
+                        "bytes_appended": { "type": "integer" }
+                    }
+                }),
+                effects: vec![Effect::Read, Effect::Write],
+                risk: Risk::Caution,
+                privacy_aware: true,
+                requires_workspace: true,
+                default_approval: ApprovalPolicy::ConfirmOncePerSession,
+                examples: vec![],
+                tags: vec!["note".to_string(), "append".to_string()],
+                deprecated: None,
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for NoteAppendTool {
+    fn manifest(&self) -> &ToolManifest {
+        &self.manifest
+    }
+
+    async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {
+        let start = std::time::Instant::now();
+
+        let rel_path = match input.get("rel_path").and_then(|v| v.as_str()) {
+            Some(p) => p.to_string(),
+            None => return err_invalid_input("rel_path is required"),
+        };
+        let content = match input.get("content").and_then(|v| v.as_str()) {
+            Some(c) => c.to_string(),
+            None => return err_invalid_input("content is required"),
+        };
+
+        let root = ctx.workspace_root.clone();
+        let rel = rel_path.clone();
+
+        let result = tauri::async_runtime::spawn_blocking(move || -> Result<usize, WriteError> {
+            let full_path = crate::tools::path_safety::resolve_existing_under_root(&root, &rel)
+                .map_err(write_err_from_path_safety)?;
+
+            if crate::note_privacy::peek_kf_private_from_md_file(&full_path) {
+                return Err(WriteError::PrivacyBlocked);
+            }
+
+            // 读取已有内容以判断是否需要补一个换行分隔
+            let existing = std::fs::read_to_string(&full_path)
+                .map_err(|e| WriteError::Internal(format!("failed to read: {e}")))?;
+
+            let needs_leading_newline = !existing.is_empty() && !existing.ends_with('\n');
+
+            let mut payload = String::with_capacity(content.len() + 1);
+            if needs_leading_newline {
+                payload.push('\n');
+            }
+            payload.push_str(&content);
+
+            let bytes_appended = payload.len();
+
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&full_path)
+                .map_err(|e| WriteError::Internal(format!("failed to open: {e}")))?;
+            file.write_all(payload.as_bytes())
+                .map_err(|e| WriteError::Internal(format!("failed to append: {e}")))?;
+            file.sync_all()
+                .map_err(|e| WriteError::Internal(format!("failed to sync: {e}")))?;
+
+            Ok(bytes_appended)
+        })
+        .await;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(Ok(bytes_appended)) => ToolResult::Ok {
+                data: serde_json::json!({
+                    "rel_path": rel_path,
+                    "bytes_appended": bytes_appended
+                }),
+                redacted_count: 0,
+                warnings: vec![],
+                metrics: ToolMetrics { duration_ms, ..Default::default() },
+            },
+            Ok(Err(WriteError::NotFound(p))) => ToolResult::Err {
+                error: ToolError {
+                    code: ToolErrorCode::NotFound,
+                    message: format!("note not found: {p}"),
+                    retryable: false,
+                    cause: None,
+                },
+            },
+            Ok(Err(WriteError::PrivacyBlocked)) => ToolResult::Err {
+                error: ToolError {
+                    code: ToolErrorCode::PrivacyBlocked,
+                    message: "note is marked as private".to_string(),
+                    retryable: false,
+                    cause: None,
+                },
+            },
+            Ok(Err(WriteError::OutsideWorkspace)) => ToolResult::Err {
+                error: ToolError {
+                    code: ToolErrorCode::PermissionDenied,
+                    message: "path escapes workspace root".to_string(),
+                    retryable: false,
+                    cause: None,
+                },
+            },
+            Ok(Err(WriteError::InvalidRelPath(m))) => ToolResult::Err {
+                error: ToolError {
+                    code: ToolErrorCode::PermissionDenied,
+                    message: m,
+                    retryable: false,
+                    cause: None,
+                },
+            },
+            Ok(Err(WriteError::Internal(e))) => ToolResult::Err {
+                error: ToolError {
+                    code: ToolErrorCode::Internal,
+                    message: e,
+                    retryable: true,
+                    cause: None,
+                },
+            },
+            Ok(Err(e)) => ToolResult::Err {
+                error: ToolError {
+                    code: ToolErrorCode::Internal,
+                    message: format!("{e:?}"),
+                    retryable: false,
+                    cause: None,
+                },
+            },
+            Err(e) => ToolResult::Err {
+                error: ToolError {
+                    code: ToolErrorCode::Internal,
+                    message: e.to_string(),
+                    retryable: true,
+                    cause: None,
+                },
+            },
+        }
+    }
+}
+
 // ─── 辅助类型与函数 ───────────────────────────────────────────────────────────
 
 #[derive(Debug)]
