@@ -1,0 +1,34 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            > [!WARNING]
+            > **macOS 安全提示 / macOS Security Notice**
+            >
+            > macOS 可能会阻止未签名的应用运行。如果打开时遇到"已损坏"或"无法验证开发者"提示，请在终端执行：
+            >
+            > macOS may block unsigned apps from running. If you see a "damaged" or "unidentified developer" warning, run in Terminal:
+            >
+            > ```sh
+            > xattr -cr /Applications/Knowforge.app
+            > ```
+
+            ---
+
