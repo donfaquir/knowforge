@@ -141,6 +141,11 @@ type FormState = {
   semanticEnabled: boolean;
   semanticAutoIndex: boolean;
   semanticSearchWeight: string;
+  searchProvider: string;
+  searchSearxngBaseUrl: string;
+  searchTavilyApiKey: string;
+  searchAliyunEndpoint: string;
+  searchAliyunApiKey: string;
 };
 
 /** 空串按缺省处理，避免 parseInt/parseFloat('') 为 NaN 导致保存校验误判 */
@@ -233,6 +238,11 @@ function defaultForm(): FormState {
     semanticEnabled: true,
     semanticAutoIndex: true,
     semanticSearchWeight: "0.6",
+    searchProvider: "",
+    searchSearxngBaseUrl: "",
+    searchTavilyApiKey: "",
+    searchAliyunEndpoint: "",
+    searchAliyunApiKey: "",
   };
 }
 
@@ -261,6 +271,11 @@ function aiFormEqualsPersisted(a: FormState, b: FormState): boolean {
     "semanticEnabled",
     "semanticAutoIndex",
     "semanticSearchWeight",
+    "searchProvider",
+    "searchSearxngBaseUrl",
+    "searchTavilyApiKey",
+    "searchAliyunEndpoint",
+    "searchAliyunApiKey",
   ];
   for (const k of keys) {
     if (a[k] !== b[k]) {
@@ -301,6 +316,11 @@ function vaultConfigToForm(cfg: VaultConfigForUi): FormState {
     semanticEnabled: semantic.enabled !== false,
     semanticAutoIndex: semantic.autoIndexOnSave !== false,
     semanticSearchWeight: String(semantic.searchWeight ?? 0.6),
+    searchProvider: cfg.search?.provider ?? "",
+    searchSearxngBaseUrl: cfg.search?.searxng?.baseUrl ?? "",
+    searchTavilyApiKey: cfg.search?.tavily?.apiKey ?? "",
+    searchAliyunEndpoint: cfg.search?.aliyunOpensearch?.endpoint ?? "",
+    searchAliyunApiKey: cfg.search?.aliyunOpensearch?.apiKey ?? "",
   };
 }
 
@@ -637,6 +657,27 @@ export function AiLlmSettingsModal({
         autoIndexOnSave: form.semanticAutoIndex,
         searchWeight: semW,
       },
+      search: form.searchProvider
+        ? {
+            provider: form.searchProvider as "searxng" | "tavily" | "aliyun-opensearch",
+            ...(form.searchProvider === "searxng" && form.searchSearxngBaseUrl.trim()
+              ? { searxng: { baseUrl: form.searchSearxngBaseUrl.trim() } }
+              : {}),
+            ...(form.searchProvider === "tavily" && form.searchTavilyApiKey.trim()
+              ? { tavily: { apiKey: form.searchTavilyApiKey.trim() } }
+              : {}),
+            ...(form.searchProvider === "aliyun-opensearch" &&
+            form.searchAliyunEndpoint.trim() &&
+            form.searchAliyunApiKey.trim()
+              ? {
+                  aliyunOpensearch: {
+                    endpoint: form.searchAliyunEndpoint.trim(),
+                    apiKey: form.searchAliyunApiKey.trim(),
+                  },
+                }
+              : {}),
+          }
+        : { provider: null },
     };
 
     setSaving(true);
@@ -1029,6 +1070,94 @@ export function AiLlmSettingsModal({
               />
               <p className="ai-settings__hint">{t("settings.semanticSearchWeightHint")}</p>
               <SemanticIndexStatus workspaceReady={workspaceReady} tauriRuntime={tauriRuntime} />
+            </fieldset>
+
+            <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
+              <legend className="ai-settings__legend">{t("settings.searchSection")}</legend>
+              <label className="ai-settings__label" htmlFor="ai-search-provider">
+                {t("settings.searchProvider")}
+              </label>
+              <select
+                id="ai-search-provider"
+                className="app-modal__field ai-settings__field-grow ai-settings__model-select"
+                value={form.searchProvider}
+                onChange={(e) => setForm((f) => ({ ...f, searchProvider: e.target.value }))}
+              >
+                <option value="">{t("settings.searchProviderNone")}</option>
+                <option value="searxng">SearXNG</option>
+                <option value="tavily">Tavily</option>
+                <option value="aliyun-opensearch">Aliyun OpenSearch</option>
+              </select>
+
+              {form.searchProvider === "searxng" && (
+                <>
+                  <label className="ai-settings__label" htmlFor="ai-search-searxng-url">
+                    {t("settings.searchSearxngUrl")}
+                  </label>
+                  <input
+                    id="ai-search-searxng-url"
+                    className="app-modal__field"
+                    type="text"
+                    value={form.searchSearxngBaseUrl}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, searchSearxngBaseUrl: e.target.value }))
+                    }
+                    placeholder="http://localhost:8080"
+                    autoComplete="off"
+                  />
+                  <p className="ai-settings__hint">{t("settings.searchSearxngHelp")}</p>
+                </>
+              )}
+
+              {form.searchProvider === "tavily" && (
+                <>
+                  <label className="ai-settings__label" htmlFor="ai-search-tavily-key">
+                    {t("settings.searchTavilyApiKey")}
+                  </label>
+                  <input
+                    id="ai-search-tavily-key"
+                    className="app-modal__field"
+                    type="password"
+                    value={form.searchTavilyApiKey}
+                    onChange={(e) => setForm((f) => ({ ...f, searchTavilyApiKey: e.target.value }))}
+                    autoComplete="off"
+                  />
+                  <p className="ai-settings__hint">{t("settings.searchTavilyHelp")}</p>
+                </>
+              )}
+
+              {form.searchProvider === "aliyun-opensearch" && (
+                <>
+                  <label className="ai-settings__label" htmlFor="ai-search-aliyun-endpoint">
+                    {t("settings.searchAliyunEndpoint")}
+                  </label>
+                  <input
+                    id="ai-search-aliyun-endpoint"
+                    className="app-modal__field"
+                    type="text"
+                    value={form.searchAliyunEndpoint}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, searchAliyunEndpoint: e.target.value }))
+                    }
+                    placeholder="http://xxxx-hangzhou.opensearch.aliyuncs.com/v3/openapi/workspaces/default/web-search/ops-web-search-001"
+                    autoComplete="off"
+                  />
+                  <label className="ai-settings__label" htmlFor="ai-search-aliyun-key">
+                    {t("settings.searchAliyunApiKey")}
+                  </label>
+                  <input
+                    id="ai-search-aliyun-key"
+                    className="app-modal__field"
+                    type="password"
+                    value={form.searchAliyunApiKey}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, searchAliyunApiKey: e.target.value }))
+                    }
+                    autoComplete="off"
+                  />
+                  <p className="ai-settings__hint">{t("settings.searchAliyunHelp")}</p>
+                </>
+              )}
             </fieldset>
 
             <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>

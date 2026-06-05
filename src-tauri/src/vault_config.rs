@@ -565,15 +565,10 @@ struct CognitiveDiskPartial {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchProviderType {
-    Bing,
     Searxng,
     Tavily,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BingSearchConfig {
-    pub api_key: String,
+    #[serde(rename = "aliyun-opensearch")]
+    AliyunOpensearch,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -588,17 +583,24 @@ pub struct TavilySearchConfig {
     pub api_key: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AliyunOpensearchConfig {
+    pub endpoint: String,
+    pub api_key: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<SearchProviderType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bing: Option<BingSearchConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub searxng: Option<SearxngSearchConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tavily: Option<TavilySearchConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aliyun_opensearch: Option<AliyunOpensearchConfig>,
 }
 
 fn load_merged_search(v: &Value) -> SearchConfig {
@@ -618,23 +620,23 @@ pub fn load_search_config(root: &Path) -> Result<SearchConfig, String> {
 #[serde(rename_all = "camelCase")]
 pub struct SearchConfigPatch {
     pub provider: Option<Option<SearchProviderType>>,
-    pub bing: Option<Option<BingSearchConfig>>,
     pub searxng: Option<Option<SearxngSearchConfig>>,
     pub tavily: Option<Option<TavilySearchConfig>>,
+    pub aliyun_opensearch: Option<Option<AliyunOpensearchConfig>>,
 }
 
 fn apply_search_patch(cfg: &mut SearchConfig, patch: SearchConfigPatch) {
     if let Some(p) = patch.provider {
         cfg.provider = p;
     }
-    if let Some(b) = patch.bing {
-        cfg.bing = b;
-    }
     if let Some(s) = patch.searxng {
         cfg.searxng = s;
     }
     if let Some(t) = patch.tavily {
         cfg.tavily = t;
+    }
+    if let Some(a) = patch.aliyun_opensearch {
+        cfg.aliyun_opensearch = a;
     }
 }
 

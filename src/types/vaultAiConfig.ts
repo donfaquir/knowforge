@@ -53,6 +53,15 @@ export type SemanticConfigForUi = {
   searchWeight: number;
 };
 
+export type SearchProviderType = "searxng" | "tavily" | "aliyun-opensearch";
+
+export type SearchConfigForUi = {
+  provider?: SearchProviderType | null;
+  searxng?: { baseUrl: string };
+  tavily?: { apiKey: string };
+  aliyunOpensearch?: { endpoint: string; apiKey: string };
+};
+
 export type VaultConfigForUi = {
   /** IPC JSON 字段名为 `$schemaVersion` */
   readonly ["$schemaVersion"]?: number;
@@ -60,6 +69,7 @@ export type VaultConfigForUi = {
   cognitive: CognitiveConfigForUi;
   /** 迭代 6.2 起由后端返回；旧配置缺失时前端用默认值 */
   semantic?: SemanticConfigForUi;
+  search?: SearchConfigForUi;
 };
 
 // --- 与 `save_vault_config_patch` / `VaultConfigPatch`（camelCase JSON）对齐的保存载荷 ---
@@ -104,8 +114,16 @@ export type SemanticConfigSavePatch = {
   searchWeight: number;
 };
 
+export type SearchConfigSavePatch = {
+  provider?: SearchProviderType | null;
+  searxng?: { baseUrl: string } | null;
+  tavily?: { apiKey: string } | null;
+  aliyunOpensearch?: { endpoint: string; apiKey: string } | null;
+};
+
 export type VaultConfigSavePatch = {
   ai?: AiConfigSavePatch;
   cognitive?: CognitiveConfigSavePatch;
   semantic?: SemanticConfigSavePatch;
+  search?: SearchConfigSavePatch;
 };

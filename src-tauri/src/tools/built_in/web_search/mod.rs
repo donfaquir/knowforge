@@ -1,4 +1,6 @@
-pub mod bing;
+pub mod aliyun_opensearch;
+pub mod searxng;
+pub mod tavily;
 
 use std::time::{Duration, Instant};
 
@@ -13,7 +15,9 @@ use crate::tools::types::{
 };
 use crate::vault_config::{self, SearchProviderType};
 
-use bing::BingProvider;
+use aliyun_opensearch::AliyunOpensearchProvider;
+use searxng::SearxngProvider;
+use tavily::TavilyProvider;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -38,13 +42,12 @@ To enable web search, add a "search" section to .knowforge/config.json:
 
 {
   "search": {
-    "provider": "bing",
-    "bing": { "apiKey": "your-bing-api-key" }
+    "provider": "searxng",
+    "searxng": { "baseUrl": "http://localhost:8080" }
   }
 }
 
-Supported providers: bing, searxng, tavily
-Get a free Bing API key from Azure Cognitive Services (1000 queries/month)."#;
+Supported providers: searxng (self-hosted), tavily (api key from tavily.com), aliyun-opensearch (Alibaba Cloud AI Search)."#;
 
 // ─── Tool implementation ──────────────────────────────────────────────────────
 
@@ -156,8 +159,13 @@ impl Tool for WebSearchTool {
         };
 
         // ── Build HTTP client ──────────────────────────────────────────
+        let timeout_secs = match provider_type {
+            SearchProviderType::Tavily => 15,
+            SearchProviderType::AliyunOpensearch => 8,
+            _ => 10,
+        };
         let client = match reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(timeout_secs))
             .connect_timeout(Duration::from_secs(5))
             .build()
         {
@@ -176,23 +184,35 @@ impl Tool for WebSearchTool {
 
         // ── Execute search ─────────────────────────────────────────────
         let (results, provider_name) = match provider_type {
-            SearchProviderType::Bing => {
-                let api_key = match &config.bing {
-                    Some(cfg) if !cfg.api_key.is_empty() => cfg.api_key.clone(),
+            SearchProviderType::Searxng => {
+                let base_url = match &config.searxng {
+                    Some(cfg) if !cfg.base_url.is_empty() => cfg.base_url.clone(),
                     _ => {
                         return ToolResult::Err {
                             error: ToolError {
                                 code: ToolErrorCode::InvalidInput,
-                                message: "Bing provider selected but bing.apiKey not configured in .knowforge/config.json".to_string(),
+                                message: "SearXNG provider selected but searxng.baseUrl not configured in .knowforge/config.json".to_string(),
                                 retryable: false,
                                 cause: None,
                             },
                         };
                     }
                 };
-                let provider = BingProvider::new(api_key);
+                let provider = match SearxngProvider::new(base_url) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return ToolResult::Err {
+                            error: ToolError {
+                                code: ToolErrorCode::InvalidInput,
+                                message: e,
+                                retryable: false,
+                                cause: None,
+                            },
+                        };
+                    }
+                };
                 match provider.search(&client, &query, max_results).await {
-                    Ok(r) => (r, "bing"),
+                    Ok(r) => (r, "searxng"),
                     Err(e) => {
                         return ToolResult::Err {
                             error: ToolError {
@@ -209,27 +229,85 @@ impl Tool for WebSearchTool {
                     }
                 }
             }
-            SearchProviderType::Searxng => {
-                return ToolResult::Err {
-                    error: ToolError {
-                        code: ToolErrorCode::InvalidInput,
-                        message: "SearXNG provider is not yet implemented. Use 'bing' for now."
-                            .to_string(),
-                        retryable: false,
-                        cause: None,
-                    },
-                };
-            }
             SearchProviderType::Tavily => {
-                return ToolResult::Err {
-                    error: ToolError {
-                        code: ToolErrorCode::InvalidInput,
-                        message: "Tavily provider is not yet implemented. Use 'bing' for now."
-                            .to_string(),
-                        retryable: false,
-                        cause: None,
-                    },
+                let api_key = match &config.tavily {
+                    Some(cfg) if !cfg.api_key.is_empty() => cfg.api_key.clone(),
+                    _ => {
+                        return ToolResult::Err {
+                            error: ToolError {
+                                code: ToolErrorCode::InvalidInput,
+                                message: "Tavily provider selected but tavily.apiKey not configured in .knowforge/config.json".to_string(),
+                                retryable: false,
+                                cause: None,
+                            },
+                        };
+                    }
                 };
+                let provider = TavilyProvider::new(api_key);
+                match provider.search(&client, &query, max_results).await {
+                    Ok(r) => (r, "tavily"),
+                    Err(e) => {
+                        return ToolResult::Err {
+                            error: ToolError {
+                                code: if e.retryable {
+                                    ToolErrorCode::Timeout
+                                } else {
+                                    ToolErrorCode::PermissionDenied
+                                },
+                                message: e.message,
+                                retryable: e.retryable,
+                                cause: None,
+                            },
+                        };
+                    }
+                }
+            }
+            SearchProviderType::AliyunOpensearch => {
+                let (endpoint, api_key) = match &config.aliyun_opensearch {
+                    Some(cfg) if !cfg.endpoint.is_empty() && !cfg.api_key.is_empty() => {
+                        (cfg.endpoint.clone(), cfg.api_key.clone())
+                    }
+                    _ => {
+                        return ToolResult::Err {
+                            error: ToolError {
+                                code: ToolErrorCode::InvalidInput,
+                                message: "aliyun-opensearch provider selected but aliyunOpensearch.endpoint/apiKey not configured in .knowforge/config.json".to_string(),
+                                retryable: false,
+                                cause: None,
+                            },
+                        };
+                    }
+                };
+                let provider = match AliyunOpensearchProvider::new(endpoint, api_key) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return ToolResult::Err {
+                            error: ToolError {
+                                code: ToolErrorCode::InvalidInput,
+                                message: e,
+                                retryable: false,
+                                cause: None,
+                            },
+                        };
+                    }
+                };
+                match provider.search(&client, &query, max_results).await {
+                    Ok(r) => (r, "aliyun-opensearch"),
+                    Err(e) => {
+                        return ToolResult::Err {
+                            error: ToolError {
+                                code: if e.retryable {
+                                    ToolErrorCode::Timeout
+                                } else {
+                                    ToolErrorCode::PermissionDenied
+                                },
+                                message: e.message,
+                                retryable: e.retryable,
+                                cause: None,
+                            },
+                        };
+                    }
+                }
             }
         };
 
@@ -270,7 +348,7 @@ mod tests {
     #[test]
     fn test_not_configured_message_is_helpful() {
         assert!(NOT_CONFIGURED_MSG.contains("config.json"));
-        assert!(NOT_CONFIGURED_MSG.contains("bing"));
-        assert!(NOT_CONFIGURED_MSG.contains("apiKey"));
+        assert!(NOT_CONFIGURED_MSG.contains("searxng"));
+        assert!(NOT_CONFIGURED_MSG.contains("tavily"));
     }
 }

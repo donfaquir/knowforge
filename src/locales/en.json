@@ -562,7 +562,17 @@
     "semanticRebuildPhaseCompleted": "Completed",
     "semanticRebuildPhaseFailed": "Failed",
     "semanticRebuildPhaseUnknown": "Unknown ({{phase}})",
-    "semanticModelMissingHint": "Place BAAI bge-small-zh-v1.5 files (config.json, tokenizer.json, model.safetensors) under bundled resources models/bge-small-zh-v1.5/ or cache ~/.cache/knowforge/models/bge-small-zh-v1.5/."
+    "semanticModelMissingHint": "Place BAAI bge-small-zh-v1.5 files (config.json, tokenizer.json, model.safetensors) under bundled resources models/bge-small-zh-v1.5/ or cache ~/.cache/knowforge/models/bge-small-zh-v1.5/.",
+    "searchSection": "Web search",
+    "searchProvider": "Search provider",
+    "searchProviderNone": "Not configured",
+    "searchSearxngUrl": "SearXNG instance URL",
+    "searchSearxngHelp": "URL of your SearXNG instance (e.g. http://localhost:8080). Must use http or https.",
+    "searchTavilyApiKey": "Tavily API Key",
+    "searchTavilyHelp": "Get a free API key from tavily.com. Requires international network access.",
+    "searchAliyunEndpoint": "OpenSearch endpoint URL",
+    "searchAliyunApiKey": "OpenSearch API Key",
+    "searchAliyunHelp": "Get API key from Alibaba Cloud AI Search Platform console (opensearch.console.aliyun.com)."
   },
   "modals": {
     "newMarkdown": "New Markdown",

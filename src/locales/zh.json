@@ -562,7 +562,17 @@
     "semanticRebuildPhaseCompleted": "已完成",
     "semanticRebuildPhaseFailed": "失败",
     "semanticRebuildPhaseUnknown": "未知（{{phase}}）",
-    "semanticModelMissingHint": "将 BAAI bge-small-zh-v1.5 的 config.json、tokenizer.json、model.safetensors 放到应用资源目录 models/bge-small-zh-v1.5/ 或缓存 ~/.cache/knowforge/models/bge-small-zh-v1.5/ 后重试。"
+    "semanticModelMissingHint": "将 BAAI bge-small-zh-v1.5 的 config.json、tokenizer.json、model.safetensors 放到应用资源目录 models/bge-small-zh-v1.5/ 或缓存 ~/.cache/knowforge/models/bge-small-zh-v1.5/ 后重试。",
+    "searchSection": "网络搜索",
+    "searchProvider": "搜索引擎",
+    "searchProviderNone": "未配置",
+    "searchSearxngUrl": "SearXNG 实例地址",
+    "searchSearxngHelp": "SearXNG 实例的 URL（如 http://localhost:8080），必须使用 http 或 https。",
+    "searchTavilyApiKey": "Tavily API Key",
+    "searchTavilyHelp": "从 tavily.com 获取免费 API Key，需要国际网络访问。",
+    "searchAliyunEndpoint": "OpenSearch 接入地址",
+    "searchAliyunApiKey": "OpenSearch API Key",
+    "searchAliyunHelp": "从阿里云 AI 搜索开放平台控制台获取 API Key（opensearch.console.aliyun.com）。"
   },
   "modals": {
     "newMarkdown": "新建 Markdown",
