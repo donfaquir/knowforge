@@ -4,6 +4,10 @@ use serde::Deserialize;
 
 use crate::skills::types::{SkillManifest, SkillUiEntry};
 
+fn default_max_tool_result_chars() -> u32 {
+    8000
+}
+
 /// 从 .md 文件内容解析出 SkillManifest
 pub fn parse_skill_markdown(content: &str) -> Result<SkillManifest, SkillLoadError> {
     // 1. 查找 YAML frontmatter：以 "---\n" 开头，找到第二个 "---\n"
@@ -44,6 +48,8 @@ pub fn parse_skill_markdown(content: &str) -> Result<SkillManifest, SkillLoadErr
         auto_invocable: bool,
         #[serde(default)]
         when_to_use: Option<String>,
+        #[serde(default = "default_max_tool_result_chars")]
+        max_tool_result_chars: u32,
     }
 
     let fm: SkillFrontmatter = serde_yaml::from_str(yaml_str)
@@ -69,6 +75,7 @@ pub fn parse_skill_markdown(content: &str) -> Result<SkillManifest, SkillLoadErr
         tags: fm.tags,
         auto_invocable: fm.auto_invocable,
         when_to_use: fm.when_to_use,
+        max_tool_result_chars: fm.max_tool_result_chars,
     })
 }
 
@@ -104,6 +111,9 @@ pub fn serialize_skill_markdown(manifest: &SkillManifest) -> String {
     }
     if let Some(ref when) = manifest.when_to_use {
         yaml.push_str(&format!("when_to_use: {}\n", when));
+    }
+    if manifest.max_tool_result_chars != 8000 {
+        yaml.push_str(&format!("max_tool_result_chars: {}\n", manifest.max_tool_result_chars));
     }
     yaml.push_str("---\n\n");
     yaml.push_str(&manifest.system_prompt_template);

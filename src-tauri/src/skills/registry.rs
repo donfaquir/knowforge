@@ -182,6 +182,7 @@ mod tests {
             tags: vec![],
             auto_invocable: false,
             when_to_use: None,
+            max_tool_result_chars: 8000,
         }
     }
 

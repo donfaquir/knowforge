@@ -174,7 +174,7 @@ pub async fn run_skill_with_depth(
     let config = AgentLoopConfig {
         max_tool_calls: manifest.max_tool_calls,
         timeout_ms: manifest.timeout_secs.saturating_mul(1000),
-        max_tool_result_chars: 8000,
+        max_tool_result_chars: manifest.max_tool_result_chars as usize,
         nesting_depth,
     };
 
@@ -223,6 +223,7 @@ mod tests {
             tags: vec![],
             auto_invocable: false,
             when_to_use: None,
+            max_tool_result_chars: 8000,
         }
     }
 

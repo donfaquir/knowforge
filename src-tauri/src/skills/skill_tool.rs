@@ -357,6 +357,7 @@ mod tests {
             tags: vec![],
             auto_invocable: true,
             when_to_use: when.map(str::to_string),
+            max_tool_result_chars: 8000,
         }
     }
 
