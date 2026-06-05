@@ -560,6 +560,84 @@ struct CognitiveDiskPartial {
     writing_coach_cooldown_minutes: Option<u32>,
 }
 
+// --- 网络搜索配置 ---
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchProviderType {
+    Bing,
+    Searxng,
+    Tavily,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BingSearchConfig {
+    pub api_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearxngSearchConfig {
+    pub base_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TavilySearchConfig {
+    pub api_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<SearchProviderType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bing: Option<BingSearchConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub searxng: Option<SearxngSearchConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tavily: Option<TavilySearchConfig>,
+}
+
+fn load_merged_search(v: &Value) -> SearchConfig {
+    v.get("search")
+        .cloned()
+        .and_then(|s| serde_json::from_value(s).ok())
+        .unwrap_or_default()
+}
+
+pub fn load_search_config(root: &Path) -> Result<SearchConfig, String> {
+    let path = config_path(root);
+    let v = read_root_value(&path)?;
+    Ok(load_merged_search(&v))
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchConfigPatch {
+    pub provider: Option<Option<SearchProviderType>>,
+    pub bing: Option<Option<BingSearchConfig>>,
+    pub searxng: Option<Option<SearxngSearchConfig>>,
+    pub tavily: Option<Option<TavilySearchConfig>>,
+}
+
+fn apply_search_patch(cfg: &mut SearchConfig, patch: SearchConfigPatch) {
+    if let Some(p) = patch.provider {
+        cfg.provider = p;
+    }
+    if let Some(b) = patch.bing {
+        cfg.bing = b;
+    }
+    if let Some(s) = patch.searxng {
+        cfg.searxng = s;
+    }
+    if let Some(t) = patch.tavily {
+        cfg.tavily = t;
+    }
+}
+
 // --- 前端补丁 ---
 
 #[derive(Debug, Deserialize, Default)]
@@ -568,6 +646,7 @@ pub struct VaultConfigPatch {
     pub ai: Option<AiConfigPatch>,
     pub cognitive: Option<CognitiveConfigPatch>,
     pub semantic: Option<SemanticConfigPatch>,
+    pub search: Option<SearchConfigPatch>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -661,6 +740,7 @@ pub struct VaultConfigForUi {
     pub ai: AiConfigForUi,
     pub cognitive: CognitiveConfigForUi,
     pub semantic: SemanticConfig,
+    pub search: SearchConfig,
 }
 
 #[derive(Debug, Serialize)]
@@ -1238,11 +1318,13 @@ pub fn load_for_ui(root: &Path) -> Result<VaultConfigForUi, String> {
     let ai = load_merged_ai(&v)?;
     let cognitive = load_merged_cognitive(&v);
     let semantic = load_merged_semantic(&v);
+    let search = load_merged_search(&v);
     Ok(VaultConfigForUi {
         schema_version,
         ai: to_ai_for_ui(ai),
         cognitive: to_cognitive_for_ui(cognitive),
         semantic,
+        search,
     })
 }
 
@@ -1290,7 +1372,7 @@ pub fn bump_passive_highlight_inaccuracy(root: &Path, kind: &str) -> Result<(), 
 
 /// 合并补丁后原子写回；`ai` 与 `cognitive` 均为 `None` 时不写盘
 pub fn save_patch(root: &Path, patch: VaultConfigPatch) -> Result<(), String> {
-    if patch.ai.is_none() && patch.cognitive.is_none() && patch.semantic.is_none() {
+    if patch.ai.is_none() && patch.cognitive.is_none() && patch.semantic.is_none() && patch.search.is_none() {
         return Ok(());
     }
 
@@ -1322,6 +1404,13 @@ pub fn save_patch(root: &Path, patch: VaultConfigPatch) -> Result<(), String> {
         normalize_semantic(&mut merged);
         v["semantic"] =
             serde_json::to_value(&merged).map_err(|e| format!("failed to serialize semantic: {e}"))?;
+    }
+
+    if let Some(search_patch) = patch.search {
+        let mut merged = load_merged_search(&v);
+        apply_search_patch(&mut merged, search_patch);
+        v["search"] =
+            serde_json::to_value(&merged).map_err(|e| format!("failed to serialize search: {e}"))?;
     }
 
     let schema_out = read_schema_version(&v).max(CURRENT_SCHEMA_VERSION);

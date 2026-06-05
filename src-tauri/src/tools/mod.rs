@@ -100,6 +100,7 @@ pub fn register_builtin_tools(registry: &ToolRegistry) -> Result<(), registry::R
 
     // P4 network tools
     registry.register(Arc::new(built_in::web_ops::WebReadPageTool::new()))?;
+    registry.register(Arc::new(built_in::web_search::WebSearchTool::new()))?;
 
     Ok(())
 }
@@ -120,8 +121,8 @@ mod mod_tests {
             "register_builtin_tools failed: {:?}",
             result.err()
         );
-        // 确认工具总数：1(time.now) + 8(P1) + 4(P3 写操作) + 1(P4 网络) = 14
+        // 确认工具总数：1(time.now) + 8(P1) + 4(P3 写操作) + 2(P4 网络) = 15
         let tools = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
-        assert_eq!(tools.len(), 14, "expected 14 registered tools, got {}", tools.len());
+        assert_eq!(tools.len(), 15, "expected 15 registered tools, got {}", tools.len());
     }
 }
