@@ -10,6 +10,7 @@ use crate::tools::types::{
 };
 
 const MAX_RESPONSE_BYTES: u64 = 2 * 1024 * 1024; // 2 MB
+const MAX_HTML_FOR_CONVERT: usize = 200_000; // 200 KB cap before markdown conversion
 const DEFAULT_MAX_CHARS: u32 = 4000;
 const USER_AGENT: &str = "KnowForge/0.6.1";
 
@@ -348,14 +349,35 @@ impl Tool for WebReadPageTool {
 
         let bytes_in = body.len() as u64;
 
-        // ── Extract title ──────────────────────────────────────────────
-        let document = scraper::Html::parse_document(&body);
-        let title = extract_title(&document);
+        // ── Extract title (must finish before spawn_blocking moves body) ─
+        let title = {
+            let document = scraper::Html::parse_document(&body);
+            extract_title(&document)
+        };
 
-        // ── Clean and convert ──────────────────────────────────────────
-        let cleaned = clean_html(&body);
-        let markdown = htmd::convert(&cleaned).unwrap_or_default();
-        let markdown = collapse_blank_lines(&markdown);
+        // ── Clean and convert (spawn_blocking to avoid stalling tokio) ─
+        let markdown = match tokio::task::spawn_blocking(move || {
+            let mut cleaned = clean_html(&body);
+            if cleaned.len() > MAX_HTML_FOR_CONVERT {
+                cleaned.truncate(MAX_HTML_FOR_CONVERT);
+            }
+            let md = htmd::convert(&cleaned).unwrap_or_default();
+            collapse_blank_lines(&md)
+        })
+        .await
+        {
+            Ok(md) => md,
+            Err(_) => {
+                return ToolResult::Err {
+                    error: ToolError {
+                        code: ToolErrorCode::Internal,
+                        message: "HTML-to-Markdown conversion panicked".to_string(),
+                        retryable: false,
+                        cause: None,
+                    },
+                };
+            }
+        };
         let content_length = markdown.len();
         let (content, truncated) = truncate_at_paragraph(&markdown, max_chars);
 
