@@ -1746,7 +1746,8 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             let registry = app.state::<Arc<tools::ToolRegistry>>();
-            tools::register_builtin_tools(&registry).expect("failed to register builtin tools");
+            tools::register_builtin_tools(&registry, Some(app.handle()))
+                .expect("failed to register builtin tools");
             let skill_registry = app.state::<Arc<skills::SkillRegistry>>();
             skills::register_builtin_skills(&skill_registry, &registry)
                 .expect("failed to register builtin skills");

@@ -77,7 +77,10 @@ impl Tool for TimeNowTool {
     }
 }
 
-pub fn register_builtin_tools(registry: &ToolRegistry) -> Result<(), registry::RegistryError> {
+pub fn register_builtin_tools(
+    registry: &ToolRegistry,
+    app: Option<&tauri::AppHandle>,
+) -> Result<(), registry::RegistryError> {
     // 注意：所有声明 Effect::Read 或 Effect::Write 的工具，必须同时设置 privacy_aware = true，
     // 否则此函数会在应用启动阶段 panic。新增工具后必须运行 `cargo test tools::mod_tests` 验证。
     registry.register(TimeNowTool::new())?;
@@ -99,8 +102,12 @@ pub fn register_builtin_tools(registry: &ToolRegistry) -> Result<(), registry::R
     registry.register(Arc::new(built_in::thought_ops::ThoughtCreateTool::new()))?;
 
     // P4 network tools
-    registry.register(Arc::new(built_in::web_ops::WebReadPageTool::new()))?;
+    registry.register(Arc::new(built_in::web_ops::WebReadPageTool::new(
+        app.cloned(),
+    )))?;
     registry.register(Arc::new(built_in::web_search::WebSearchTool::new()))?;
+    registry.register(Arc::new(built_in::web_download::WebDownloadTool::new()))?;
+    registry.register(Arc::new(built_in::web_download::WebReadPdfTool::new()))?;
 
     Ok(())
 }
@@ -115,14 +122,14 @@ mod mod_tests {
     #[test]
     fn test_register_builtin_tools_succeeds() {
         let registry = ToolRegistry::new();
-        let result = register_builtin_tools(&registry);
+        let result = register_builtin_tools(&registry, None);
         assert!(
             result.is_ok(),
             "register_builtin_tools failed: {:?}",
             result.err()
         );
-        // 确认工具总数：1(time.now) + 8(P1) + 4(P3 写操作) + 2(P4 网络) = 15
+        // 确认工具总数：1(time.now) + 8(P1) + 4(P3 写操作) + 4(P4 网络) = 17
         let tools = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
-        assert_eq!(tools.len(), 15, "expected 15 registered tools, got {}", tools.len());
+        assert_eq!(tools.len(), 17, "expected 17 registered tools, got {}", tools.len());
     }
 }

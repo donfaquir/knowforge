@@ -25,9 +25,11 @@ serde_json = "1.0"
 url = "2.5"
 notify-debouncer-mini = "0.5"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
-scraper = "0.22"
+legible = "0.4"
 htmd = "0.1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+pdf-extract = "0.10"
+pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_latest", "thread_safe"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net", "io-util", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures-util = "0.3"
 bytes = "1"

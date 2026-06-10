@@ -30,7 +30,8 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "resources/models/bge-small-zh-v1.5"
+      "resources/models/bge-small-zh-v1.5",
+      "resources/libpdfium.dylib"
     ],
     "icon": [
       "icons/32x32.png",

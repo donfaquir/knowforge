@@ -224,7 +224,7 @@ mod mod_tests {
     #[test]
     fn register_builtin_skills_succeeds() {
         let tools = ToolRegistry::new();
-        crate::tools::register_builtin_tools(&tools).unwrap();
+        crate::tools::register_builtin_tools(&tools, None).unwrap();
         let skills = SkillRegistry::new();
         assert!(register_builtin_skills(&skills, &tools).is_ok());
         let listed = skills.list();
@@ -238,7 +238,7 @@ mod mod_tests {
     #[test]
     fn built_in_skills_reference_existing_tools_only() {
         let tools = ToolRegistry::new();
-        crate::tools::register_builtin_tools(&tools).unwrap();
+        crate::tools::register_builtin_tools(&tools, None).unwrap();
         for manifest in [writing_coach_manifest(), challenge_review_manifest(), web_research_manifest()] {
             for tool_name in &manifest.allowed_tools {
                 assert!(

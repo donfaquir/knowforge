@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn filters_tools_by_whitelist() {
         let r = ToolRegistry::new();
-        register_builtin_tools(&r).unwrap();
+        register_builtin_tools(&r, None).unwrap();
         let m = sample_manifest(vec!["time.now"]);
         let filtered = filter_tools_for_skill(&r, &m);
         assert_eq!(filtered.len(), 1);
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn skips_unknown_allowed_tools_at_filter_time() {
         let r = ToolRegistry::new();
-        register_builtin_tools(&r).unwrap();
+        register_builtin_tools(&r, None).unwrap();
         let m = sample_manifest(vec!["time.now", "nonexistent.tool"]);
         let filtered = filter_tools_for_skill(&r, &m);
         assert_eq!(filtered.len(), 1);

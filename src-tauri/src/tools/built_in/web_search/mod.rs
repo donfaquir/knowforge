@@ -62,13 +62,13 @@ impl WebSearchTool {
                 name: "web.search".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
-                description: "Search the web using a configured search engine and return structured results".to_string(),
+                description: "Search the web by keyword query (NOT a URL). Use only when you need to discover pages — if the user already provided a URL, use web.read_page instead".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Search query",
+                            "description": "Keyword search query (must NOT be a URL)",
                             "minLength": 2
                         },
                         "max_results": {
@@ -87,7 +87,7 @@ impl WebSearchTool {
                 risk: Risk::Caution,
                 privacy_aware: false,
                 requires_workspace: true,
-                default_approval: ApprovalPolicy::ConfirmOncePerSession,
+                default_approval: ApprovalPolicy::Auto,
                 examples: vec![],
                 tags: vec!["web".to_string(), "search".to_string()],
                 deprecated: None,

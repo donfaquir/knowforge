@@ -164,7 +164,7 @@ mod tests {
 
     fn make_tool_registry_with_time_now() -> ToolRegistry {
         let r = ToolRegistry::new();
-        crate::tools::register_builtin_tools(&r).unwrap();
+        crate::tools::register_builtin_tools(&r, None).unwrap();
         r
     }
 
