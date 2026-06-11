@@ -318,7 +318,7 @@ pub async fn run_agent_stream(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn execute_tool(
+pub(crate) async fn execute_tool(
     app: &AppHandle,
     session_id: &str,
     registry: &Arc<ToolRegistry>,

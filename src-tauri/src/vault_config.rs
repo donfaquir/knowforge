@@ -249,6 +249,8 @@ pub struct AiConfig {
     /// 其它工具对主 LLM 可见。旧 vault 缺该字段时通过 disk partial 显式默认 true。
     #[serde(default = "default_tools_enabled")]
     pub tools_enabled: bool,
+    #[serde(default)]
+    pub planning_enabled: bool,
 }
 
 fn default_tools_enabled() -> bool {
@@ -272,6 +274,7 @@ impl Default for AiConfig {
             parameters: AiParameters::default(),
             privacy: AiPrivacy::default(),
             tools_enabled: true,
+            planning_enabled: false,
         }
     }
 }
@@ -519,6 +522,7 @@ struct AiDiskPartial {
     parameters: Option<AiParametersPartial>,
     privacy: Option<AiPrivacyPartial>,
     tools_enabled: Option<bool>,
+    planning_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -661,6 +665,7 @@ pub struct AiConfigPatch {
     pub parameters: Option<AiParametersPatch>,
     pub privacy: Option<AiPrivacyPatch>,
     pub tools_enabled: Option<bool>,
+    pub planning_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -798,6 +803,7 @@ pub struct AiConfigForUi {
     pub parameters: AiParameters,
     pub privacy: AiPrivacy,
     pub tools_enabled: bool,
+    pub planning_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -932,6 +938,9 @@ fn merge_ai_from_disk_partial(mut cfg: AiConfig, partial: AiDiskPartial) -> AiCo
     if let Some(v) = partial.tools_enabled {
         cfg.tools_enabled = v;
     }
+    if let Some(v) = partial.planning_enabled {
+        cfg.planning_enabled = v;
+    }
     normalize_ai(&mut cfg);
     cfg
 }
@@ -1005,6 +1014,7 @@ fn to_ai_for_ui(ai: AiConfig) -> AiConfigForUi {
         parameters: ai.parameters,
         privacy: ai.privacy,
         tools_enabled: ai.tools_enabled,
+        planning_enabled: ai.planning_enabled,
     }
 }
 
@@ -1288,6 +1298,9 @@ fn apply_ai_patch(cfg: &mut AiConfig, patch: AiConfigPatch) {
     }
     if let Some(v) = patch.tools_enabled {
         cfg.tools_enabled = v;
+    }
+    if let Some(v) = patch.planning_enabled {
+        cfg.planning_enabled = v;
     }
 }
 

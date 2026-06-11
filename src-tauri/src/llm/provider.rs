@@ -130,6 +130,43 @@ pub fn create_provider(
     }
 }
 
+pub fn create_cloud_provider(config: &AiConfig) -> Result<Arc<dyn LlmProvider>, String> {
+    let model = resolve_model_name(
+        config.openai_compatible.last_used_model.as_deref(),
+        &config.openai_compatible.default_model,
+    )
+    .ok_or("No OpenAI model configured for cloud planning.")?;
+    if config.openai_compatible.api_key.trim().is_empty() {
+        return Err("OpenAI API key is required for tiered mode.".to_string());
+    }
+    Ok(Arc::new(
+        super::provider_openai::OpenAiCompatibleProvider::new(
+            config.openai_compatible.base_url.clone(),
+            config.openai_compatible.api_key.clone(),
+            model,
+            config.parameters.temperature,
+            config.parameters.top_p,
+            config.request.timeout_ms,
+            config.openai_compatible.organization_id.clone(),
+        ),
+    ))
+}
+
+pub fn create_local_provider(config: &AiConfig) -> Result<Arc<dyn LlmProvider>, String> {
+    let model = resolve_model_name(
+        config.ollama.last_used_model.as_deref(),
+        &config.ollama.default_model,
+    )
+    .ok_or("No Ollama model configured for local generation.")?;
+    Ok(Arc::new(super::provider_ollama::OllamaProvider::new(
+        config.ollama.base_url.clone(),
+        model,
+        config.parameters.temperature,
+        config.parameters.top_p,
+        config.request.timeout_ms,
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,13 +4,41 @@ pub(crate) mod ollama;
 pub(crate) mod agent_loop;
 pub mod approval;
 pub(crate) mod context_guard;
+pub(crate) mod planning;
 pub(crate) mod provider;
 pub(crate) mod provider_ollama;
 pub(crate) mod provider_openai;
+pub(crate) mod tiered;
 
 pub use provider::{
     create_provider, resolve_model_name, CompletionOverrides, LlmProvider,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentMode {
+    Direct,
+    LocalPlanning,
+    Tiered,
+}
+
+fn determine_agent_mode(ai: &vault_config::AiConfig) -> AgentMode {
+    if !ai.planning_enabled {
+        return AgentMode::Direct;
+    }
+
+    let has_ollama = ai.ollama.last_used_model.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some()
+        || !ai.ollama.default_model.trim().is_empty();
+
+    let has_openai = !ai.openai_compatible.api_key.trim().is_empty()
+        && (ai.openai_compatible.last_used_model.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some()
+            || !ai.openai_compatible.default_model.trim().is_empty());
+
+    if has_ollama && has_openai {
+        AgentMode::Tiered
+    } else {
+        AgentMode::LocalPlanning
+    }
+}
 
 use crate::depth_decisions;
 use crate::lock_workspace_root;
@@ -768,31 +796,130 @@ pub async fn start_ollama_chat_stream(
         .map(str::to_string)
         .unwrap_or_else(|| session_id.clone());
 
+    let agent_mode = if tools_enabled {
+        determine_agent_mode(&ai)
+    } else {
+        AgentMode::Direct
+    };
+
     tokio::spawn(async move {
         if tools_enabled {
             let manifests = registry_arc.list_for_llm(ToolScope::Global);
             let tools_json = provider.convert_tools(&manifests);
+            let loop_config = agent_loop::AgentLoopConfig {
+                max_context_tokens: ai.request.max_context_tokens,
+                ..Default::default()
+            };
 
-            let _ = agent_loop::run_agent_stream(
-                app_h.clone(),
-                sid.clone(),
-                messages,
-                tools_json,
-                registry_arc,
-                ctx_factory_arc,
-                workspace_root,
-                Some(cache),
-                Some(bundle),
-                provider.clone(),
-                cancel,
-                agent_loop::AgentLoopConfig {
-                    max_context_tokens: ai.request.max_context_tokens,
-                    ..Default::default()
-                },
-                conversation_id,
-                approval_arc,
-            )
-            .await;
+            match agent_mode {
+                AgentMode::Direct => {
+                    let _ = agent_loop::run_agent_stream(
+                        app_h.clone(),
+                        sid.clone(),
+                        messages,
+                        tools_json,
+                        registry_arc,
+                        ctx_factory_arc,
+                        workspace_root,
+                        Some(cache),
+                        Some(bundle),
+                        provider.clone(),
+                        cancel,
+                        loop_config,
+                        conversation_id,
+                        approval_arc,
+                    )
+                    .await;
+                }
+                AgentMode::LocalPlanning => {
+                    let _ = planning::run_planned_agent(
+                        app_h.clone(),
+                        sid.clone(),
+                        messages,
+                        tools_json,
+                        registry_arc,
+                        ctx_factory_arc,
+                        workspace_root,
+                        Some(cache),
+                        Some(bundle),
+                        provider.clone(),
+                        cancel,
+                        loop_config,
+                        conversation_id,
+                        approval_arc,
+                    )
+                    .await;
+                }
+                AgentMode::Tiered => {
+                    let cloud = match provider::create_cloud_provider(&ai) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            // Degrade to local planning
+                            let _ = planning::run_planned_agent(
+                                app_h.clone(),
+                                sid.clone(),
+                                messages,
+                                tools_json,
+                                registry_arc,
+                                ctx_factory_arc,
+                                workspace_root,
+                                Some(cache),
+                                Some(bundle),
+                                provider.clone(),
+                                cancel,
+                                loop_config,
+                                conversation_id,
+                                approval_arc,
+                            )
+                            .await;
+                            sessions_arc.remove_session(&sid);
+                            return;
+                        }
+                    };
+                    let local = match provider::create_local_provider(&ai) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            let _ = planning::run_planned_agent(
+                                app_h.clone(),
+                                sid.clone(),
+                                messages,
+                                tools_json,
+                                registry_arc,
+                                ctx_factory_arc,
+                                workspace_root,
+                                Some(cache),
+                                Some(bundle),
+                                provider.clone(),
+                                cancel,
+                                loop_config,
+                                conversation_id,
+                                approval_arc,
+                            )
+                            .await;
+                            sessions_arc.remove_session(&sid);
+                            return;
+                        }
+                    };
+                    let _ = tiered::run_tiered_agent(
+                        cloud,
+                        local,
+                        app_h.clone(),
+                        sid.clone(),
+                        messages,
+                        tools_json,
+                        registry_arc,
+                        ctx_factory_arc,
+                        workspace_root,
+                        Some(cache),
+                        Some(bundle),
+                        cancel,
+                        loop_config,
+                        conversation_id,
+                        approval_arc,
+                    )
+                    .await;
+                }
+            }
         } else {
             let _ = provider
                 .chat_stream(&app_h, &sid, messages, None, cancel)
@@ -876,5 +1003,48 @@ mod skills_block_tests {
         // The trailing instruction must be present so the parent LLM does not
         // re-render the skill's content.
         assert!(block.contains("Skills cannot invoke other skills"));
+    }
+}
+
+#[cfg(test)]
+mod agent_mode_tests {
+    use super::*;
+
+    fn base_config() -> vault_config::AiConfig {
+        vault_config::AiConfig::default()
+    }
+
+    #[test]
+    fn direct_when_planning_disabled() {
+        let ai = base_config();
+        assert_eq!(determine_agent_mode(&ai), AgentMode::Direct);
+    }
+
+    #[test]
+    fn local_planning_with_single_provider() {
+        let mut ai = base_config();
+        ai.planning_enabled = true;
+        ai.ollama.default_model = "llama3".to_string();
+        assert_eq!(determine_agent_mode(&ai), AgentMode::LocalPlanning);
+    }
+
+    #[test]
+    fn tiered_when_both_configured() {
+        let mut ai = base_config();
+        ai.planning_enabled = true;
+        ai.ollama.default_model = "llama3".to_string();
+        ai.openai_compatible.api_key = "sk-test".to_string();
+        ai.openai_compatible.default_model = "gpt-4o".to_string();
+        assert_eq!(determine_agent_mode(&ai), AgentMode::Tiered);
+    }
+
+    #[test]
+    fn local_planning_when_openai_has_no_key() {
+        let mut ai = base_config();
+        ai.planning_enabled = true;
+        ai.ollama.default_model = "llama3".to_string();
+        ai.openai_compatible.default_model = "gpt-4o".to_string();
+        // No API key
+        assert_eq!(determine_agent_mode(&ai), AgentMode::LocalPlanning);
     }
 }
