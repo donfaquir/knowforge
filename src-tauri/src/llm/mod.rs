@@ -718,6 +718,49 @@ pub async fn list_ollama_models(
     ollama::list_models(&base, timeout_ms).await
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ListOpenAiModelsArgs {
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[tauri::command]
+pub async fn list_openai_models(
+    state: State<'_, crate::WorkspaceState>,
+    args: ListOpenAiModelsArgs,
+) -> Result<Vec<String>, String> {
+    let root = lock_workspace_root(&state)?;
+    let ai = tauri::async_runtime::spawn_blocking(move || vault_config::load_ai_config_internal(&root))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    let base = match args.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(raw) => vault_config::normalize_openai_base_url(raw),
+        None => ai.openai_compatible.base_url.clone(),
+    };
+    let key = match args.api_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(k) => k.to_string(),
+        None => ai.openai_compatible.api_key.clone(),
+    };
+    if key.is_empty() {
+        return Err("API key is required".to_string());
+    }
+
+    let provider = provider_openai::OpenAiCompatibleProvider::new(
+        base,
+        key,
+        String::new(),
+        ai.parameters.temperature,
+        ai.parameters.top_p,
+        ai.request.timeout_ms,
+        ai.openai_compatible.organization_id.clone(),
+    );
+    provider.list_models().await
+}
+
 #[tauri::command]
 pub async fn start_ollama_chat_stream(
     app: AppHandle,

@@ -851,6 +851,22 @@ pub fn normalize_ollama_base_url(raw: &str) -> String {
     normalize_http_base(raw, DEFAULT_OLLAMA_BASE)
 }
 
+/// Normalize an OpenAI-compatible base URL — validates scheme but preserves
+/// the full path (e.g. `/compatible-mode/v1` for DashScope).
+pub fn normalize_openai_base_url(raw: &str) -> String {
+    let t = raw.trim().trim_end_matches('/');
+    if t.is_empty() {
+        return DEFAULT_OPENAI_BASE.to_string();
+    }
+    let Ok(u) = Url::parse(t) else {
+        return DEFAULT_OPENAI_BASE.to_string();
+    };
+    if u.scheme() != "http" && u.scheme() != "https" {
+        return DEFAULT_OPENAI_BASE.to_string();
+    }
+    t.to_string()
+}
+
 /// 将 baseUrl 规范为 http(s) 的 origin（无路径后缀）；非法则回退 default_url
 fn normalize_http_base(raw: &str, default_url: &str) -> String {
     let t = raw.trim();
@@ -950,8 +966,7 @@ fn normalize_ai(cfg: &mut AiConfig) {
         ActiveProvider::Openai | ActiveProvider::Ollama => cfg.active_provider,
     };
     cfg.ollama.base_url = normalize_http_base(&cfg.ollama.base_url, DEFAULT_OLLAMA_BASE);
-    cfg.openai_compatible.base_url =
-        normalize_http_base(&cfg.openai_compatible.base_url, DEFAULT_OPENAI_BASE);
+    cfg.openai_compatible.base_url = normalize_openai_base_url(&cfg.openai_compatible.base_url);
     cfg.request.timeout_ms = cfg.request.timeout_ms.clamp(TIMEOUT_MS_MIN, TIMEOUT_MS_MAX);
     cfg.parameters.temperature = cfg
         .parameters
