@@ -339,11 +339,7 @@ async fn execute_tool_calls(
     // Emit tool-call-start for each
     for tc in calls {
         let input_summary = tc.arguments.to_string();
-        let summary = if input_summary.len() > 200 {
-            format!("{}...", &input_summary[..200])
-        } else {
-            input_summary
-        };
+        let summary = truncate_str(&input_summary, 200);
         let _ = app.emit(
             "llm:tool-call-start",
             json!({
@@ -397,7 +393,7 @@ async fn execute_tool_calls(
                     "sessionId": session_id,
                     "toolCallId": tc.id,
                     "success": success,
-                    "resultSummary": if content.len() > 200 { format!("{}...", &content[..200]) } else { content.clone() },
+                    "resultSummary": truncate_str(&content, 200),
                     "durationMs": duration_ms,
                 }),
             );
@@ -408,6 +404,17 @@ async fn execute_tool_calls(
     .await;
 
     results
+}
+
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s.to_string();
+    }
+    let mut end = max_len;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
 }
 
 fn emit_agent_done(app: &AppHandle, session_id: &str) {
