@@ -7,11 +7,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::llm::ollama;
+use crate::llm::{create_provider, CompletionOverrides};
 use crate::llm::LlmChatMessage;
 use crate::thought_parser;
 use crate::thought_retrieval;
-use crate::vault_config::{self, ActiveProvider, DepthMode};
+use crate::vault_config::{self, DepthMode};
 use crate::{is_markdown_path, join_under_root, sanitize_io_error};
 
 // --- 写回 ---
@@ -268,25 +268,7 @@ fn normalize_template_kind(raw: Option<&str>) -> String {
     }
 }
 
-fn pick_ollama_model(ai: &vault_config::AiConfig) -> Result<String, String> {
-    ai.ollama
-        .last_used_model
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            let d = ai.ollama.default_model.trim();
-            if d.is_empty() {
-                None
-            } else {
-                Some(ai.ollama.default_model.clone())
-            }
-        })
-        .ok_or_else(|| "No model selected. Choose a model in settings.".to_string())
-}
-
-/// 生成挑战问句（仅 Ollama；失败时 `should_skip=true` 供通道二静默）
+/// 生成挑战问句（失败时 `should_skip=true` 供通道二静默）
 #[tauri::command]
 pub async fn generate_challenge_question(
     workspace: tauri::State<'_, crate::WorkspaceState>,
@@ -300,14 +282,17 @@ pub async fn generate_challenge_question(
     .await
     .map_err(|e| e.to_string())??;
 
-    if ai.active_provider != ActiveProvider::Ollama {
-        return Ok(GenerateChallengeQuestionResponse {
-            question: String::new(),
-            template_kind: "apply".to_string(),
-            degraded: false,
-            should_skip: true,
-        });
-    }
+    let provider = match create_provider(&ai, None) {
+        Ok(p) => p,
+        Err(_) => {
+            return Ok(GenerateChallengeQuestionResponse {
+                question: String::new(),
+                template_kind: "apply".to_string(),
+                degraded: false,
+                should_skip: true,
+            });
+        }
+    };
 
     let excerpt = args.thought_excerpt.trim();
     if excerpt.chars().count() < 8 {
@@ -318,18 +303,6 @@ pub async fn generate_challenge_question(
             should_skip: true,
         });
     }
-
-    let model = match pick_ollama_model(&ai) {
-        Ok(m) => m,
-        Err(_) => {
-            return Ok(GenerateChallengeQuestionResponse {
-                question: String::new(),
-                template_kind: "apply".to_string(),
-                degraded: false,
-                should_skip: true,
-            });
-        }
-    };
 
     let depth = resolve_depth_for_challenge(
         args.depth_mode,
@@ -365,15 +338,11 @@ pub async fn generate_challenge_question(
         },
     ];
 
-    let raw = ollama::run_chat_completion(
-        &ai.ollama.base_url,
-        &model,
-        &msgs,
-        (ai.parameters.temperature * 0.85).clamp(0.0, 1.0),
-        ai.parameters.top_p,
-        ai.request.timeout_ms.max(5000).min(60_000),
-    )
-    .await;
+    let overrides = CompletionOverrides {
+        temperature: Some((ai.parameters.temperature * 0.85).clamp(0.0, 1.0)),
+        ..Default::default()
+    };
+    let raw = provider.chat_completion(&msgs, Some(&overrides)).await;
 
     let fallback_q = if ui_locale_is_en(args.ui_locale.as_deref()) {
         FALLBACK_CHALLENGE_QUESTION_EN
@@ -455,16 +424,17 @@ pub async fn evaluate_challenge_answer(
         }
     };
 
-    if ai.active_provider != ActiveProvider::Ollama {
-        return Ok(EvaluateChallengeAnswerResponse {
-            passed: false,
-            sloppy: false,
-            commentary_md: empty_commentary(prefer_zh_copy).to_string(),
-            template_kind: None,
-        });
-    }
-
-    let model = pick_ollama_model(&ai)?;
+    let provider = match create_provider(&ai, None) {
+        Ok(p) => p,
+        Err(_) => {
+            return Ok(EvaluateChallengeAnswerResponse {
+                passed: false,
+                sloppy: false,
+                commentary_md: empty_commentary(prefer_zh_copy).to_string(),
+                template_kind: None,
+            });
+        }
+    };
 
     let depth = resolve_depth_for_challenge(args.depth_mode, None);
     let tone = depth_tone_line(depth);
@@ -489,15 +459,7 @@ pub async fn evaluate_challenge_answer(
         },
     ];
 
-    let raw = ollama::run_chat_completion(
-        &ai.ollama.base_url,
-        &model,
-        &msgs,
-        ai.parameters.temperature.clamp(0.0, 1.0),
-        ai.parameters.top_p,
-        ai.request.timeout_ms.max(5000).min(60_000),
-    )
-    .await;
+    let raw = provider.chat_completion(&msgs, None).await;
 
     let raw = match raw {
         Ok(s) => s,

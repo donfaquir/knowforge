@@ -3,6 +3,13 @@
 pub(crate) mod ollama;
 pub(crate) mod agent_loop;
 pub mod approval;
+pub(crate) mod provider;
+pub(crate) mod provider_ollama;
+pub(crate) mod provider_openai;
+
+pub use provider::{
+    create_provider, resolve_model_name, CompletionOverrides, LlmProvider,
+};
 
 use crate::depth_decisions;
 use crate::lock_workspace_root;
@@ -15,7 +22,6 @@ use crate::vault_config::{self, ActiveProvider, DepthMode};
 use crate::vault_context_search::{self, VaultSnippetKind};
 use std::path::PathBuf;
 use chrono::Utc;
-use ollama::run_chat_stream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -73,6 +79,8 @@ pub struct LlmChatMessage {
     pub tool_calls: Option<Vec<LlmToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -698,20 +706,21 @@ pub async fn start_ollama_chat_stream(
         .await
         .map_err(|e| e.to_string())??;
 
-    if ai.active_provider == ActiveProvider::Openai {
-        return Err("OpenAI provider is not implemented yet.".to_string());
-    }
-
     if args.messages.is_empty() {
         return Err("At least one message is required.".to_string());
     }
+
+    let model_override = args
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let provider = create_provider(&ai, model_override.map(|s| s))?;
 
     let cache = semantic_index::default_model_cache_dir();
     let bundle = semantic_index::resolve_bundle_model_dir(&app);
     let embed_paths = Some((cache.clone(), bundle.clone()));
     let tools_enabled = args.tools_enabled.unwrap_or(ai.tools_enabled);
-    // Iter 5 #4: snapshot auto_invocable skills so assemble_ollama_messages can
-    // surface them in the chat system prompt.
     let skills_for_prompt: Vec<(String, String, Option<String>)> = if tools_enabled {
         skills
             .list()
@@ -739,21 +748,6 @@ pub async fn start_ollama_chat_stream(
         }
     }
 
-    let model = args
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            ai.ollama
-                .last_used_model
-                .clone()
-                .filter(|s| !s.trim().is_empty())
-        })
-        .or_else(|| Some(ai.ollama.default_model.clone()).filter(|s| !s.trim().is_empty()))
-        .ok_or_else(|| "No model selected. Choose a model in settings.".to_string())?;
-
     let session_id = uuid::Uuid::new_v4().to_string();
     let cancel = CancellationToken::new();
     sessions.register(session_id.clone(), cancel.clone());
@@ -761,15 +755,10 @@ pub async fn start_ollama_chat_stream(
     let app_h = app.clone();
     let sid = session_id.clone();
     let sessions_arc = Arc::clone(sessions.inner());
-    let base = ai.ollama.base_url.clone();
-    let timeout_ms = ai.request.timeout_ms;
-    let temp = ai.parameters.temperature;
-    let top_p = ai.parameters.top_p;
     let registry_arc = Arc::clone(registry.inner());
     let ctx_factory_arc = Arc::clone(ctx_factory.inner());
     let approval_arc = Arc::clone(approval.inner());
     let workspace_root = root.clone();
-    // 优先使用前端传入的 conversationId（用于审批缓存作用域）；缺省退化为 session_id。
     let conversation_id = args
         .conversation_id
         .as_deref()
@@ -780,11 +769,9 @@ pub async fn start_ollama_chat_stream(
 
     tokio::spawn(async move {
         if tools_enabled {
-            // 把工具 manifest 列表转成 Ollama tools 协议格式
             let manifests = registry_arc.list_for_llm(ToolScope::Global);
-            let tools_json = agent_loop::list_for_llm_to_ollama_tools(&manifests);
+            let tools_json = provider.convert_tools(&manifests);
 
-            // Discard returned summary — only skill_tool needs it (followup #1A).
             let _ = agent_loop::run_agent_stream(
                 app_h.clone(),
                 sid.clone(),
@@ -795,11 +782,7 @@ pub async fn start_ollama_chat_stream(
                 workspace_root,
                 Some(cache),
                 Some(bundle),
-                base,
-                model,
-                temp,
-                top_p,
-                timeout_ms,
+                provider.clone(),
                 cancel,
                 agent_loop::AgentLoopConfig::default(),
                 conversation_id,
@@ -807,19 +790,9 @@ pub async fn start_ollama_chat_stream(
             )
             .await;
         } else {
-            let _ = run_chat_stream(
-                app_h.clone(),
-                sid.clone(),
-                base,
-                model,
-                messages,
-                temp,
-                top_p,
-                timeout_ms,
-                cancel,
-                None,
-            )
-            .await;
+            let _ = provider
+                .chat_stream(&app_h, &sid, messages, None, cancel)
+                .await;
         }
         sessions_arc.remove_session(&sid);
     });

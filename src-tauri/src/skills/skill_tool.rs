@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::llm::approval::ToolApprovalState;
 use crate::llm::LlmSessionState;
+use crate::llm::create_provider;
 use crate::semantic_index;
 use crate::tools::context::ToolContext;
 use crate::tools::registry::ToolRegistry;
@@ -27,7 +28,7 @@ use crate::tools::types::{
     ApprovalPolicy, Effect, Risk, Tool, ToolError, ToolErrorCode, ToolManifest, ToolMetrics,
     ToolResult,
 };
-use crate::vault_config::{self, ActiveProvider};
+use crate::vault_config;
 use crate::WorkspaceState;
 
 use super::registry::SkillRegistry;
@@ -193,29 +194,11 @@ impl Tool for SkillAsTool {
                 return tool_err(ToolErrorCode::Internal, &format!("config join: {e}"));
             }
         };
-        if ai.active_provider == ActiveProvider::Openai {
-            drop(permit);
-            return tool_err(
-                ToolErrorCode::Internal,
-                "OpenAI provider is not implemented yet.",
-            );
-        }
-        let model = ai
-            .ollama
-            .last_used_model
-            .clone()
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| {
-                Some(ai.ollama.default_model.clone()).filter(|s| !s.trim().is_empty())
-            });
-        let model = match model {
-            Some(m) => m,
-            None => {
+        let provider = match create_provider(&ai, None) {
+            Ok(p) => p,
+            Err(e) => {
                 drop(permit);
-                return tool_err(
-                    ToolErrorCode::Internal,
-                    "No model selected. Choose a model in settings.",
-                );
+                return tool_err(ToolErrorCode::Internal, &e);
             }
         };
 
@@ -263,10 +246,7 @@ impl Tool for SkillAsTool {
             approval_state,
             Some(cache),
             Some(bundle),
-            ai.ollama.base_url.clone(),
-            model,
-            ai.parameters.temperature,
-            ai.parameters.top_p,
+            provider,
             cancel,
             ctx.nesting_depth.saturating_add(1),
         )

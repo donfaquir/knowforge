@@ -1,12 +1,12 @@
 //! 写作教练：段落级论证检查 + Vault 关键词关联（Ollama JSON）
 
-use crate::llm::ollama;
+use crate::llm::create_provider;
 use crate::llm::LlmChatMessage;
 use crate::lock_workspace_root;
 use crate::note_privacy;
 use crate::challenge_review;
 use crate::thought_retrieval::{self, SearchThoughtArgs};
-use crate::vault_config::{self, ActiveProvider, DepthMode};
+use crate::vault_config::{self, DepthMode};
 use crate::vault_context_search::{self, SearchWorkspaceContextArgs, SearchWorkspaceLimits};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -194,7 +194,6 @@ fn prepare_blocking(
     root: &Path,
     args: &AnalyzeWritingCoachArgs,
 ) -> Result<Option<PrepareOutcome>, String> {
-    let ai = vault_config::load_ai_config_internal(root)?;
     let cog = vault_config::load_cognitive_merged(root)?;
 
     if !cog.writing_coach_enabled {
@@ -206,10 +205,6 @@ fn prepare_blocking(
     if writing_coach_cooldown_active(&cog.writing_coach_cooldown_until) {
         return Ok(None);
     }
-    if ai.active_provider != ActiveProvider::Ollama {
-        return Err("Writing coach requires Ollama as the active provider.".to_string());
-    }
-
     let rel_path = norm_rel_path(&args.rel_path);
     note_privacy::validate_workspace_rel_path(&rel_path)?;
 
@@ -390,25 +385,8 @@ pub async fn analyze_writing_coach(
 
     let ai = vault_config::load_ai_config_internal(&root)
         .map_err(|e| e.to_string())?;
+    let provider = create_provider(&ai, None)?;
 
-    let model = ai
-        .ollama
-        .last_used_model
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            let d = ai.ollama.default_model.trim();
-            if d.is_empty() {
-                None
-            } else {
-                Some(ai.ollama.default_model.clone())
-            }
-        })
-        .ok_or_else(|| "No model selected. Choose a model in settings.".to_string())?;
-
-    let timeout_ms = ai.request.timeout_ms;
     let msgs = vec![
         LlmChatMessage {
             role: "system".into(),
@@ -422,16 +400,8 @@ pub async fn analyze_writing_coach(
         },
     ];
 
-    let raw = ollama::run_chat_completion(
-        &ai.ollama.base_url,
-        &model,
-        &msgs,
-        ai.parameters.temperature,
-        ai.parameters.top_p,
-        timeout_ms,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let raw = provider.chat_completion(&msgs, None).await
+        .map_err(|e| e.to_string())?;
 
     let slice = extract_json_object(&raw).map_err(|_| "invalid coach JSON".to_string())?;
     let parsed: CoachJsonRaw =

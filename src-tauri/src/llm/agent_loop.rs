@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
 use super::approval::ToolApprovalState;
-use super::ollama::{self, OllamaToolCallRaw};
+use super::provider::{LlmProvider, NormalizedToolCall};
 use super::{LlmChatMessage, LlmToolCall, LlmToolCallFunction};
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::ToolRegistry;
@@ -79,11 +79,7 @@ pub async fn run_agent_stream(
     workspace_root: PathBuf,
     app_cache_dir: Option<PathBuf>,
     app_bundle_resource_dir: Option<PathBuf>,
-    base_url: String,
-    model: String,
-    temperature: f64,
-    top_p: Option<f64>,
-    timeout_ms: u64,
+    provider: Arc<dyn LlmProvider>,
     cancel: CancellationToken,
     config: AgentLoopConfig,
     conversation_id: String,
@@ -99,51 +95,41 @@ pub async fn run_agent_stream(
         }
 
         // 1. 流式请求（携带 tools 字段；本轮文字会通过 emit_chunk/emit_done 推给前端）
-        let (raw_tool_calls, iter_content) = match ollama::run_chat_stream(
-            app.clone(),
-            session_id.clone(),
-            base_url.clone(),
-            model.clone(),
-            messages.clone(),
-            temperature,
-            top_p,
-            timeout_ms,
-            cancel.clone(),
-            Some(tools_json.clone()),
-        )
-        .await
+        let stream_result = match provider
+            .chat_stream(
+                &app,
+                &session_id,
+                messages.clone(),
+                Some(tools_json.clone()),
+                cancel.clone(),
+            )
+            .await
         {
-            Ok(tup) => tup,
+            Ok(r) => r,
             Err(_) => {
-                // run_chat_stream 内部已 emit_error；此处补一个 agent-done 收尾。
                 emit_agent_done(&app, &session_id);
                 return String::new();
             }
         };
 
         // 2. 无工具调用 → agent 循环完成；本轮文本即 final answer
-        let raw_calls = match raw_tool_calls {
+        let normalized_calls = match stream_result.tool_calls {
             Some(calls) if !calls.is_empty() => calls,
             _ => {
                 emit_agent_done(&app, &session_id);
-                return iter_content;
+                return stream_result.content;
             }
         };
 
-        // 3. 为每个 tool_call 生成追踪 ID（UUID v7）
-        let calls_with_ids: Vec<(String, OllamaToolCallRaw)> = raw_calls
-            .into_iter()
-            .map(|tc| (uuid::Uuid::now_v7().to_string(), tc))
-            .collect();
-
-        for (id, tc) in &calls_with_ids {
-            let input_summary = summarize_tool_input(&tc.function.arguments);
-            emit_tool_call_start(&app, &session_id, id, &tc.function.name, &input_summary);
+        // 3. NormalizedToolCall already carries an ID (UUID v7 for Ollama, server-provided for OpenAI)
+        for tc in &normalized_calls {
+            let input_summary = summarize_tool_input(&tc.arguments);
+            emit_tool_call_start(&app, &session_id, &tc.id, &tc.name, &input_summary);
         }
 
         // 4. 并行执行工具（每个工具有独立超时，支持取消）
         let tool_timeout = Duration::from_millis(config.timeout_ms);
-        let results = join_all(calls_with_ids.iter().map(|(id, tc)| {
+        let results = join_all(normalized_calls.iter().map(|tc| {
             let cancel = cancel.clone();
             let registry = registry.clone();
             let ctx_factory = ctx_factory.clone();
@@ -154,7 +140,6 @@ pub async fn run_agent_stream(
             let approval_state = approval_state.clone();
             let app = app.clone();
             let session_id = session_id.clone();
-            let id = id.clone();
             let tc = tc.clone();
             async move {
                 let nesting_depth = config.nesting_depth;
@@ -169,7 +154,6 @@ pub async fn run_agent_stream(
                         app_cache_dir,
                         app_bundle_resource_dir,
                         &conversation_id,
-                        &id,
                         &tc,
                         &approval_state,
                         &cancel,
@@ -177,7 +161,7 @@ pub async fn run_agent_stream(
                     )) => {
                         match res {
                             Ok(tool_result) => tool_result,
-                            Err(_) => Err(format!("tool '{}' timed out after {}ms", tc.function.name, tool_timeout.as_millis())),
+                            Err(_) => Err(format!("tool '{}' timed out after {}ms", tc.name, tool_timeout.as_millis())),
                         }
                     }
                     _ = cancel.cancelled() => {
@@ -190,7 +174,7 @@ pub async fn run_agent_stream(
         }))
         .await;
 
-        for (i, (id, _)) in calls_with_ids.iter().enumerate() {
+        for (i, tc) in normalized_calls.iter().enumerate() {
             if let Some((result, duration_ms)) = results.get(i) {
                 let success = result.is_ok();
                 let result_summary = match result {
@@ -198,18 +182,18 @@ pub async fn run_agent_stream(
                     Err(e) => truncate_str(e, 200),
                 };
                 let error_message = result.as_ref().err().map(|e| e.as_str());
-                emit_tool_call_done(&app, &session_id, id, success, &result_summary, *duration_ms, error_message);
+                emit_tool_call_done(&app, &session_id, &tc.id, success, &result_summary, *duration_ms, error_message);
             }
         }
 
         // 5. 把含 tool_calls 的 assistant 消息追加到历史
-        let llm_tool_calls: Vec<LlmToolCall> = calls_with_ids
+        let llm_tool_calls: Vec<LlmToolCall> = normalized_calls
             .iter()
-            .map(|(id, tc)| LlmToolCall {
-                id: id.clone(),
+            .map(|tc| LlmToolCall {
+                id: tc.id.clone(),
                 function: LlmToolCallFunction {
-                    name: tc.function.name.clone(),
-                    arguments: tc.function.arguments.clone(),
+                    name: tc.name.clone(),
+                    arguments: tc.arguments.clone(),
                 },
             })
             .collect();
@@ -219,25 +203,22 @@ pub async fn run_agent_stream(
             content: String::new(),
             tool_calls: Some(llm_tool_calls),
             tool_name: None,
+            tool_call_id: None,
         });
 
-        // 6. 把每个 tool 结果以 role=tool 的消息追加到历史（tool_name 字段对齐 Ollama 协议）
-        for (i, (call_id, tc)) in calls_with_ids.iter().enumerate() {
+        // 6. 把每个 tool 结果以 role=tool 的消息追加到历史
+        for (i, tc) in normalized_calls.iter().enumerate() {
             let raw_content = match results.get(i) {
                 Some((Ok(val), _)) => val.to_string(),
                 Some((Err(e), _)) => format!("error: {}", e),
                 None => "error: no result".to_string(),
             };
-            // Fence external (web) content to mitigate prompt injection
-            let fenced = fence_if_external(&tc.function.name, &raw_content);
-            // Prefix with call ID so the model can correlate results with calls
-            let prefixed = format!("[call:{}] {}", call_id, fenced);
-            // 在 max_tool_result_chars 预算内截断本条结果，避免上下文爆炸
+            let fenced = fence_if_external(&tc.name, &raw_content);
+            let prefixed = format!("[call:{}] {}", tc.id, fenced);
             let remaining = config
                 .max_tool_result_chars
                 .saturating_sub(total_tool_result_chars);
             let content = if prefixed.len() > remaining {
-                // 安全截断到字符边界
                 let mut end = remaining;
                 while end > 0 && !prefixed.is_char_boundary(end) {
                     end -= 1;
@@ -248,16 +229,14 @@ pub async fn run_agent_stream(
             };
             total_tool_result_chars = total_tool_result_chars.saturating_add(content.len());
 
-            messages.push(LlmChatMessage {
-                role: "tool".to_string(),
-                content,
-                tool_calls: None,
-                tool_name: Some(tc.function.name.clone()),
-            });
+            let mut tool_msg =
+                provider.build_tool_result_message(&tc.id, &tc.name, &content);
+            tool_msg.content = content;
+            messages.push(tool_msg);
         }
 
         // 7. 上限检查
-        tool_call_count = tool_call_count.saturating_add(calls_with_ids.len() as u8);
+        tool_call_count = tool_call_count.saturating_add(normalized_calls.len() as u8);
         if tool_call_count >= config.max_tool_calls
             || total_tool_result_chars >= config.max_tool_result_chars
         {
@@ -282,21 +261,18 @@ async fn execute_tool(
     app_cache_dir: Option<PathBuf>,
     app_bundle_resource_dir: Option<PathBuf>,
     conversation_id: &str,
-    call_id: &str,
-    tc: &OllamaToolCallRaw,
+    tc: &NormalizedToolCall,
     approval_state: &Arc<ToolApprovalState>,
     cancel: &CancellationToken,
     nesting_depth: u8,
 ) -> Result<Value, String> {
     let tool = registry
-        .get(&tc.function.name)
-        .ok_or_else(|| format!("tool not found: {}", tc.function.name))?;
+        .get(&tc.name)
+        .ok_or_else(|| format!("tool not found: {}", tc.name))?;
 
-    // 审批门控：Tool 自主审批 与 manifest 策略取并集（任一方要求即触发审批）
-    let tool_requires = tool.requires_approval(&tc.function.arguments);
+    let tool_requires = tool.requires_approval(&tc.arguments);
     let manifest_policy = tool.manifest().default_approval.clone();
     let policy = if tool_requires && manifest_policy == ApprovalPolicy::Auto {
-        // Tool 动态升级：manifest 为 Auto 但 Tool 要求审批 → 升级为 ConfirmEach
         ApprovalPolicy::ConfirmEach
     } else {
         manifest_policy
@@ -304,10 +280,10 @@ async fn execute_tool(
     match &policy {
         ApprovalPolicy::Auto => { /* 直接放行 */ }
         ApprovalPolicy::Forbidden => {
-            return Err(format!("tool '{}' is forbidden", tc.function.name));
+            return Err(format!("tool '{}' is forbidden", tc.name));
         }
         ApprovalPolicy::ConfirmOncePerSession
-            if approval_state.is_pre_approved(conversation_id, &tc.function.name) =>
+            if approval_state.is_pre_approved(conversation_id, &tc.name) =>
         {
             // 会话级缓存命中,放行
         }
@@ -320,10 +296,10 @@ async fn execute_tool(
                     "sessionId": session_id,
                     "conversationId": conversation_id,
                     "approvalId": approval_id,
-                    "toolCallId": call_id,
-                    "toolName": tc.function.name,
+                    "toolCallId": tc.id,
+                    "toolName": tc.name,
                     "policy": &policy,
-                    "inputSummary": summarize_tool_input(&tc.function.arguments),
+                    "inputSummary": summarize_tool_input(&tc.arguments),
                     "risk": &manifest.risk,
                     "effects": &manifest.effects,
                 }),
@@ -332,7 +308,6 @@ async fn execute_tool(
             let decision = tokio::select! {
                 res = tokio::time::timeout(Duration::from_secs(120), rx) => res,
                 _ = cancel.cancelled() => {
-                    // _guard drop 时会自动清理 pending
                     return Err("cancelled".to_string());
                 }
             };
@@ -340,12 +315,11 @@ async fn execute_tool(
             match decision {
                 Ok(Ok(true)) => {
                     if matches!(policy, ApprovalPolicy::ConfirmOncePerSession) {
-                        approval_state.remember_approval(conversation_id, &tc.function.name);
+                        approval_state.remember_approval(conversation_id, &tc.name);
                     }
-                    // sender 已被 resolve 移除;_guard drop 时 discard_pending 是 no-op
                 }
                 Ok(Ok(false)) => {
-                    return Err(format!("user denied approval for tool '{}'", tc.function.name));
+                    return Err(format!("user denied approval for tool '{}'", tc.name));
                 }
                 Ok(Err(_)) => {
                     return Err("approval channel closed unexpectedly".to_string());
@@ -353,14 +327,14 @@ async fn execute_tool(
                 Err(_) => {
                     return Err(format!(
                         "approval timed out for tool '{}'",
-                        tc.function.name
+                        tc.name
                     ));
                 }
             }
         }
     }
 
-    tool.validate_input(&tc.function.arguments)
+    tool.validate_input(&tc.arguments)
         .map_err(|e| format!("validation failed: {}", e.message))?;
 
     let mut ctx = ctx_factory.create_context_at_depth(
@@ -370,15 +344,14 @@ async fn execute_tool(
         app_bundle_resource_dir,
         nesting_depth,
     );
-    ctx.call_id = Some(call_id.to_string());
+    ctx.call_id = Some(tc.id.clone());
 
     let manifest = tool.manifest().clone();
     let start = std::time::Instant::now();
 
-    let result = tool.invoke(&ctx, tc.function.arguments.clone()).await;
+    let result = tool.invoke(&ctx, tc.arguments.clone()).await;
     let duration_ms = start.elapsed().as_millis() as u64;
 
-    // 构造 AuditEntry 并记录（与 commands::invoke_tool 保持一致）
     let (result_summary, error_code) = match &result {
         crate::tools::types::ToolResult::Ok { redacted_count, .. } => (
             serde_json::json!({ "status": "ok", "redacted_count": redacted_count }),
@@ -400,7 +373,7 @@ async fn execute_tool(
         call_id: ctx.call_id.clone().unwrap_or_default(),
         tool_name: manifest.name.clone(),
         version: manifest.version.clone(),
-        input_redacted: crate::tools::audit::redact_value(&tc.function.arguments),
+        input_redacted: crate::tools::audit::redact_value(&tc.arguments),
         result_summary,
         duration_ms,
         approval: format!("{:?}", manifest.default_approval),
@@ -456,7 +429,7 @@ pub fn manifest_to_ollama_tool(manifest: &ToolManifest) -> Value {
     })
 }
 
-/// 从 [`ToolRegistry::list_for_llm`] 返回的精简 JSON 列表批量转 Ollama tools 数组。
+#[allow(dead_code)]
 pub fn list_for_llm_to_ollama_tools(manifests: &[Value]) -> Vec<Value> {
     manifests
         .iter()

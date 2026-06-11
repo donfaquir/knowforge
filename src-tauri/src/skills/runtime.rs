@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::llm::agent_loop::{self, AgentLoopConfig};
 use crate::llm::approval::ToolApprovalState;
+use crate::llm::provider::LlmProvider;
 use crate::llm::LlmChatMessage;
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::{ToolRegistry, ToolScope};
@@ -100,16 +101,9 @@ pub async fn run_skill(
     approval_state: Arc<ToolApprovalState>,
     app_cache_dir: Option<PathBuf>,
     app_bundle_resource_dir: Option<PathBuf>,
-    base_url: String,
-    model: String,
-    temperature: f64,
-    top_p: Option<f64>,
+    provider: Arc<dyn LlmProvider>,
     cancel: CancellationToken,
 ) -> String {
-    // Direct skill invocation from the dedicated `invoke_skill` command always
-    // starts at nesting depth 1 (the user, not another skill, triggered it —
-    // but downstream tools still see depth=1 to keep behavior identical to
-    // auto-invocation). See [`run_skill_with_depth`] for the explicit form.
     run_skill_with_depth(
         app,
         session_id,
@@ -123,10 +117,7 @@ pub async fn run_skill(
         approval_state,
         app_cache_dir,
         app_bundle_resource_dir,
-        base_url,
-        model,
-        temperature,
-        top_p,
+        provider,
         cancel,
         1,
     )
@@ -153,10 +144,7 @@ pub async fn run_skill_with_depth(
     approval_state: Arc<ToolApprovalState>,
     app_cache_dir: Option<PathBuf>,
     app_bundle_resource_dir: Option<PathBuf>,
-    base_url: String,
-    model: String,
-    temperature: f64,
-    top_p: Option<f64>,
+    provider: Arc<dyn LlmProvider>,
     cancel: CancellationToken,
     nesting_depth: u8,
 ) -> String {
@@ -167,9 +155,7 @@ pub async fn run_skill_with_depth(
         &workspace_root_str,
         &user_input,
     );
-    let tools_json = agent_loop::list_for_llm_to_ollama_tools(&filter_tools_for_skill(
-        &registry, &manifest,
-    ));
+    let tools_json = provider.convert_tools(&filter_tools_for_skill(&registry, &manifest));
 
     let config = AgentLoopConfig {
         max_tool_calls: manifest.max_tool_calls,
@@ -190,11 +176,7 @@ pub async fn run_skill_with_depth(
         workspace_root,
         app_cache_dir,
         app_bundle_resource_dir,
-        base_url,
-        model,
-        temperature,
-        top_p,
-        config.timeout_ms,
+        provider,
         cancel,
         config,
         conv_id,
