@@ -6,6 +6,9 @@
 //! - tool_call 追踪 ID 由服务端生成（uuid v7）。
 //! - tool 结果消息使用 `tool_name` 字段（非 `tool_call_id`），与 Ollama 协议保持一致。
 
+use std::collections::hash_map::DefaultHasher;
+use std::collections::VecDeque;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,6 +19,7 @@ use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
 use super::approval::ToolApprovalState;
+use super::context_guard::ContextGuard;
 use super::provider::{LlmProvider, NormalizedToolCall};
 use super::{LlmChatMessage, LlmToolCall, LlmToolCallFunction};
 use crate::tools::context::ToolContextFactory;
@@ -50,6 +54,8 @@ pub struct AgentLoopConfig {
     /// Iter 5 #4: 本轮 agent loop 内 ToolContext.nesting_depth 的赋值。
     /// 主对话默认 0；skill 子轮次为 1（由 [`crate::skills::runtime::run_skill_with_depth`] 设置）。
     pub nesting_depth: u8,
+    /// Provider context window size (tokens). Used by ContextGuard to trim history.
+    pub max_context_tokens: Option<u64>,
 }
 
 impl Default for AgentLoopConfig {
@@ -59,7 +65,37 @@ impl Default for AgentLoopConfig {
             timeout_ms: 60_000,
             max_tool_result_chars: 8000,
             nesting_depth: 0,
+            max_context_tokens: None,
         }
+    }
+}
+
+const LOOP_WINDOW_SIZE: usize = 8;
+const LOOP_THRESHOLD: usize = 3;
+
+struct LoopDetector {
+    recent: VecDeque<u64>,
+}
+
+impl LoopDetector {
+    fn new() -> Self {
+        Self {
+            recent: VecDeque::with_capacity(LOOP_WINDOW_SIZE),
+        }
+    }
+
+    fn check(&mut self, name: &str, args: &Value) -> bool {
+        let mut hasher = DefaultHasher::new();
+        name.hash(&mut hasher);
+        args.to_string().hash(&mut hasher);
+        let h = hasher.finish();
+
+        if self.recent.len() >= LOOP_WINDOW_SIZE {
+            self.recent.pop_front();
+        }
+        self.recent.push_back(h);
+
+        self.recent.iter().filter(|&&v| v == h).count() >= LOOP_THRESHOLD
     }
 }
 
@@ -88,11 +124,15 @@ pub async fn run_agent_stream(
     let mut messages = initial_messages;
     let mut total_tool_result_chars: usize = 0;
     let mut tool_call_count: u8 = 0;
+    let context_guard = ContextGuard::new(config.max_context_tokens);
+    let mut loop_detector = LoopDetector::new();
 
     loop {
         if cancel.is_cancelled() {
             return String::new();
         }
+
+        context_guard.trim_if_needed(&mut messages);
 
         // 1. 流式请求（携带 tools 字段；本轮文字会通过 emit_chunk/emit_done 推给前端）
         let stream_result = match provider
@@ -121,15 +161,27 @@ pub async fn run_agent_stream(
             }
         };
 
-        // 3. NormalizedToolCall already carries an ID (UUID v7 for Ollama, server-provided for OpenAI)
+        // 3. Loop detection: mark calls that repeat too often
+        let mut looped: Vec<bool> = Vec::with_capacity(normalized_calls.len());
+        let mut any_looped = false;
+        for tc in &normalized_calls {
+            let is_loop = loop_detector.check(&tc.name, &tc.arguments);
+            if is_loop {
+                any_looped = true;
+            }
+            looped.push(is_loop);
+        }
+
+        // 4. NormalizedToolCall already carries an ID (UUID v7 for Ollama, server-provided for OpenAI)
         for tc in &normalized_calls {
             let input_summary = summarize_tool_input(&tc.arguments);
             emit_tool_call_start(&app, &session_id, &tc.id, &tc.name, &input_summary);
         }
 
-        // 4. 并行执行工具（每个工具有独立超时，支持取消）
+        // 5. 并行执行工具（跳过循环调用；每个工具有独立超时，支持取消）
         let tool_timeout = Duration::from_millis(config.timeout_ms);
-        let results = join_all(normalized_calls.iter().map(|tc| {
+        let results = join_all(normalized_calls.iter().enumerate().map(|(idx, tc)| {
+            let skip = looped.get(idx).copied().unwrap_or(false);
             let cancel = cancel.clone();
             let registry = registry.clone();
             let ctx_factory = ctx_factory.clone();
@@ -142,6 +194,9 @@ pub async fn run_agent_stream(
             let session_id = session_id.clone();
             let tc = tc.clone();
             async move {
+                if skip {
+                    return (Err(format!("loop detected: '{}' called too many times with same arguments", tc.name)), 0u64);
+                }
                 let nesting_depth = config.nesting_depth;
                 let exec_start = std::time::Instant::now();
                 let result = tokio::select! {
@@ -233,6 +288,17 @@ pub async fn run_agent_stream(
                 provider.build_tool_result_message(&tc.id, &tc.name, &content);
             tool_msg.content = content;
             messages.push(tool_msg);
+        }
+
+        if any_looped {
+            messages.push(LlmChatMessage {
+                role: "system".to_string(),
+                content: "WARNING: One or more tool calls were skipped because the same tool \
+                          was called repeatedly with identical arguments. Vary your approach \
+                          or use a different tool."
+                    .to_string(),
+                ..Default::default()
+            });
         }
 
         // 7. 上限检查
@@ -349,7 +415,15 @@ async fn execute_tool(
     let manifest = tool.manifest().clone();
     let start = std::time::Instant::now();
 
-    let result = tool.invoke(&ctx, tc.arguments.clone()).await;
+    let mut result = tool.invoke(&ctx, tc.arguments.clone()).await;
+
+    if let crate::tools::types::ToolResult::Err { ref error } = result {
+        if error.retryable {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            result = tool.invoke(&ctx, tc.arguments.clone()).await;
+        }
+    }
+
     let duration_ms = start.elapsed().as_millis() as u64;
 
     let (result_summary, error_code) = match &result {
@@ -617,5 +691,50 @@ mod fence_tests {
         assert_eq!(fence_if_external("note.read", "content"), "content");
         assert_eq!(fence_if_external("vault.search_keyword", "x"), "x");
         assert_eq!(fence_if_external("thought.create", "y"), "y");
+    }
+}
+
+#[cfg(test)]
+mod loop_detector_tests {
+    use super::*;
+
+    #[test]
+    fn detects_repeated_calls() {
+        let mut ld = LoopDetector::new();
+        let args = json!({"query": "test"});
+        assert!(!ld.check("web.search", &args));
+        assert!(!ld.check("web.search", &args));
+        assert!(ld.check("web.search", &args)); // 3rd identical call
+    }
+
+    #[test]
+    fn different_calls_no_false_positive() {
+        let mut ld = LoopDetector::new();
+        assert!(!ld.check("note.read", &json!({"path": "a.md"})));
+        assert!(!ld.check("note.read", &json!({"path": "b.md"})));
+        assert!(!ld.check("note.read", &json!({"path": "c.md"})));
+        assert!(!ld.check("note.read", &json!({"path": "d.md"})));
+    }
+
+    #[test]
+    fn different_args_not_detected() {
+        let mut ld = LoopDetector::new();
+        assert!(!ld.check("web.search", &json!({"q": "a"})));
+        assert!(!ld.check("web.search", &json!({"q": "b"})));
+        assert!(!ld.check("web.search", &json!({"q": "c"})));
+    }
+
+    #[test]
+    fn window_eviction_resets() {
+        let mut ld = LoopDetector::new();
+        let args = json!({"q": "same"});
+        assert!(!ld.check("t", &args));
+        assert!(!ld.check("t", &args));
+        // Fill window with different calls to push out the old ones
+        for i in 0..LOOP_WINDOW_SIZE {
+            ld.check("other", &json!({"i": i}));
+        }
+        // Now the old entries are evicted, so this starts fresh
+        assert!(!ld.check("t", &args));
     }
 }

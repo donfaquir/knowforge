@@ -3,6 +3,7 @@
 pub(crate) mod ollama;
 pub(crate) mod agent_loop;
 pub mod approval;
+pub(crate) mod context_guard;
 pub(crate) mod provider;
 pub(crate) mod provider_ollama;
 pub(crate) mod provider_openai;
@@ -784,7 +785,10 @@ pub async fn start_ollama_chat_stream(
                 Some(bundle),
                 provider.clone(),
                 cancel,
-                agent_loop::AgentLoopConfig::default(),
+                agent_loop::AgentLoopConfig {
+                    max_context_tokens: ai.request.max_context_tokens,
+                    ..Default::default()
+                },
                 conversation_id,
                 approval_arc,
             )
