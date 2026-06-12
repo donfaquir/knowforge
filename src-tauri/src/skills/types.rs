@@ -31,6 +31,12 @@ pub struct SkillManifest {
     /// Helps the LLM decide when calling `skill.<id>` is appropriate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when_to_use: Option<String>,
+    #[serde(default = "default_max_tool_result_chars")]
+    pub max_tool_result_chars: u32,
+}
+
+fn default_max_tool_result_chars() -> u32 {
+    8000
 }
 
 impl SkillManifest {
@@ -62,6 +68,7 @@ mod tests {
             tags: vec!["test".to_string()],
             auto_invocable: false,
             when_to_use: None,
+            max_tool_result_chars: 8000,
         }
     }
 

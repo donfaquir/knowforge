@@ -1,9 +1,9 @@
 //! 被动高亮：对用户消息做旁路价值检测（Ollama 非流式 JSON）
 
-use crate::llm::ollama;
+use crate::llm::create_provider;
 use crate::llm::LlmChatMessage;
 use crate::lock_workspace_root;
-use crate::vault_config::{self, ActiveProvider};
+use crate::vault_config;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -121,33 +121,17 @@ pub async fn detect_passive_highlight(
     if !cog.passive_highlight_enabled {
         return Ok(empty());
     }
-    if ai.active_provider != ActiveProvider::Ollama {
-        return Ok(empty());
-    }
+
+    let provider = match create_provider(&ai, None) {
+        Ok(p) => p,
+        Err(_) => return Ok(empty()),
+    };
 
     let trimmed = args.text.trim();
     if trimmed.chars().count() < 20 {
         return Ok(empty());
     }
 
-    let model = ai
-        .ollama
-        .last_used_model
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            let d = ai.ollama.default_model.trim();
-            if d.is_empty() {
-                None
-            } else {
-                Some(ai.ollama.default_model.clone())
-            }
-        })
-        .ok_or_else(|| "No model selected. Choose a model in settings.".to_string())?;
-
-    let timeout_ms = ai.request.timeout_ms;
     let user_content = format!("Analyze the following user message.\n\n---\n{trimmed}\n---");
     let msgs = vec![
         LlmChatMessage {
@@ -162,16 +146,7 @@ pub async fn detect_passive_highlight(
         },
     ];
 
-    let raw = match ollama::run_chat_completion(
-        &ai.ollama.base_url,
-        &model,
-        &msgs,
-        ai.parameters.temperature,
-        ai.parameters.top_p,
-        timeout_ms,
-    )
-    .await
-    {
+    let raw = match provider.chat_completion(&msgs, None).await {
         Ok(s) => s,
         Err(_) => return Ok(empty()),
     };

@@ -127,6 +127,7 @@ type FormState = {
   topP: string;
   allowPrivateContentInLocalLlm: boolean;
   toolsEnabled: boolean;
+  planningEnabled: boolean;
   passiveHighlightEnabled: boolean;
   passiveHighlightConfidenceMin: string;
   writingCoachEnabled: boolean;
@@ -141,6 +142,14 @@ type FormState = {
   semanticEnabled: boolean;
   semanticAutoIndex: boolean;
   semanticSearchWeight: string;
+  searchProvider: string;
+  searchSearxngBaseUrl: string;
+  searchTavilyApiKey: string;
+  searchAliyunEndpoint: string;
+  searchAliyunApiKey: string;
+  openaiBaseUrl: string;
+  openaiApiKey: string;
+  openaiDefaultModel: string;
 };
 
 /** 空串按缺省处理，避免 parseInt/parseFloat('') 为 NaN 导致保存校验误判 */
@@ -219,6 +228,7 @@ function defaultForm(): FormState {
     topP: "",
     allowPrivateContentInLocalLlm: false,
     toolsEnabled: true,
+    planningEnabled: false,
     passiveHighlightEnabled: true,
     passiveHighlightConfidenceMin: "0.55",
     writingCoachEnabled: true,
@@ -233,6 +243,14 @@ function defaultForm(): FormState {
     semanticEnabled: true,
     semanticAutoIndex: true,
     semanticSearchWeight: "0.6",
+    searchProvider: "",
+    searchSearxngBaseUrl: "",
+    searchTavilyApiKey: "",
+    searchAliyunEndpoint: "",
+    searchAliyunApiKey: "",
+    openaiBaseUrl: "",
+    openaiApiKey: "",
+    openaiDefaultModel: "",
   };
 }
 
@@ -247,6 +265,7 @@ function aiFormEqualsPersisted(a: FormState, b: FormState): boolean {
     "topP",
     "allowPrivateContentInLocalLlm",
     "toolsEnabled",
+    "planningEnabled",
     "passiveHighlightEnabled",
     "passiveHighlightConfidenceMin",
     "writingCoachEnabled",
@@ -261,6 +280,14 @@ function aiFormEqualsPersisted(a: FormState, b: FormState): boolean {
     "semanticEnabled",
     "semanticAutoIndex",
     "semanticSearchWeight",
+    "searchProvider",
+    "searchSearxngBaseUrl",
+    "searchTavilyApiKey",
+    "searchAliyunEndpoint",
+    "searchAliyunApiKey",
+    "openaiBaseUrl",
+    "openaiApiKey",
+    "openaiDefaultModel",
   ];
   for (const k of keys) {
     if (a[k] !== b[k]) {
@@ -287,6 +314,7 @@ function vaultConfigToForm(cfg: VaultConfigForUi): FormState {
     topP: ai.parameters.topP != null ? String(ai.parameters.topP) : "",
     allowPrivateContentInLocalLlm: ai.privacy.allowPrivateContentInLocalLlm,
     toolsEnabled: ai.toolsEnabled !== false,
+    planningEnabled: ai.planningEnabled === true,
     passiveHighlightEnabled: cognitive.passiveHighlightEnabled !== false,
     passiveHighlightConfidenceMin: String(cognitive.passiveHighlightConfidenceMin ?? 0.55),
     writingCoachEnabled: cognitive.writingCoachEnabled !== false,
@@ -301,6 +329,14 @@ function vaultConfigToForm(cfg: VaultConfigForUi): FormState {
     semanticEnabled: semantic.enabled !== false,
     semanticAutoIndex: semantic.autoIndexOnSave !== false,
     semanticSearchWeight: String(semantic.searchWeight ?? 0.6),
+    searchProvider: cfg.search?.provider ?? "",
+    searchSearxngBaseUrl: cfg.search?.searxng?.baseUrl ?? "",
+    searchTavilyApiKey: cfg.search?.tavily?.apiKey ?? "",
+    searchAliyunEndpoint: cfg.search?.aliyunOpensearch?.endpoint ?? "",
+    searchAliyunApiKey: cfg.search?.aliyunOpensearch?.apiKey ?? "",
+    openaiBaseUrl: ai.openaiCompatible.baseUrl ?? "",
+    openaiApiKey: "",
+    openaiDefaultModel: ai.openaiCompatible.defaultModel ?? "",
   };
 }
 
@@ -320,6 +356,10 @@ export function AiLlmSettingsModal({
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [modelsBusy, setModelsBusy] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const [openaiApiKeyPresent, setOpenaiApiKeyPresent] = useState(false);
+  const [openaiModels, setOpenaiModels] = useState<string[]>([]);
+  const [openaiModelsBusy, setOpenaiModelsBusy] = useState(false);
+  const [openaiModelsError, setOpenaiModelsError] = useState<string | null>(null);
   /** 下拉选项：刷新结果 + 当前已保存但不在列表中的模型名 */
   const ollamaModelSelectOptions = useMemo(() => {
     const cur = form.ollamaDefaultModel.trim();
@@ -337,6 +377,22 @@ export function AiLlmSettingsModal({
     }
     return out;
   }, [ollamaModels, form.ollamaDefaultModel]);
+  const openaiModelSelectOptions = useMemo(() => {
+    const cur = form.openaiDefaultModel.trim();
+    const seen = new Set<string>();
+    const out: string[] = [];
+    if (cur && !openaiModels.includes(cur)) {
+      out.push(cur);
+      seen.add(cur);
+    }
+    for (const m of openaiModels) {
+      if (!seen.has(m)) {
+        out.push(m);
+        seen.add(m);
+      }
+    }
+    return out;
+  }, [openaiModels, form.openaiDefaultModel]);
   const [activeSection, setActiveSection] = useState<SettingsSection>("ai");
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [versionLoading, setVersionLoading] = useState(false);
@@ -371,6 +427,7 @@ export function AiLlmSettingsModal({
       setForm(next);
       savedAiFormRef.current = next;
       diskProviderNotOllamaRef.current = cfg.ai.activeProvider !== "ollama";
+      setOpenaiApiKeyPresent(cfg.ai.openaiCompatible?.apiKeyPresent === true);
     } catch (e) {
       if (!disposedRef.current) {
         setLoadError(e instanceof Error ? e.message : String(e));
@@ -524,6 +581,36 @@ export function AiLlmSettingsModal({
     }
   }, [workspaceReady, form.ollamaBaseUrl]);
 
+  const refreshOpenaiModels = useCallback(async () => {
+    if (!isTauri() || !workspaceReady) {
+      return;
+    }
+    setOpenaiModelsBusy(true);
+    setOpenaiModelsError(null);
+    try {
+      const base = form.openaiBaseUrl.trim();
+      const key = form.openaiApiKey.trim();
+      const list = await invoke<string[]>("list_openai_models", {
+        args: {
+          baseUrl: base.length > 0 ? base : undefined,
+          apiKey: key.length > 0 ? key : undefined,
+        },
+      });
+      if (!disposedRef.current) {
+        setOpenaiModels(list);
+      }
+    } catch (e) {
+      if (!disposedRef.current) {
+        setOpenaiModelsError(e instanceof Error ? e.message : String(e));
+        setOpenaiModels([]);
+      }
+    } finally {
+      if (!disposedRef.current) {
+        setOpenaiModelsBusy(false);
+      }
+    }
+  }, [workspaceReady, form.openaiBaseUrl, form.openaiApiKey]);
+
   const handleSave = useCallback(async () => {
     setSaveError(null);
     if (!isTauri() || !workspaceReady) {
@@ -618,6 +705,14 @@ export function AiLlmSettingsModal({
           allowPrivateContentInLocalLlm: form.allowPrivateContentInLocalLlm,
         },
         toolsEnabled: form.toolsEnabled,
+        planningEnabled: form.planningEnabled,
+        openaiCompatible: {
+          baseUrl: form.openaiBaseUrl.trim(),
+          defaultModel: form.openaiDefaultModel.trim(),
+          organizationId: null,
+          lastUsedModel: form.openaiDefaultModel.trim() || null,
+          ...(form.openaiApiKey.trim() ? { apiKey: form.openaiApiKey.trim() } : {}),
+        },
       },
       cognitive: {
         passiveHighlightEnabled: form.passiveHighlightEnabled,
@@ -637,6 +732,27 @@ export function AiLlmSettingsModal({
         autoIndexOnSave: form.semanticAutoIndex,
         searchWeight: semW,
       },
+      search: form.searchProvider
+        ? {
+            provider: form.searchProvider as "searxng" | "tavily" | "aliyun-opensearch",
+            ...(form.searchProvider === "searxng" && form.searchSearxngBaseUrl.trim()
+              ? { searxng: { baseUrl: form.searchSearxngBaseUrl.trim() } }
+              : {}),
+            ...(form.searchProvider === "tavily" && form.searchTavilyApiKey.trim()
+              ? { tavily: { apiKey: form.searchTavilyApiKey.trim() } }
+              : {}),
+            ...(form.searchProvider === "aliyun-opensearch" &&
+            form.searchAliyunEndpoint.trim() &&
+            form.searchAliyunApiKey.trim()
+              ? {
+                  aliyunOpensearch: {
+                    endpoint: form.searchAliyunEndpoint.trim(),
+                    apiKey: form.searchAliyunApiKey.trim(),
+                  },
+                }
+              : {}),
+          }
+        : { provider: null },
     };
 
     setSaving(true);
@@ -838,6 +954,12 @@ export function AiLlmSettingsModal({
                     ) : (
                       <>
             <div className="ai-settings__section-stack">
+
+            {/* ── Group: Model Providers ── */}
+            <details className="ai-settings__group" open>
+              <summary className="ai-settings__group-summary">{t("settings.providersGroup")}</summary>
+              <div className="ai-settings__group-body">
+
             <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
               <legend className="ai-settings__legend">{t("settings.ollama")}</legend>
               <p className="ai-settings__hint ai-settings__hint--ollama-lead">{t("settings.ollamaHint")}</p>
@@ -890,6 +1012,77 @@ export function AiLlmSettingsModal({
             </fieldset>
 
             <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
+              <legend className="ai-settings__legend">{t("settings.openaiSection")}</legend>
+              <p className="ai-settings__hint ai-settings__hint--ollama-lead">{t("settings.openaiHint")}</p>
+              <label className="ai-settings__label" htmlFor="ai-openai-base">
+                {t("settings.openaiBaseUrl")}
+              </label>
+              <input
+                id="ai-openai-base"
+                className="app-modal__field"
+                value={form.openaiBaseUrl}
+                onChange={(e) => setForm((f) => ({ ...f, openaiBaseUrl: e.target.value }))}
+                autoComplete="off"
+                placeholder="https://api.openai.com/v1"
+              />
+              <label className="ai-settings__label" htmlFor="ai-openai-key">
+                {t("settings.openaiApiKey")}
+              </label>
+              <input
+                id="ai-openai-key"
+                className="app-modal__field"
+                type="password"
+                value={form.openaiApiKey}
+                onChange={(e) => setForm((f) => ({ ...f, openaiApiKey: e.target.value }))}
+                autoComplete="off"
+                placeholder={openaiApiKeyPresent ? t("settings.openaiApiKeyPresent") : t("settings.openaiApiKeyEmpty")}
+              />
+              <label className="ai-settings__label" htmlFor="ai-openai-model">
+                {t("settings.openaiDefaultModel")}
+              </label>
+              <div className="ai-settings__row">
+                <select
+                  id="ai-openai-model"
+                  className="app-modal__field ai-settings__field-grow ai-settings__model-select"
+                  value={form.openaiDefaultModel}
+                  onChange={(e) => setForm((f) => ({ ...f, openaiDefaultModel: e.target.value }))}
+                  autoComplete="off"
+                >
+                  <option value="">{t("settings.modelSelectPlaceholder")}</option>
+                  {openaiModelSelectOptions.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={`app-modal__btn ai-settings__refresh-models${openaiModelsBusy ? " ai-settings__refresh-models--busy" : ""}`}
+                  disabled={openaiModelsBusy || !workspaceReady}
+                  aria-label={t("settings.refreshModels")}
+                  title={openaiModelsBusy ? t("settings.loading") : t("settings.refreshModels")}
+                  aria-busy={openaiModelsBusy}
+                  onClick={() => void refreshOpenaiModels()}
+                >
+                  <IconRefreshModels />
+                </button>
+              </div>
+              {openaiModelsError ? (
+                <p className="ai-settings__inline-error" role="alert">
+                  {openaiModelsError}
+                </p>
+              ) : null}
+            </fieldset>
+
+              </div>
+            </details>
+
+            {/* ── Group: Core ── */}
+            <details className="ai-settings__group" open>
+              <summary className="ai-settings__group-summary">{t("settings.coreGroup")}</summary>
+              <div className="ai-settings__group-body">
+
+            <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
               <legend className="ai-settings__legend">{t("settings.requestSampling")}</legend>
               <label className="ai-settings__label" htmlFor="ai-timeout">
                 {t("settings.timeoutMs")}
@@ -940,7 +1133,7 @@ export function AiLlmSettingsModal({
             </fieldset>
 
             <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
-              <legend className="ai-settings__legend">{t("settings.privacy")}</legend>
+              <legend className="ai-settings__legend">{t("settings.featuresSection")}</legend>
               <label className="ai-settings__check">
                 <input
                   type="checkbox"
@@ -951,14 +1144,7 @@ export function AiLlmSettingsModal({
                 />
                 {t("settings.allowPrivateLocal")}
               </label>
-            </fieldset>
-
-            <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
-              <legend className="ai-settings__legend">{t("settings.toolsSection")}</legend>
-              <label
-                className="ai-settings__check"
-                title={t("settings.toolsEnabledHint")}
-              >
+              <label className="ai-settings__check" title={t("settings.toolsEnabledHint")}>
                 <input
                   type="checkbox"
                   checked={form.toolsEnabled}
@@ -968,35 +1154,26 @@ export function AiLlmSettingsModal({
                 />
                 {t("settings.toolsEnabled")}
               </label>
-              <p className="app-modal__hint">{t("settings.toolsEnabledHint")}</p>
-            </fieldset>
-
-            <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
-              <legend className="ai-settings__legend">{t("settings.passiveHighlightSection")}</legend>
-              <label className="ai-settings__check">
+              <label className="ai-settings__check" title={t("settings.planningEnabledHint")}>
                 <input
                   type="checkbox"
-                  checked={form.passiveHighlightEnabled}
+                  checked={form.planningEnabled}
                   onChange={(e) =>
-                    setForm((f) => ({ ...f, passiveHighlightEnabled: e.target.checked }))
+                    setForm((f) => ({ ...f, planningEnabled: e.target.checked }))
                   }
                 />
-                {t("settings.passiveHighlightEnable")}
+                {t("settings.planningEnabled")}
               </label>
-              <label className="ai-settings__label" htmlFor="ai-passive-min-conf">
-                {t("settings.passiveHighlightMinConf")}
-              </label>
-              <input
-                id="ai-passive-min-conf"
-                className="app-modal__field"
-                value={form.passiveHighlightConfidenceMin}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, passiveHighlightConfidenceMin: e.target.value }))
-                }
-                inputMode="decimal"
-                autoComplete="off"
-              />
+              <p className="app-modal__hint">{t("settings.planningEnabledHint")}</p>
             </fieldset>
+
+              </div>
+            </details>
+
+            {/* ── Group: Search & Indexing ── */}
+            <details className="ai-settings__group">
+              <summary className="ai-settings__group-summary">{t("settings.searchGroup")}</summary>
+              <div className="ai-settings__group-body">
 
             <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
               <legend className="ai-settings__legend">{t("settings.semanticSearchSection")}</legend>
@@ -1029,6 +1206,129 @@ export function AiLlmSettingsModal({
               />
               <p className="ai-settings__hint">{t("settings.semanticSearchWeightHint")}</p>
               <SemanticIndexStatus workspaceReady={workspaceReady} tauriRuntime={tauriRuntime} />
+            </fieldset>
+
+            <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
+              <legend className="ai-settings__legend">{t("settings.searchSection")}</legend>
+              <label className="ai-settings__label" htmlFor="ai-search-provider">
+                {t("settings.searchProvider")}
+              </label>
+              <select
+                id="ai-search-provider"
+                className="app-modal__field ai-settings__field-grow ai-settings__model-select"
+                value={form.searchProvider}
+                onChange={(e) => setForm((f) => ({ ...f, searchProvider: e.target.value }))}
+              >
+                <option value="">{t("settings.searchProviderNone")}</option>
+                <option value="searxng">SearXNG</option>
+                <option value="tavily">Tavily</option>
+                <option value="aliyun-opensearch">Aliyun OpenSearch</option>
+              </select>
+
+              {form.searchProvider === "searxng" && (
+                <>
+                  <label className="ai-settings__label" htmlFor="ai-search-searxng-url">
+                    {t("settings.searchSearxngUrl")}
+                  </label>
+                  <input
+                    id="ai-search-searxng-url"
+                    className="app-modal__field"
+                    type="text"
+                    value={form.searchSearxngBaseUrl}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, searchSearxngBaseUrl: e.target.value }))
+                    }
+                    placeholder="http://localhost:8080"
+                    autoComplete="off"
+                  />
+                  <p className="ai-settings__hint">{t("settings.searchSearxngHelp")}</p>
+                </>
+              )}
+
+              {form.searchProvider === "tavily" && (
+                <>
+                  <label className="ai-settings__label" htmlFor="ai-search-tavily-key">
+                    {t("settings.searchTavilyApiKey")}
+                  </label>
+                  <input
+                    id="ai-search-tavily-key"
+                    className="app-modal__field"
+                    type="password"
+                    value={form.searchTavilyApiKey}
+                    onChange={(e) => setForm((f) => ({ ...f, searchTavilyApiKey: e.target.value }))}
+                    autoComplete="off"
+                  />
+                  <p className="ai-settings__hint">{t("settings.searchTavilyHelp")}</p>
+                </>
+              )}
+
+              {form.searchProvider === "aliyun-opensearch" && (
+                <>
+                  <label className="ai-settings__label" htmlFor="ai-search-aliyun-endpoint">
+                    {t("settings.searchAliyunEndpoint")}
+                  </label>
+                  <input
+                    id="ai-search-aliyun-endpoint"
+                    className="app-modal__field"
+                    type="text"
+                    value={form.searchAliyunEndpoint}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, searchAliyunEndpoint: e.target.value }))
+                    }
+                    placeholder="http://xxxx-hangzhou.opensearch.aliyuncs.com/v3/openapi/workspaces/default/web-search/ops-web-search-001"
+                    autoComplete="off"
+                  />
+                  <label className="ai-settings__label" htmlFor="ai-search-aliyun-key">
+                    {t("settings.searchAliyunApiKey")}
+                  </label>
+                  <input
+                    id="ai-search-aliyun-key"
+                    className="app-modal__field"
+                    type="password"
+                    value={form.searchAliyunApiKey}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, searchAliyunApiKey: e.target.value }))
+                    }
+                    autoComplete="off"
+                  />
+                  <p className="ai-settings__hint">{t("settings.searchAliyunHelp")}</p>
+                </>
+              )}
+            </fieldset>
+
+              </div>
+            </details>
+
+            {/* ── Group: Cognitive ── */}
+            <details className="ai-settings__group">
+              <summary className="ai-settings__group-summary">{t("settings.cognitiveGroup")}</summary>
+              <div className="ai-settings__group-body">
+
+            <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
+              <legend className="ai-settings__legend">{t("settings.passiveHighlightSection")}</legend>
+              <label className="ai-settings__check">
+                <input
+                  type="checkbox"
+                  checked={form.passiveHighlightEnabled}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, passiveHighlightEnabled: e.target.checked }))
+                  }
+                />
+                {t("settings.passiveHighlightEnable")}
+              </label>
+              <label className="ai-settings__label" htmlFor="ai-passive-min-conf">
+                {t("settings.passiveHighlightMinConf")}
+              </label>
+              <input
+                id="ai-passive-min-conf"
+                className="app-modal__field"
+                value={form.passiveHighlightConfidenceMin}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, passiveHighlightConfidenceMin: e.target.value }))
+                }
+                inputMode="decimal"
+                autoComplete="off"
+              />
             </fieldset>
 
             <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
@@ -1146,6 +1446,10 @@ export function AiLlmSettingsModal({
               />
               <p className="ai-settings__hint">{t("settings.challengeReviewDailyCapHint")}</p>
             </fieldset>
+
+              </div>
+            </details>
+
             </div>
                       </>
                     )}

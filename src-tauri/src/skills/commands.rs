@@ -9,12 +9,13 @@ use tauri::{AppHandle, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::llm::approval::ToolApprovalState;
+use crate::llm::create_provider;
 use crate::llm::LlmSessionState;
 use crate::lock_workspace_root;
 use crate::semantic_index;
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::ToolRegistry;
-use crate::vault_config::{self, ActiveProvider};
+use crate::vault_config;
 use crate::WorkspaceState;
 
 use super::registry::SkillRegistry;
@@ -320,24 +321,12 @@ pub async fn invoke_skill(
     .await
     .map_err(|e| e.to_string())??;
 
-    if ai.active_provider == ActiveProvider::Openai {
-        return Err("OpenAI provider is not implemented yet.".to_string());
-    }
-
-    let model = args
+    let model_override = args
         .model
         .as_deref()
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            ai.ollama
-                .last_used_model
-                .clone()
-                .filter(|s| !s.trim().is_empty())
-        })
-        .or_else(|| Some(ai.ollama.default_model.clone()).filter(|s| !s.trim().is_empty()))
-        .ok_or_else(|| "No model selected. Choose a model in settings.".to_string())?;
+        .filter(|s| !s.is_empty());
+    let provider = create_provider(&ai, model_override)?;
 
     let workspace_name = root
         .file_name()
@@ -367,9 +356,6 @@ pub async fn invoke_skill(
     let approval_arc = Arc::clone(approval.inner());
     let manifest_for_task = manifest.clone();
     let workspace_root = root.clone();
-    let base = ai.ollama.base_url.clone();
-    let temp = ai.parameters.temperature;
-    let top_p = ai.parameters.top_p;
     let input = args.input.clone();
 
     tokio::spawn(async move {
@@ -386,10 +372,7 @@ pub async fn invoke_skill(
             approval_arc,
             Some(cache),
             Some(bundle),
-            base,
-            model,
-            temp,
-            top_p,
+            provider,
             cancel,
         )
         .await;

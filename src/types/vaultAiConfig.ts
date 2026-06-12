@@ -44,6 +44,7 @@ export type AiConfigForUi = {
   privacy: AiPrivacy;
   /** Iter 5 #4: 主对话工具调用总开关(含内置 skills 暴露)。旧 vault 缺该字段时后端默认 true。 */
   toolsEnabled: boolean;
+  planningEnabled: boolean;
 };
 
 export type SemanticConfigForUi = {
@@ -53,6 +54,15 @@ export type SemanticConfigForUi = {
   searchWeight: number;
 };
 
+export type SearchProviderType = "searxng" | "tavily" | "aliyun-opensearch";
+
+export type SearchConfigForUi = {
+  provider?: SearchProviderType | null;
+  searxng?: { baseUrl: string };
+  tavily?: { apiKey: string };
+  aliyunOpensearch?: { endpoint: string; apiKey: string };
+};
+
 export type VaultConfigForUi = {
   /** IPC JSON 字段名为 `$schemaVersion` */
   readonly ["$schemaVersion"]?: number;
@@ -60,6 +70,7 @@ export type VaultConfigForUi = {
   cognitive: CognitiveConfigForUi;
   /** 迭代 6.2 起由后端返回；旧配置缺失时前端用默认值 */
   semantic?: SemanticConfigForUi;
+  search?: SearchConfigForUi;
 };
 
 // --- 与 `save_vault_config_patch` / `VaultConfigPatch`（camelCase JSON）对齐的保存载荷 ---
@@ -96,6 +107,7 @@ export type AiConfigSavePatch = {
     allowPrivateContentInLocalLlm: boolean;
   };
   toolsEnabled: boolean;
+  planningEnabled: boolean;
 };
 
 export type SemanticConfigSavePatch = {
@@ -104,8 +116,16 @@ export type SemanticConfigSavePatch = {
   searchWeight: number;
 };
 
+export type SearchConfigSavePatch = {
+  provider?: SearchProviderType | null;
+  searxng?: { baseUrl: string } | null;
+  tavily?: { apiKey: string } | null;
+  aliyunOpensearch?: { endpoint: string; apiKey: string } | null;
+};
+
 export type VaultConfigSavePatch = {
   ai?: AiConfigSavePatch;
   cognitive?: CognitiveConfigSavePatch;
   semantic?: SemanticConfigSavePatch;
+  search?: SearchConfigSavePatch;
 };

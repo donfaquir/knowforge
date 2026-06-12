@@ -1,12 +1,12 @@
 //! 主题网络（迭代 6.4）：LLM 提取主题、SQLite 缓存、二部图构建与 Markdown 导出快照。
 
-use crate::llm::ollama;
+use crate::llm::{create_provider, CompletionOverrides};
 use crate::llm::LlmChatMessage;
 use crate::note_privacy;
 use crate::semantic_index::{self, cosine_similarity};
 use crate::thought_parser::{split_frontmatter, FrontmatterSplit};
 use crate::understanding_graph::normalize_markdown_rel_path;
-use crate::vault_config::{ActiveProvider, AiConfig};
+use crate::vault_config::AiConfig;
 use crate::vault_context_search;
 use crate::vault_thoughts_db;
 use chrono::Utc;
@@ -322,23 +322,6 @@ Rules:
 - Topics should be stable labels useful for grouping many notes (no full sentences).
 "#;
 
-fn resolve_ollama_model_name(ai: &AiConfig) -> Option<String> {
-    ai.ollama
-        .last_used_model
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            let d = ai.ollama.default_model.trim();
-            if d.is_empty() {
-                None
-            } else {
-                Some(ai.ollama.default_model.clone())
-            }
-        })
-}
-
 fn markdown_body_and_headings(md: &str) -> (String, String) {
     let body = match split_frontmatter(md) {
         FrontmatterSplit::NoFence(s) | FrontmatterSplit::Unclosed(s) => s.to_string(),
@@ -358,16 +341,13 @@ fn markdown_body_and_headings(md: &str) -> (String, String) {
     (excerpt, headings)
 }
 
-/// 对单篇文档提取核心主题（Ollama 非流式）；非 Ollama 提供商返回 Err
+/// 对单篇文档提取核心主题（非流式）；无可用提供商返回 Err
 pub async fn extract_topics_for_document(
     doc_content_for_prompt: &str,
     existing_topics_list: &[String],
     ai: &AiConfig,
 ) -> Result<Vec<String>, String> {
-    if ai.active_provider != ActiveProvider::Ollama {
-        return Err("topic_extract_requires_ollama: switch AI provider to Ollama for topic extraction".to_string());
-    }
-    let model = resolve_ollama_model_name(ai).ok_or_else(|| "no Ollama model configured".to_string())?;
+    let provider = create_provider(ai, None)?;
     let list_block = if existing_topics_list.is_empty() {
         "(none)".to_string()
     } else {
@@ -376,7 +356,6 @@ pub async fn extract_topics_for_document(
     let user_body = format!(
         "Existing topics (prefer these when applicable):\n{list_block}\n\nNote content (excerpt and headings):\n---\n{doc_content_for_prompt}\n---"
     );
-    let timeout_ms = ai.request.timeout_ms.max(5000).min(120_000);
     let msgs = vec![
         LlmChatMessage {
             role: "system".into(),
@@ -389,15 +368,11 @@ pub async fn extract_topics_for_document(
             ..Default::default()
         },
     ];
-    let raw = ollama::run_chat_completion(
-        &ai.ollama.base_url,
-        &model,
-        &msgs,
-        ai.parameters.temperature.min(0.6),
-        ai.parameters.top_p,
-        timeout_ms,
-    )
-    .await?;
+    let overrides = CompletionOverrides {
+        temperature: Some(ai.parameters.temperature.min(0.6)),
+        ..Default::default()
+    };
+    let raw = provider.chat_completion(&msgs, Some(&overrides)).await?;
     let slice = extract_json_object(&raw)?;
     let parsed: TopicsJson = serde_json::from_str(&slice).map_err(|e| format!("topics JSON: {e}"))?;
     let mut out: Vec<String> = parsed
@@ -930,7 +905,7 @@ struct TopicExtractProgressPayload {
 /// 全量：扫描 vault、增量提取、构图
 pub async fn build_topic_network(vault_root: &Path, app: &AppHandle) -> Result<TopicNetworkForUi, String> {
     let ai = crate::vault_config::load_ai_config_internal(vault_root)?;
-    let ollama_ok = ai.active_provider == ActiveProvider::Ollama && resolve_ollama_model_name(&ai).is_some();
+    let ollama_ok = create_provider(&ai, None).is_ok();
 
     let topic_conn = open_topic_db(vault_root)?;
     let mut paths: Vec<PathBuf> = Vec::new();
@@ -1000,8 +975,17 @@ pub async fn build_topic_network(vault_root: &Path, app: &AppHandle) -> Result<T
         if raw_topics.len() < MIN_TOPICS_PER_DOC {
             continue;
         }
-        let model_id = resolve_ollama_model_name(&ai)
-            .unwrap_or_else(|| MODEL_ID_FALLBACK.to_string());
+        let model_id = match ai.active_provider {
+            crate::vault_config::ActiveProvider::Ollama => crate::llm::resolve_model_name(
+                ai.ollama.last_used_model.as_deref(),
+                &ai.ollama.default_model,
+            ),
+            crate::vault_config::ActiveProvider::Openai => crate::llm::resolve_model_name(
+                ai.openai_compatible.last_used_model.as_deref(),
+                &ai.openai_compatible.default_model,
+            ),
+        }
+        .unwrap_or_else(|| MODEL_ID_FALLBACK.to_string());
 
         let mut normalized: Vec<(String, f64)> = Vec::new();
         let mut new_aliases: Vec<(String, String)> = Vec::new();

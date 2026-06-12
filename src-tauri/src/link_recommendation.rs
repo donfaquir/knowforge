@@ -1,13 +1,13 @@
 //! 文档级语义相似度 → 双向链接推荐候选（迭代 6.3 步骤 15）。
 //! 无语义索引时不提供推荐（无关键词兜底）。
 
-use crate::llm::ollama;
+use crate::llm::create_provider;
 use crate::llm::LlmChatMessage;
 use crate::note_privacy;
 use crate::semantic_index::{self, DocChunkRow};
 use crate::thought_parser::{split_frontmatter, FrontmatterSplit};
 use crate::understanding_graph::{extract_wikilink_inners, normalize_markdown_rel_path, resolve_wikilink_inner_to_rel_path};
-use crate::vault_config::{ActiveProvider, AiConfig};
+use crate::vault_config::AiConfig;
 use aho_corasick::AhoCorasick;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -618,48 +618,18 @@ Rules:
 - Only include notes you are reasonably confident about; omit uncertain pairs.
 - Match the excerpt language when possible (Chinese excerpt → Chinese reasons)."#;
 
-fn resolve_ollama_model_name(ai: &ResolvedAiConfig) -> Option<String> {
-    ai.ollama
-        .last_used_model
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            let d = ai.ollama.default_model.trim();
-            if d.is_empty() {
-                None
-            } else {
-                Some(ai.ollama.default_model.clone())
-            }
-        })
-}
-
 /// 按当前激活提供商拉取一次非流式补全正文；失败或未实现时返回 None（调用方静默降级）。
 async fn link_reason_completion_body(
     ai: &ResolvedAiConfig,
     messages: &[LlmChatMessage],
     timeout_ms: u64,
 ) -> Option<String> {
-    match ai.active_provider {
-        ActiveProvider::Ollama => {
-            let model = resolve_ollama_model_name(ai)?;
-            ollama::run_chat_completion(
-                &ai.ollama.base_url,
-                &model,
-                messages,
-                ai.parameters.temperature,
-                ai.parameters.top_p,
-                timeout_ms,
-            )
-            .await
-            .ok()
-        }
-        ActiveProvider::Openai => {
-            // 后续多模型：在此调用 OpenAI 兼容 `/v1/chat/completions`（与主对话配置对齐）
-            None
-        }
-    }
+    let provider = create_provider(ai, None).ok()?;
+    let overrides = crate::llm::CompletionOverrides {
+        timeout_ms: Some(timeout_ms),
+        ..Default::default()
+    };
+    provider.chat_completion(messages, Some(&overrides)).await.ok()
 }
 
 /// 对已有候选调用 LLM 填充 `reason`；补全不可用、超时、解析失败时保持 `reason == None`（返回 `Ok(())`）。
@@ -732,7 +702,7 @@ pub async fn enrich_recommendations_with_reasons(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vault_config;
+    use crate::vault_config::{self, ActiveProvider};
 
     fn row(rel: &str, idx: i32, emb: Vec<f32>) -> DocChunkRow {
         let dim = emb.len() as i32;

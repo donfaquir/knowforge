@@ -12,6 +12,28 @@
 
 Knowforge 是一款基于 [Tauri 2](https://tauri.app/) 的跨平台桌面应用：前端为 **React + TypeScript + Vite**，核心业务逻辑在 **Rust**（`src-tauri/`）中运行。数据以本地为主，适合管理 Markdown 笔记、知识库目录与检索、写作辅助等场景（具体能力随版本迭代，以应用内体验为准）。
 
+### 核心问题
+
+大多数笔记工具解决的是**存储**问题——更好地写入、更快地检索。但真正的痛点不在存储，而在**理解**：
+
+1. **笔记成为"写完即忘"的坟场。** 知识被记下后很少再被回顾、质疑或深化。Knowforge 引入了「想法（Thought）」原语和成熟度生命周期（🌱 萌芽 → 🌿 成长 → 🌳 成熟），让知识成为可追踪、可进化的活性材料。
+
+2. **AI 对话中的洞见随聊天记录消散。** 与 AI 交流时常常产生跨领域的连接和顿悟，但它们被埋在历史消息里。Knowforge 的被动捕获机制会自动识别对话中的高价值想法，提示你将其保存为结构化的 Thought。
+
+3. **"收藏了 = 学会了"的错觉。** 收藏和理解之间存在鸿沟。Knowforge 通过挑战复习（Challenge Review）生成针对性问题来验证你是否真正理解了所记内容，通过后才推进想法的成熟度。
+
+4. **隐私与 AI 能力的两难。** 个人知识库往往包含敏感信息，云端 AI 服务让人不安。Knowforge 提供全本地的语义搜索管线（Rust 原生嵌入模型），并通过笔记级隐私标记确保敏感内容绝不被发送到任何 LLM。
+
+### 设计哲学
+
+- **理解优先于积累。** 认知报告、理解力图谱、想法成熟度追踪、挑战复习——所有核心功能都服务于同一命题：你的笔记应该帮你**思考得更好**，而非仅仅**存储得更多**。
+
+- **本地优先，隐私为底线。** 所有数据以 Markdown + 本地 SQLite 的形式存储在工作区目录中。`kf-private` 标记提供笔记级的隐私控制，解析失败时默认视为私密——宁可功能降级，也不泄露数据。
+
+- **AI 是思考伙伴，不是代笔人。** 写作教练（Writing Coach）不替你改写文字，而是就逻辑缺口提出追问、建议笔记间的关联；AI 用于激发思考，而非替代思考。
+
+- **可选而非绑定。** AI 能力（本地 Ollama 或 OpenAI 兼容 API）完全可选，按工作区独立配置。没有 AI 时，应用的所有核心笔记和知识管理功能依然完整可用。
+
 ### 功能概览
 
 - 本地 Markdown / 知识库工作流，结合文件监听与索引能力  
@@ -133,6 +155,28 @@ knowforge/
 ### Overview
 
 Knowforge is a **local-first** desktop application built with [Tauri 2](https://tauri.app/). The UI is **React + TypeScript + Vite**, while core logic runs in **Rust** under `src-tauri/`. It targets Markdown notes, knowledge-vault workflows, search, and writing assistance (exact features evolve with releases; the in-app experience is authoritative).
+
+### Core Problems
+
+Most note-taking tools solve a **storage** problem — better capture, faster retrieval. But the real pain point is not storage; it is **understanding**:
+
+1. **Notes become write-once graveyards.** Knowledge is captured but rarely revisited, questioned, or deepened. Knowforge introduces a "Thought" primitive with an explicit maturity lifecycle (🌱 Seedling → 🌿 Growing → 🌳 Mature), turning knowledge into living, trackable material that evolves over time.
+
+2. **Insights from AI conversations evaporate.** Conversations with AI often spark cross-domain connections and epiphanies, but these get buried in chat history. Knowforge's passive capture system automatically detects high-value ideas during AI chat and prompts you to save them as structured Thoughts.
+
+3. **The illusion of "saved = learned."** There is a gap between bookmarking and understanding. Knowforge's Challenge Review generates targeted questions to verify genuine comprehension; a Thought's maturity advances only after you demonstrate real understanding.
+
+4. **The privacy–AI dilemma.** Personal knowledge vaults often contain sensitive information, making cloud AI services uncomfortable. Knowforge offers a fully local semantic search pipeline (Rust-native embedding model) and note-level privacy flags that ensure sensitive content is never sent to any LLM.
+
+### Design Philosophy
+
+- **Understanding over accumulation.** Cognitive reports, understanding graphs, thought maturity tracking, challenge reviews — every core feature serves the same thesis: your notes should help you **think better**, not just **store more**.
+
+- **Local-first, privacy as the floor.** All data lives as Markdown + local SQLite inside the workspace directory. The `kf-private` flag provides note-level privacy control with a fail-closed policy — if parsing fails, the note is treated as private. Functionality degrades before data leaks.
+
+- **AI as thinking partner, not ghostwriter.** The Writing Coach does not rewrite your text; it asks probing questions about logical gaps and suggests connections across your vault. AI is used to provoke thought, not replace it.
+
+- **Optional, not locked-in.** AI capabilities (local Ollama or OpenAI-compatible APIs) are entirely optional and configured per workspace. Without AI, all core note and knowledge management features remain fully functional.
 
 ### Highlights
 

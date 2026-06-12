@@ -3,6 +3,42 @@
 pub(crate) mod ollama;
 pub(crate) mod agent_loop;
 pub mod approval;
+pub(crate) mod context_guard;
+pub(crate) mod planning;
+pub(crate) mod provider;
+pub(crate) mod provider_ollama;
+pub(crate) mod provider_openai;
+pub(crate) mod tiered;
+
+pub use provider::{
+    create_provider, resolve_model_name, CompletionOverrides, LlmProvider,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentMode {
+    Direct,
+    LocalPlanning,
+    Tiered,
+}
+
+fn determine_agent_mode(ai: &vault_config::AiConfig) -> AgentMode {
+    if !ai.planning_enabled {
+        return AgentMode::Direct;
+    }
+
+    let has_ollama = ai.ollama.last_used_model.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some()
+        || !ai.ollama.default_model.trim().is_empty();
+
+    let has_openai = !ai.openai_compatible.api_key.trim().is_empty()
+        && (ai.openai_compatible.last_used_model.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some()
+            || !ai.openai_compatible.default_model.trim().is_empty());
+
+    if has_ollama && has_openai {
+        AgentMode::Tiered
+    } else {
+        AgentMode::LocalPlanning
+    }
+}
 
 use crate::depth_decisions;
 use crate::lock_workspace_root;
@@ -15,7 +51,6 @@ use crate::vault_config::{self, ActiveProvider, DepthMode};
 use crate::vault_context_search::{self, VaultSnippetKind};
 use std::path::PathBuf;
 use chrono::Utc;
-use ollama::run_chat_stream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -73,6 +108,8 @@ pub struct LlmChatMessage {
     pub tool_calls: Option<Vec<LlmToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -681,6 +718,49 @@ pub async fn list_ollama_models(
     ollama::list_models(&base, timeout_ms).await
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ListOpenAiModelsArgs {
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[tauri::command]
+pub async fn list_openai_models(
+    state: State<'_, crate::WorkspaceState>,
+    args: ListOpenAiModelsArgs,
+) -> Result<Vec<String>, String> {
+    let root = lock_workspace_root(&state)?;
+    let ai = tauri::async_runtime::spawn_blocking(move || vault_config::load_ai_config_internal(&root))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    let base = match args.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(raw) => vault_config::normalize_openai_base_url(raw),
+        None => ai.openai_compatible.base_url.clone(),
+    };
+    let key = match args.api_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(k) => k.to_string(),
+        None => ai.openai_compatible.api_key.clone(),
+    };
+    if key.is_empty() {
+        return Err("API key is required".to_string());
+    }
+
+    let provider = provider_openai::OpenAiCompatibleProvider::new(
+        base,
+        key,
+        String::new(),
+        ai.parameters.temperature,
+        ai.parameters.top_p,
+        ai.request.timeout_ms,
+        ai.openai_compatible.organization_id.clone(),
+    );
+    provider.list_models().await
+}
+
 #[tauri::command]
 pub async fn start_ollama_chat_stream(
     app: AppHandle,
@@ -698,20 +778,21 @@ pub async fn start_ollama_chat_stream(
         .await
         .map_err(|e| e.to_string())??;
 
-    if ai.active_provider == ActiveProvider::Openai {
-        return Err("OpenAI provider is not implemented yet.".to_string());
-    }
-
     if args.messages.is_empty() {
         return Err("At least one message is required.".to_string());
     }
+
+    let model_override = args
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let provider = create_provider(&ai, model_override.map(|s| s))?;
 
     let cache = semantic_index::default_model_cache_dir();
     let bundle = semantic_index::resolve_bundle_model_dir(&app);
     let embed_paths = Some((cache.clone(), bundle.clone()));
     let tools_enabled = args.tools_enabled.unwrap_or(ai.tools_enabled);
-    // Iter 5 #4: snapshot auto_invocable skills so assemble_ollama_messages can
-    // surface them in the chat system prompt.
     let skills_for_prompt: Vec<(String, String, Option<String>)> = if tools_enabled {
         skills
             .list()
@@ -739,21 +820,6 @@ pub async fn start_ollama_chat_stream(
         }
     }
 
-    let model = args
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            ai.ollama
-                .last_used_model
-                .clone()
-                .filter(|s| !s.trim().is_empty())
-        })
-        .or_else(|| Some(ai.ollama.default_model.clone()).filter(|s| !s.trim().is_empty()))
-        .ok_or_else(|| "No model selected. Choose a model in settings.".to_string())?;
-
     let session_id = uuid::Uuid::new_v4().to_string();
     let cancel = CancellationToken::new();
     sessions.register(session_id.clone(), cancel.clone());
@@ -761,15 +827,10 @@ pub async fn start_ollama_chat_stream(
     let app_h = app.clone();
     let sid = session_id.clone();
     let sessions_arc = Arc::clone(sessions.inner());
-    let base = ai.ollama.base_url.clone();
-    let timeout_ms = ai.request.timeout_ms;
-    let temp = ai.parameters.temperature;
-    let top_p = ai.parameters.top_p;
     let registry_arc = Arc::clone(registry.inner());
     let ctx_factory_arc = Arc::clone(ctx_factory.inner());
     let approval_arc = Arc::clone(approval.inner());
     let workspace_root = root.clone();
-    // 优先使用前端传入的 conversationId（用于审批缓存作用域）；缺省退化为 session_id。
     let conversation_id = args
         .conversation_id
         .as_deref()
@@ -778,48 +839,134 @@ pub async fn start_ollama_chat_stream(
         .map(str::to_string)
         .unwrap_or_else(|| session_id.clone());
 
+    let agent_mode = if tools_enabled {
+        determine_agent_mode(&ai)
+    } else {
+        AgentMode::Direct
+    };
+
     tokio::spawn(async move {
         if tools_enabled {
-            // 把工具 manifest 列表转成 Ollama tools 协议格式
             let manifests = registry_arc.list_for_llm(ToolScope::Global);
-            let tools_json = agent_loop::list_for_llm_to_ollama_tools(&manifests);
+            let tools_json = provider.convert_tools(&manifests);
+            let loop_config = agent_loop::AgentLoopConfig {
+                max_context_tokens: ai.request.max_context_tokens,
+                ..Default::default()
+            };
 
-            // Discard returned summary — only skill_tool needs it (followup #1A).
-            let _ = agent_loop::run_agent_stream(
-                app_h.clone(),
-                sid.clone(),
-                messages,
-                tools_json,
-                registry_arc,
-                ctx_factory_arc,
-                workspace_root,
-                Some(cache),
-                Some(bundle),
-                base,
-                model,
-                temp,
-                top_p,
-                timeout_ms,
-                cancel,
-                agent_loop::AgentLoopConfig::default(),
-                conversation_id,
-                approval_arc,
-            )
-            .await;
+            match agent_mode {
+                AgentMode::Direct => {
+                    let _ = agent_loop::run_agent_stream(
+                        app_h.clone(),
+                        sid.clone(),
+                        messages,
+                        tools_json,
+                        registry_arc,
+                        ctx_factory_arc,
+                        workspace_root,
+                        Some(cache),
+                        Some(bundle),
+                        provider.clone(),
+                        cancel,
+                        loop_config,
+                        conversation_id,
+                        approval_arc,
+                    )
+                    .await;
+                }
+                AgentMode::LocalPlanning => {
+                    let _ = planning::run_planned_agent(
+                        app_h.clone(),
+                        sid.clone(),
+                        messages,
+                        tools_json,
+                        registry_arc,
+                        ctx_factory_arc,
+                        workspace_root,
+                        Some(cache),
+                        Some(bundle),
+                        provider.clone(),
+                        cancel,
+                        loop_config,
+                        conversation_id,
+                        approval_arc,
+                    )
+                    .await;
+                }
+                AgentMode::Tiered => {
+                    let cloud = match provider::create_cloud_provider(&ai) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            // Degrade to local planning
+                            let _ = planning::run_planned_agent(
+                                app_h.clone(),
+                                sid.clone(),
+                                messages,
+                                tools_json,
+                                registry_arc,
+                                ctx_factory_arc,
+                                workspace_root,
+                                Some(cache),
+                                Some(bundle),
+                                provider.clone(),
+                                cancel,
+                                loop_config,
+                                conversation_id,
+                                approval_arc,
+                            )
+                            .await;
+                            sessions_arc.remove_session(&sid);
+                            return;
+                        }
+                    };
+                    let local = match provider::create_local_provider(&ai) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            let _ = planning::run_planned_agent(
+                                app_h.clone(),
+                                sid.clone(),
+                                messages,
+                                tools_json,
+                                registry_arc,
+                                ctx_factory_arc,
+                                workspace_root,
+                                Some(cache),
+                                Some(bundle),
+                                provider.clone(),
+                                cancel,
+                                loop_config,
+                                conversation_id,
+                                approval_arc,
+                            )
+                            .await;
+                            sessions_arc.remove_session(&sid);
+                            return;
+                        }
+                    };
+                    let _ = tiered::run_tiered_agent(
+                        cloud,
+                        local,
+                        app_h.clone(),
+                        sid.clone(),
+                        messages,
+                        tools_json,
+                        registry_arc,
+                        ctx_factory_arc,
+                        workspace_root,
+                        Some(cache),
+                        Some(bundle),
+                        cancel,
+                        loop_config,
+                        conversation_id,
+                        approval_arc,
+                    )
+                    .await;
+                }
+            }
         } else {
-            let _ = run_chat_stream(
-                app_h.clone(),
-                sid.clone(),
-                base,
-                model,
-                messages,
-                temp,
-                top_p,
-                timeout_ms,
-                cancel,
-                None,
-            )
-            .await;
+            let _ = provider
+                .chat_stream(&app_h, &sid, messages, None, cancel)
+                .await;
         }
         sessions_arc.remove_session(&sid);
     });
@@ -899,5 +1046,48 @@ mod skills_block_tests {
         // The trailing instruction must be present so the parent LLM does not
         // re-render the skill's content.
         assert!(block.contains("Skills cannot invoke other skills"));
+    }
+}
+
+#[cfg(test)]
+mod agent_mode_tests {
+    use super::*;
+
+    fn base_config() -> vault_config::AiConfig {
+        vault_config::AiConfig::default()
+    }
+
+    #[test]
+    fn direct_when_planning_disabled() {
+        let ai = base_config();
+        assert_eq!(determine_agent_mode(&ai), AgentMode::Direct);
+    }
+
+    #[test]
+    fn local_planning_with_single_provider() {
+        let mut ai = base_config();
+        ai.planning_enabled = true;
+        ai.ollama.default_model = "llama3".to_string();
+        assert_eq!(determine_agent_mode(&ai), AgentMode::LocalPlanning);
+    }
+
+    #[test]
+    fn tiered_when_both_configured() {
+        let mut ai = base_config();
+        ai.planning_enabled = true;
+        ai.ollama.default_model = "llama3".to_string();
+        ai.openai_compatible.api_key = "sk-test".to_string();
+        ai.openai_compatible.default_model = "gpt-4o".to_string();
+        assert_eq!(determine_agent_mode(&ai), AgentMode::Tiered);
+    }
+
+    #[test]
+    fn local_planning_when_openai_has_no_key() {
+        let mut ai = base_config();
+        ai.planning_enabled = true;
+        ai.ollama.default_model = "llama3".to_string();
+        ai.openai_compatible.default_model = "gpt-4o".to_string();
+        // No API key
+        assert_eq!(determine_agent_mode(&ai), AgentMode::LocalPlanning);
     }
 }
