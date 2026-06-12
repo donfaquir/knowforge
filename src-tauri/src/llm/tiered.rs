@@ -166,6 +166,8 @@ pub async fn run_tiered_agent(
     let planning_sid = format!("plan-{}", uuid::Uuid::new_v4());
     let plan_messages = build_tiered_planning_messages(&initial_messages);
 
+    planning::emit_planning_start(&app, &session_id);
+
     let plan_result = cloud_provider
         .chat_stream(
             &app,
@@ -199,6 +201,8 @@ pub async fn run_tiered_agent(
             .await;
         }
     };
+
+    planning::emit_planning_done(&app, &session_id, &cloud_content);
 
     if cancel.is_cancelled() {
         return String::new();

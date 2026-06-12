@@ -71,14 +71,14 @@ fn build_tool_descriptions(tools_json: &[Value]) -> String {
     desc
 }
 
-fn emit_planning_start(app: &AppHandle, session_id: &str) {
+pub(crate) fn emit_planning_start(app: &AppHandle, session_id: &str) {
     let _ = app.emit(
         "llm:planning-start",
         json!({ "sessionId": session_id }),
     );
 }
 
-fn emit_planning_done(app: &AppHandle, session_id: &str, plan_text: &str) {
+pub(crate) fn emit_planning_done(app: &AppHandle, session_id: &str, plan_text: &str) {
     let _ = app.emit(
         "llm:planning-done",
         json!({ "sessionId": session_id, "planText": plan_text }),

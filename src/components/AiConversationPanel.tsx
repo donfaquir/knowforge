@@ -284,6 +284,7 @@ export function AiConversationPanel() {
   const [copyToast, setCopyToast] = useState<"copied" | "failed" | null>(null);
   const [privacyHint, setPrivacyHint] = useState<string | null>(null);
   const [vaultSearchSummary, setVaultSearchSummary] = useState<string | null>(null);
+  const [isPlanning, setIsPlanning] = useState(false);
 
   const activeSessionRef = useRef<string | null>(null);
   const listEndRef = useRef<HTMLDivElement>(null);
@@ -1039,6 +1040,14 @@ export function AiConversationPanel() {
           return next;
         });
       }),
+      listen<{ sessionId: string }>("llm:planning-start", (e) => {
+        if (e.payload.sessionId !== activeSessionRef.current) return;
+        setIsPlanning(true);
+      }),
+      listen<{ sessionId: string; planText: string }>("llm:planning-done", (e) => {
+        if (e.payload.sessionId !== activeSessionRef.current) return;
+        setIsPlanning(false);
+      }),
       // P2 Tool Calling Loop：Agent 轮次结束 → 最终化助手消息、清理 streaming 状态
       listen<{ sessionId: string }>("llm:agent-done", (e) => {
         const sid = e.payload.sessionId;
@@ -1082,6 +1091,7 @@ export function AiConversationPanel() {
         activeSessionRef.current = null;
         isAgentModeRef.current = false;
         setIsStreaming(false);
+        setIsPlanning(false);
         setMessages((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
@@ -1992,6 +2002,12 @@ export function AiConversationPanel() {
       {isVaultSearching ? (
         <div className="ai-chat__banner ai-chat__banner--hint" aria-live="polite" {...dragExcludeProps}>
           {t("aiPanel.searchingVault")}
+        </div>
+      ) : null}
+
+      {isPlanning ? (
+        <div className="ai-chat__banner ai-chat__banner--hint" aria-live="polite" {...dragExcludeProps}>
+          {t("aiPanel.planning")}
         </div>
       ) : null}
 
