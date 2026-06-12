@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::agent_loop::{self, AgentLoopConfig};
 use super::approval::ToolApprovalState;
+use super::context_guard::ContextGuard;
 use super::planning;
 use super::provider::{LlmProvider, NormalizedToolCall};
 use super::{LlmChatMessage, LlmToolCall, LlmToolCallFunction};
@@ -300,11 +301,17 @@ pub async fn run_tiered_agent(
     }
 
     // Step 4: Local generation (visible — stream to user)
-    let gen_messages = build_generation_messages(
+    let mut gen_messages = build_generation_messages(
         &initial_messages,
         &all_tool_results,
         &cloud_content,
     );
+
+    let context_guard = ContextGuard::with_provider(
+        config.max_context_tokens,
+        local_provider.clone(),
+    );
+    context_guard.trim_with_summary(&mut gen_messages).await;
 
     match local_provider
         .chat_stream(&app, &session_id, gen_messages, None, cancel)
