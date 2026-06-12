@@ -36,7 +36,7 @@ pub(crate) fn build_tiered_planning_messages(
     for m in messages {
         match m.role.as_str() {
             "system" => {
-                let stripped = strip_note_body(&m.content);
+                let stripped = replace_note_body_with_metadata(&m.content);
                 if !stripped.trim().is_empty() {
                     out.push(LlmChatMessage {
                         role: "system".to_string(),
@@ -60,30 +60,136 @@ pub(crate) fn build_tiered_planning_messages(
     out
 }
 
-/// Remove note body content from system messages.
-/// Keeps file path references but strips markdown code blocks that contain note content.
-fn strip_note_body(content: &str) -> String {
+struct NoteMetadataBlock {
+    path: String,
+    title: String,
+    headings: Vec<String>,
+    summary: String,
+}
+
+fn extract_path_from_system_msg(content: &str) -> Option<String> {
+    let start = content.find('`')? + 1;
+    let end = content[start..].find('`')? + start;
+    let path = &content[start..end];
+    if path.contains('.') {
+        Some(path.to_string())
+    } else {
+        None
+    }
+}
+
+fn extract_code_block_content(content: &str) -> Option<String> {
+    let mut in_block = false;
+    let mut body = String::new();
+    for line in content.lines() {
+        if line.trim_start().starts_with("```") && !in_block {
+            in_block = true;
+            continue;
+        }
+        if line.trim_start().starts_with("```") && in_block {
+            break;
+        }
+        if in_block {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    if body.is_empty() { None } else { Some(body) }
+}
+
+fn extract_note_metadata(content: &str) -> Option<NoteMetadataBlock> {
+    let path = extract_path_from_system_msg(content)?;
+    let body = extract_code_block_content(content)?;
+
+    let mut title = String::new();
+    let mut headings = Vec::new();
+    let mut first_para = String::new();
+    let mut in_first_para = false;
+
+    for line in body.lines() {
+        if line.starts_with("# ") && title.is_empty() {
+            title = line[2..].trim().to_string();
+            in_first_para = true;
+            continue;
+        }
+        if line.starts_with("## ") {
+            headings.push(line[3..].trim().to_string());
+            in_first_para = false;
+            continue;
+        }
+        if line.starts_with("### ") {
+            let h3 = line[4..].trim();
+            if let Some(parent) = headings.last().filter(|h| !h.contains(" > ")) {
+                headings.push(format!("{parent} > {h3}"));
+            } else {
+                headings.push(h3.to_string());
+            }
+            in_first_para = false;
+            continue;
+        }
+        if in_first_para {
+            if line.trim().is_empty() {
+                in_first_para = false;
+            } else if first_para.len() < 200 {
+                if !first_para.is_empty() {
+                    first_para.push(' ');
+                }
+                first_para.push_str(line.trim());
+            }
+        }
+    }
+
+    Some(NoteMetadataBlock {
+        path,
+        title,
+        headings,
+        summary: truncate_str(&first_para, 200),
+    })
+}
+
+fn format_metadata_block(meta: &NoteMetadataBlock) -> String {
+    let mut out = format!("[Note: {}]\n", meta.path);
+    if !meta.title.is_empty() {
+        out.push_str(&format!("Title: {}\n", meta.title));
+    }
+    if !meta.headings.is_empty() {
+        out.push_str(&format!("Headings: {}\n", meta.headings.join(", ")));
+    }
+    if !meta.summary.is_empty() {
+        out.push_str(&format!("Summary: {}\n", meta.summary));
+    }
+    out
+}
+
+fn replace_note_body_with_metadata(content: &str) -> String {
     if !content.contains("```markdown") && !content.contains("```\n") {
         return content.to_string();
     }
 
+    let metadata = extract_note_metadata(content);
+
     let mut result = String::new();
     let mut in_code_block = false;
-    let mut skip_block = false;
+    let mut replaced = false;
 
     for line in content.lines() {
         if line.trim_start().starts_with("```") && !in_code_block {
             in_code_block = true;
-            skip_block = true;
-            result.push_str("[note content omitted for privacy]\n");
+            if !replaced {
+                if let Some(ref meta) = metadata {
+                    result.push_str(&format_metadata_block(meta));
+                } else {
+                    result.push_str("[note content omitted for privacy]\n");
+                }
+                replaced = true;
+            }
             continue;
         }
         if line.trim_start().starts_with("```") && in_code_block {
             in_code_block = false;
-            skip_block = false;
             continue;
         }
-        if !skip_block {
+        if !in_code_block {
             result.push_str(line);
             result.push('\n');
         }
@@ -456,9 +562,11 @@ mod tests {
     }
 
     #[test]
-    fn privacy_strips_note_body() {
+    fn privacy_replaces_body_with_metadata() {
         let note_system = "The user is editing the following Markdown file `notes/test.md`. \
-            Use it as the primary source.\n\n```markdown\n# Secret Title\nThis is private content.\n```";
+            Use it as the primary source.\n\n```markdown\n# Secret Title\n\
+            First paragraph intro.\n\n## Chapter One\nDetailed chapter content here.\n\
+            ## Chapter Two\nMore detailed content.\n```";
         let msgs = vec![
             sys(note_system),
             sys("Response depth: MEDIUM."),
@@ -467,16 +575,18 @@ mod tests {
 
         let result = build_tiered_planning_messages(&msgs);
 
-        // Cloud system prompt is first
         assert_eq!(result[0].content, TIERED_CLOUD_SYSTEM);
 
-        // Note body must be stripped
         let all_content: String = result.iter().map(|m| m.content.clone()).collect();
-        assert!(!all_content.contains("This is private content"));
-        assert!(!all_content.contains("Secret Title"));
-        assert!(all_content.contains("[note content omitted for privacy]"));
+        // Full body content must not leak
+        assert!(!all_content.contains("Detailed chapter content here."));
+        assert!(!all_content.contains("More detailed content."));
+        // Metadata must be present
+        assert!(all_content.contains("[Note: notes/test.md]"));
+        assert!(all_content.contains("Title: Secret Title"));
+        assert!(all_content.contains("Headings: Chapter One, Chapter Two"));
+        assert!(all_content.contains("Summary: First paragraph intro."));
 
-        // User message preserved
         assert!(result.iter().any(|m| m.role == "user" && m.content == "What is in my note?"));
     }
 
@@ -519,5 +629,29 @@ mod tests {
     fn tool_result_metadata_format() {
         let meta = build_tool_result_metadata("note.read", true, 1234);
         assert_eq!(meta, "Tool 'note.read': status=ok, result_length=1234 chars");
+    }
+
+    #[test]
+    fn metadata_extracts_headings_and_summary() {
+        let note = "The user is editing the following Markdown file `docs/rust.md`. \
+            Use it.\n\n```markdown\n# Rust Notes\nCore concepts of the Rust language.\n\n\
+            ## Ownership\nOwnership rules.\n\n### Borrowing\nBorrow checker.\n\n\
+            ## Lifetimes\nLifetime annotations.\n```";
+        let result = replace_note_body_with_metadata(note);
+        assert!(result.contains("[Note: docs/rust.md]"));
+        assert!(result.contains("Title: Rust Notes"));
+        assert!(result.contains("Ownership"));
+        assert!(result.contains("Ownership > Borrowing"));
+        assert!(result.contains("Lifetimes"));
+        assert!(result.contains("Summary: Core concepts of the Rust language."));
+        assert!(!result.contains("Ownership rules."));
+        assert!(!result.contains("Borrow checker."));
+    }
+
+    #[test]
+    fn metadata_fallback_on_no_code_block() {
+        let plain = "Response depth: MEDIUM. Keep your answer moderate.";
+        let result = replace_note_body_with_metadata(plain);
+        assert_eq!(result, plain.to_string());
     }
 }
