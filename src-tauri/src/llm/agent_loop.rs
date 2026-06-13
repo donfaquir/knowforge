@@ -124,7 +124,7 @@ pub async fn run_agent_stream(
     let mut messages = initial_messages;
     let mut total_tool_result_chars: usize = 0;
     let mut tool_call_count: u8 = 0;
-    let context_guard = ContextGuard::new(config.max_context_tokens);
+    let context_guard = ContextGuard::with_provider(config.max_context_tokens, provider.clone());
     let mut loop_detector = LoopDetector::new();
 
     loop {
@@ -132,7 +132,7 @@ pub async fn run_agent_stream(
             return String::new();
         }
 
-        context_guard.trim_if_needed(&mut messages);
+        context_guard.trim_with_summary(&mut messages).await;
 
         // 1. 流式请求（携带 tools 字段；本轮文字会通过 emit_chunk/emit_done 推给前端）
         let stream_result = match provider

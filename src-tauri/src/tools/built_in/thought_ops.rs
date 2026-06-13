@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::tools::context::ToolContext;
 use crate::tools::types::{
-    ApprovalPolicy, Effect, Risk, Tool, ToolError, ToolErrorCode, ToolManifest, ToolMetrics,
-    ToolResult,
+    ApprovalPolicy, Effect, Risk, Tool, ToolCategory, ToolError, ToolErrorCode, ToolManifest,
+    ToolMetrics, ToolResult,
 };
 
 // ─── ThoughtListTool ───────────────────────────────────────────────────────────
@@ -60,6 +60,10 @@ impl ThoughtListTool {
 impl Tool for ThoughtListTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::NoteRead
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {
@@ -206,6 +210,10 @@ impl ThoughtCreateTool {
 impl Tool for ThoughtCreateTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::NoteWrite
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {

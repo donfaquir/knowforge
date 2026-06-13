@@ -3,8 +3,8 @@ use serde_json::Value;
 
 use crate::tools::context::ToolContext;
 use crate::tools::types::{
-    ApprovalPolicy, Effect, Risk, Tool, ToolError, ToolErrorCode, ToolManifest, ToolMetrics,
-    ToolResult,
+    ApprovalPolicy, Effect, Risk, Tool, ToolCategory, ToolError, ToolErrorCode, ToolManifest,
+    ToolMetrics, ToolResult,
 };
 
 // ─── GraphQueryTopicNetworkTool ────────────────────────────────────────────────
@@ -54,6 +54,10 @@ impl GraphQueryTopicNetworkTool {
 impl Tool for GraphQueryTopicNetworkTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Graph
     }
 
     async fn invoke(&self, ctx: &ToolContext, _input: Value) -> ToolResult {
@@ -151,6 +155,10 @@ impl IndexStatusTool {
 impl Tool for IndexStatusTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Graph
     }
 
     async fn invoke(&self, ctx: &ToolContext, _input: Value) -> ToolResult {

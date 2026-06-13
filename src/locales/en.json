@@ -302,6 +302,7 @@
     "vaultPrivateOmitted": "{{count}} private note(s) omitted from excerpts.",
     "vaultStoppedEarly": "(scan capped by time or file limit.)",
     "searchingVault": "Searching vault…",
+    "planning": "Planning…",
     "placeholderDesktop": "AI is only available in the desktop app.",
     "placeholderOpenFolder": "Open a folder to chat…",
     "placeholderStreaming": "Draft next message… (Enter for newline; Stop/Cancel, then Enter to send)",

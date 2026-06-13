@@ -302,6 +302,7 @@
     "vaultPrivateOmitted": "有 {{count}} 条私密笔记的摘录已省略。",
     "vaultStoppedEarly": "（因时间或文件上限提前结束扫描。）",
     "searchingVault": "正在搜索工作区…",
+    "planning": "正在规划…",
     "placeholderDesktop": "AI 仅在桌面应用内可用。",
     "placeholderOpenFolder": "打开文件夹以开始对话…",
     "placeholderStreaming": "起草下一条…（Enter 换行；先停止/取消再 Enter 发送）",

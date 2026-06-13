@@ -4,6 +4,18 @@ use serde_json::Value;
 
 use super::context::ToolContext;
 
+// ─── ToolCategory ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolCategory {
+    NoteRead,
+    NoteWrite,
+    Web,
+    Graph,
+    Utility,
+    Skill,
+}
+
 // ─── Effect ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,5 +179,9 @@ pub trait Tool: Send + Sync {
     /// 默认实现返回 false（遵循 manifest 策略）。
     fn requires_approval(&self, _input: &Value) -> bool {
         false
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::NoteRead
     }
 }

@@ -6,8 +6,8 @@ use serde_json::{json, Value};
 use super::web_ops::{collapse_blank_lines, is_private_address, truncate_at_paragraph};
 use crate::tools::context::ToolContext;
 use crate::tools::types::{
-    ApprovalPolicy, Effect, Risk, Tool, ToolError, ToolErrorCode, ToolManifest, ToolMetrics,
-    ToolResult,
+    ApprovalPolicy, Effect, Risk, Tool, ToolCategory, ToolError, ToolErrorCode, ToolManifest,
+    ToolMetrics, ToolResult,
 };
 
 const MAX_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
@@ -102,6 +102,10 @@ impl WebDownloadTool {
 impl Tool for WebDownloadTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Web
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {
@@ -339,6 +343,10 @@ impl WebReadPdfTool {
 impl Tool for WebReadPdfTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Web
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {

@@ -46,7 +46,8 @@ use crate::note_privacy;
 use crate::semantic_index;
 use crate::skills::SkillRegistry;
 use crate::tools::context::ToolContextFactory;
-use crate::tools::registry::{ToolRegistry, ToolScope};
+use crate::tools::registry::{ToolFilter, ToolRegistry};
+use crate::tools::types::ToolCategory;
 use crate::vault_config::{self, ActiveProvider, DepthMode};
 use crate::vault_context_search::{self, VaultSnippetKind};
 use std::path::PathBuf;
@@ -761,6 +762,33 @@ pub async fn list_openai_models(
     provider.list_models().await
 }
 
+fn contains_any(text: &str, keywords: &[&str]) -> bool {
+    keywords.iter().any(|kw| text.contains(kw))
+}
+
+fn determine_tool_filter(user_message: &str) -> ToolFilter {
+    let msg = user_message.to_lowercase();
+    let mut filter = ToolFilter::core();
+
+    if contains_any(&msg, &["搜索", "search", "web", "网页", "link", "url", "http", "网络"]) {
+        filter = filter.with(ToolCategory::Web);
+    }
+
+    if contains_any(&msg, &[
+        "写", "write", "create", "创建", "append", "追加", "修改", "编辑", "添加", "记录",
+    ]) {
+        filter = filter.with(ToolCategory::NoteWrite);
+    }
+
+    if contains_any(&msg, &["关系", "graph", "topic", "网络", "network", "相关", "关联", "推荐"]) {
+        filter = filter.with(ToolCategory::Graph);
+    }
+
+    filter = filter.with(ToolCategory::Skill);
+
+    filter
+}
+
 #[tauri::command]
 pub async fn start_ollama_chat_stream(
     app: AppHandle,
@@ -847,7 +875,28 @@ pub async fn start_ollama_chat_stream(
 
     tokio::spawn(async move {
         if tools_enabled {
-            let manifests = registry_arc.list_for_llm(ToolScope::Global);
+            let tool_filter = if agent_mode == AgentMode::Tiered {
+                ToolFilter::all()
+            } else {
+                let user_last_msg = messages.iter().rev()
+                    .find(|m| m.role == "user")
+                    .map(|m| m.content.as_str())
+                    .unwrap_or("");
+                determine_tool_filter(user_last_msg)
+            };
+            let manifests = registry_arc.list_for_llm_filtered(&tool_filter);
+            if std::env::var("KNOWFORGE_DEBUG_TOOLS").is_ok() {
+                let tool_names: Vec<&str> = manifests.iter()
+                    .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+                    .collect();
+                eprintln!(
+                    "[tool-filter] mode={:?} injected {}/{} tools: {:?}",
+                    agent_mode,
+                    tool_names.len(),
+                    registry_arc.list_for_llm_filtered(&ToolFilter::all()).len(),
+                    tool_names,
+                );
+            }
             let tools_json = provider.convert_tools(&manifests);
             let loop_config = agent_loop::AgentLoopConfig {
                 max_context_tokens: ai.request.max_context_tokens,
@@ -1089,5 +1138,60 @@ mod agent_mode_tests {
         ai.openai_compatible.default_model = "gpt-4o".to_string();
         // No API key
         assert_eq!(determine_agent_mode(&ai), AgentMode::LocalPlanning);
+    }
+}
+
+#[cfg(test)]
+mod tool_filter_tests {
+    use super::*;
+
+    #[test]
+    fn greeting_gets_core_plus_skill() {
+        let f = determine_tool_filter("你好");
+        assert!(f.categories.contains(&ToolCategory::NoteRead));
+        assert!(f.categories.contains(&ToolCategory::Utility));
+        assert!(f.categories.contains(&ToolCategory::Skill));
+        assert!(!f.categories.contains(&ToolCategory::Web));
+        assert!(!f.categories.contains(&ToolCategory::NoteWrite));
+        assert!(!f.categories.contains(&ToolCategory::Graph));
+    }
+
+    #[test]
+    fn web_query_includes_web() {
+        let f = determine_tool_filter("搜索网页上关于 Rust 的文章");
+        assert!(f.categories.contains(&ToolCategory::Web));
+        assert!(f.categories.contains(&ToolCategory::NoteRead));
+    }
+
+    #[test]
+    fn write_query_includes_note_write() {
+        let f = determine_tool_filter("写一段笔记");
+        assert!(f.categories.contains(&ToolCategory::NoteWrite));
+        assert!(f.categories.contains(&ToolCategory::NoteRead));
+    }
+
+    #[test]
+    fn create_query_includes_note_write() {
+        let f = determine_tool_filter("帮我创建一个新文档");
+        assert!(f.categories.contains(&ToolCategory::NoteWrite));
+    }
+
+    #[test]
+    fn graph_query_includes_graph() {
+        let f = determine_tool_filter("查看主题关系图");
+        assert!(f.categories.contains(&ToolCategory::Graph));
+    }
+
+    #[test]
+    fn english_search_includes_web() {
+        let f = determine_tool_filter("search for articles about AI");
+        assert!(f.categories.contains(&ToolCategory::Web));
+    }
+
+    #[test]
+    fn mixed_query_includes_multiple() {
+        let f = determine_tool_filter("搜索网上的文章然后写一段总结");
+        assert!(f.categories.contains(&ToolCategory::Web));
+        assert!(f.categories.contains(&ToolCategory::NoteWrite));
     }
 }
