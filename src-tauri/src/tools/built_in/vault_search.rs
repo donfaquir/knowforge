@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::tools::context::ToolContext;
 use crate::tools::types::{
-    ApprovalPolicy, Effect, Risk, Tool, ToolError, ToolErrorCode, ToolManifest, ToolMetrics,
-    ToolResult,
+    ApprovalPolicy, Effect, Risk, Tool, ToolCategory, ToolError, ToolErrorCode, ToolManifest,
+    ToolMetrics, ToolResult,
 };
 use crate::vault_context_search::{
     SearchWorkspaceContextArgs, SearchWorkspaceLimits, VaultSnippetKind,
@@ -64,6 +64,10 @@ impl VaultSearchKeywordTool {
 impl Tool for VaultSearchKeywordTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::NoteRead
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {
@@ -226,6 +230,10 @@ impl VaultSemanticSearchTool {
 impl Tool for VaultSemanticSearchTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::NoteRead
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {

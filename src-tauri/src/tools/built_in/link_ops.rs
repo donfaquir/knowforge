@@ -3,8 +3,8 @@ use serde_json::Value;
 
 use crate::tools::context::ToolContext;
 use crate::tools::types::{
-    ApprovalPolicy, Effect, Risk, Tool, ToolError, ToolErrorCode, ToolManifest, ToolMetrics,
-    ToolResult,
+    ApprovalPolicy, Effect, Risk, Tool, ToolCategory, ToolError, ToolErrorCode, ToolManifest,
+    ToolMetrics, ToolResult,
 };
 
 // ─── LinkSuggestRelatedTool ────────────────────────────────────────────────────
@@ -53,6 +53,10 @@ impl LinkSuggestRelatedTool {
 impl Tool for LinkSuggestRelatedTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Graph
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {

@@ -60,6 +60,10 @@ impl Tool for TimeNowTool {
         &self.manifest
     }
 
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Utility
+    }
+
     async fn invoke(&self, _ctx: &ToolContext, _input: serde_json::Value) -> ToolResult {
         let now = chrono::Utc::now();
         ToolResult::Ok {
@@ -131,5 +135,49 @@ mod mod_tests {
         // 确认工具总数：1(time.now) + 8(P1) + 4(P3 写操作) + 4(P4 网络) = 17
         let tools = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
         assert_eq!(tools.len(), 17, "expected 17 registered tools, got {}", tools.len());
+    }
+
+    #[test]
+    fn core_filter_returns_fewer_tools() {
+        let registry = ToolRegistry::new();
+        register_builtin_tools(&registry, None).unwrap();
+        let all = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
+        let core = registry.list_for_llm_filtered(&crate::tools::registry::ToolFilter::core());
+        assert!(core.len() < all.len(), "core ({}) should be less than all ({})", core.len(), all.len());
+        // NoteRead(5) + Utility(1) = 6
+        assert_eq!(core.len(), 6, "core should have 6 tools (5 NoteRead + 1 Utility)");
+    }
+
+    #[test]
+    fn category_mapping_correctness() {
+        let registry = ToolRegistry::new();
+        register_builtin_tools(&registry, None).unwrap();
+
+        let check = |name: &str, expected: ToolCategory| {
+            let tool = registry.get(name).unwrap_or_else(|| panic!("tool {name} not found"));
+            assert_eq!(tool.category(), expected, "wrong category for {name}");
+        };
+
+        check("note.list", ToolCategory::NoteRead);
+        check("note.read", ToolCategory::NoteRead);
+        check("vault.search_keyword", ToolCategory::NoteRead);
+        check("vault.semantic_search", ToolCategory::NoteRead);
+        check("thought.list", ToolCategory::NoteRead);
+
+        check("note.write_section", ToolCategory::NoteWrite);
+        check("note.append", ToolCategory::NoteWrite);
+        check("note.create", ToolCategory::NoteWrite);
+        check("thought.create", ToolCategory::NoteWrite);
+
+        check("web.read_page", ToolCategory::Web);
+        check("web.search", ToolCategory::Web);
+        check("web.download", ToolCategory::Web);
+        check("web.read_pdf", ToolCategory::Web);
+
+        check("graph.query_topic_network", ToolCategory::Graph);
+        check("index.status", ToolCategory::Graph);
+        check("link.suggest_related", ToolCategory::Graph);
+
+        check("time.now", ToolCategory::Utility);
     }
 }

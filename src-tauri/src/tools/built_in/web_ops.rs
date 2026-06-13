@@ -5,8 +5,8 @@ use serde_json::{json, Value};
 
 use crate::tools::context::ToolContext;
 use crate::tools::types::{
-    ApprovalPolicy, Effect, Risk, Tool, ToolError, ToolErrorCode, ToolManifest, ToolMetrics,
-    ToolResult,
+    ApprovalPolicy, Effect, Risk, Tool, ToolCategory, ToolError, ToolErrorCode, ToolManifest,
+    ToolMetrics, ToolResult,
 };
 
 const MAX_RESPONSE_BYTES: u64 = 2 * 1024 * 1024; // 2 MB
@@ -167,6 +167,10 @@ impl WebReadPageTool {
 impl Tool for WebReadPageTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Web
     }
 
     async fn invoke(&self, _ctx: &ToolContext, input: Value) -> ToolResult {

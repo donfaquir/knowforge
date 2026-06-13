@@ -4,8 +4,8 @@ use std::path::Path;
 
 use crate::tools::context::ToolContext;
 use crate::tools::types::{
-    ApprovalPolicy, Effect, Risk, Tool, ToolError, ToolErrorCode, ToolManifest, ToolMetrics,
-    ToolResult,
+    ApprovalPolicy, Effect, Risk, Tool, ToolCategory, ToolError, ToolErrorCode, ToolManifest,
+    ToolMetrics, ToolResult,
 };
 
 // ─── 辅助函数：递归收集 .md 文件相对路径 ────────────────────────────────────────
@@ -82,6 +82,10 @@ impl NoteListTool {
 impl Tool for NoteListTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::NoteRead
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {
@@ -199,6 +203,10 @@ impl NoteReadTool {
 impl Tool for NoteReadTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::NoteRead
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {
@@ -415,6 +423,10 @@ impl Tool for NoteWriteSectionTool {
         &self.manifest
     }
 
+    fn category(&self) -> ToolCategory {
+        ToolCategory::NoteWrite
+    }
+
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {
         let start = std::time::Instant::now();
 
@@ -597,6 +609,10 @@ impl Tool for NoteCreateTool {
         &self.manifest
     }
 
+    fn category(&self) -> ToolCategory {
+        ToolCategory::NoteWrite
+    }
+
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {
         let start = std::time::Instant::now();
 
@@ -777,6 +793,10 @@ impl NoteAppendTool {
 impl Tool for NoteAppendTool {
     fn manifest(&self) -> &ToolManifest {
         &self.manifest
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::NoteWrite
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {

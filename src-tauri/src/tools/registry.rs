@@ -1,8 +1,9 @@
 use dashmap::DashMap;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::types::{Effect, Tool};
+use super::types::{Effect, Tool, ToolCategory};
 
 // ─── RegistryError ─────────────────────────────────────────────────────────────
 
@@ -28,10 +29,42 @@ impl std::fmt::Display for RegistryError {
 
 impl std::error::Error for RegistryError {}
 
-// ─── ToolScope ─────────────────────────────────────────────────────────────────
+// ─── ToolScope (legacy, kept for backward compat) ─────────────────────────────
 
 pub enum ToolScope {
     Global,
+}
+
+// ─── ToolFilter ───────────────────────────────────────────────────────────────
+
+pub struct ToolFilter {
+    pub categories: HashSet<ToolCategory>,
+}
+
+impl ToolFilter {
+    pub fn all() -> Self {
+        Self {
+            categories: HashSet::from([
+                ToolCategory::NoteRead,
+                ToolCategory::NoteWrite,
+                ToolCategory::Web,
+                ToolCategory::Graph,
+                ToolCategory::Utility,
+                ToolCategory::Skill,
+            ]),
+        }
+    }
+
+    pub fn core() -> Self {
+        Self {
+            categories: HashSet::from([ToolCategory::NoteRead, ToolCategory::Utility]),
+        }
+    }
+
+    pub fn with(mut self, cat: ToolCategory) -> Self {
+        self.categories.insert(cat);
+        self
+    }
 }
 
 // ─── name regex ────────────────────────────────────────────────────────────────
@@ -132,8 +165,13 @@ impl ToolRegistry {
 
     /// 精简 manifest，只含 name/description/input_schema/examples，用于 LLM tool 目录
     pub fn list_for_llm(&self, _scope: ToolScope) -> Vec<Value> {
+        self.list_for_llm_filtered(&ToolFilter::all())
+    }
+
+    pub fn list_for_llm_filtered(&self, filter: &ToolFilter) -> Vec<Value> {
         self.tools
             .iter()
+            .filter(|entry| filter.categories.contains(&entry.value().category()))
             .map(|entry| {
                 let m = entry.value().manifest();
                 serde_json::json!({
