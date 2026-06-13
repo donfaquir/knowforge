@@ -156,6 +156,16 @@
   color: #dc2626;
 }
 
+/* ---- Budget warning ---- */
+.ai-chat__budget-warning {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  padding: 2px 8px;
+  margin: 4px 0;
+  border-left: 2px solid var(--text-muted, #ccc);
+  opacity: 0.7;
+}
+
 /* ---- Skill inline embed ---- */
 .ai-chat__skill-inline {
   margin: 6px 0;

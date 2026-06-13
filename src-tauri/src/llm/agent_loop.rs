@@ -46,7 +46,7 @@ RESULT MATCHING: Each tool result is prefixed with [call:ID] to help you match r
 #[allow(dead_code)]
 pub struct AgentLoopConfig {
     /// 整轮 agent 中允许执行的 tool_call 总次数上限。
-    pub max_tool_calls: u8,
+    pub max_tool_calls: u16,
     /// 每轮模型流式请求的默认超时（毫秒）；现代码从调用点的 ai.request.timeout_ms 传入。
     pub timeout_ms: u64,
     /// 整轮中累计追加给模型的 tool 结果总字符数上限（防止上下文爆炸）。
@@ -61,9 +61,9 @@ pub struct AgentLoopConfig {
 impl Default for AgentLoopConfig {
     fn default() -> Self {
         Self {
-            max_tool_calls: 8,
+            max_tool_calls: 25,
             timeout_ms: 60_000,
-            max_tool_result_chars: 8000,
+            max_tool_result_chars: 24_000,
             nesting_depth: 0,
             max_context_tokens: None,
         }
@@ -123,7 +123,7 @@ pub async fn run_agent_stream(
 ) -> String {
     let mut messages = initial_messages;
     let mut total_tool_result_chars: usize = 0;
-    let mut tool_call_count: u8 = 0;
+    let mut tool_call_count: u16 = 0;
     let context_guard = ContextGuard::with_provider(config.max_context_tokens, provider.clone());
     let mut loop_detector = LoopDetector::new();
 
@@ -302,12 +302,41 @@ pub async fn run_agent_stream(
         }
 
         // 7. 上限检查
-        tool_call_count = tool_call_count.saturating_add(normalized_calls.len() as u8);
+        tool_call_count = tool_call_count.saturating_add(normalized_calls.len() as u16);
+
+        // 7a. Budget warning at 80% threshold
+        let threshold = (config.max_tool_calls as f32 * 0.8) as u16;
+        if threshold > 0 && tool_call_count >= threshold && tool_call_count.saturating_sub(normalized_calls.len() as u16) < threshold {
+            let _ = app.emit(
+                "llm:budget-warning",
+                json!({
+                    "sessionId": session_id,
+                    "used": tool_call_count,
+                    "limit": config.max_tool_calls,
+                    "type": "tool_calls",
+                }),
+            );
+        }
+
+        // 7b. Budget exhausted → graceful summary instead of silent truncation
         if tool_call_count >= config.max_tool_calls
             || total_tool_result_chars >= config.max_tool_result_chars
         {
+            messages.push(LlmChatMessage {
+                role: "system".to_string(),
+                content: "IMPORTANT: Tool call budget exhausted. You MUST now provide \
+                          your final answer using ONLY the information gathered so far. \
+                          Do NOT attempt any more tool calls.".to_string(),
+                ..Default::default()
+            });
+            // No context trimming here: this is the final iteration, so all
+            // gathered tool results should remain visible to the model.
+            // ContextGuard trimming is for future iterations that won't happen.
+            let final_result = provider
+                .chat_stream(&app, &session_id, messages, None, cancel.clone())
+                .await;
             emit_agent_done(&app, &session_id);
-            return String::new();
+            return final_result.map(|r| r.content).unwrap_or_default();
         }
 
         if cancel.is_cancelled() {

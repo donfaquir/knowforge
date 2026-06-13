@@ -1048,6 +1048,27 @@ export function AiConversationPanel() {
         if (e.payload.sessionId !== activeSessionRef.current) return;
         setIsPlanning(false);
       }),
+      // Budget warning: tool call budget reaching 80%
+      listen<{ sessionId: string; used: number; limit: number; type: string }>(
+        "llm:budget-warning",
+        (e) => {
+          if (e.payload.sessionId !== activeSessionRef.current) return;
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant") {
+              next[next.length - 1] = {
+                ...last,
+                meta: {
+                  ...last.meta,
+                  budgetWarning: { used: e.payload.used, limit: e.payload.limit },
+                },
+              };
+            }
+            return next;
+          });
+        },
+      ),
       // P2 Tool Calling Loop：Agent 轮次结束 → 最终化助手消息、清理 streaming 状态
       listen<{ sessionId: string }>("llm:agent-done", (e) => {
         const sid = e.payload.sessionId;
@@ -2145,6 +2166,11 @@ export function AiConversationPanel() {
                         ))}
                       </div>
                     ) : null}
+                    {m.meta?.budgetWarning && (
+                      <div className="ai-chat__budget-warning">
+                        Agent {m.meta.budgetWarning.used}/{m.meta.budgetWarning.limit} tool calls used
+                      </div>
+                    )}
                     <AiAssistantMarkdown content={m.content} />
                     {!m.streaming && m.meta?.thoughtCitation && !m.meta.thoughtCitation.privateOmitted ? (
                       <button

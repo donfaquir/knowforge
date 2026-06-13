@@ -39,7 +39,7 @@ pub fn parse_skill_markdown(content: &str) -> Result<SkillManifest, SkillLoadErr
         version: String,
         description: String,
         allowed_tools: Vec<String>,
-        max_tool_calls: u8,
+        max_tool_calls: u16,
         timeout_secs: u64,
         ui_entry: SkillUiEntry,
         #[serde(default)]
