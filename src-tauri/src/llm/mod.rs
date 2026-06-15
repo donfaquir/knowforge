@@ -1072,6 +1072,19 @@ pub fn abort_llm_stream(session_id: String, sessions: State<'_, Arc<LlmSessionSt
     Ok(())
 }
 
+#[tauri::command]
+pub fn clear_agent_memory(
+    workspace: State<'_, crate::WorkspaceState>,
+) -> Result<(), String> {
+    let root = lock_workspace_root(&workspace)?;
+    let path = root.join(".knowforge").join("agent_memory.json");
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| format!("Failed to delete memory file: {e}"))?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RespondToolApprovalArgs {

@@ -1686,6 +1686,7 @@ pub fn run() {
             save_vault_config_patch,
             llm::list_ollama_models,
             llm::list_openai_models,
+            llm::clear_agent_memory,
             llm::start_ollama_chat_stream,
             llm::abort_llm_stream,
             llm::respond_tool_approval,
