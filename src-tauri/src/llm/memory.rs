@@ -1,7 +1,11 @@
 use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use super::provider::{CompletionOverrides, LlmProvider};
+use super::LlmChatMessage;
 
 // ── Capacity constants ──
 
@@ -666,6 +670,232 @@ impl AgentMemory {
                 self.sessions.drain(0..excess);
             }
         }
+    }
+}
+
+// ── MemoryManager (Spec 4) ──
+
+const MIN_USER_MESSAGES_FOR_SESSION: usize = 2;
+const MAX_EXTRACTION_MESSAGES: usize = 30;
+
+const SESSION_EXTRACTION_PROMPT: &str = r#"You are a user modeling agent for KnowForge, a personal knowledge management tool.
+Your task: analyze the conversation and update the user model to help future sessions
+understand this user better.
+
+## Current user model
+{current_memory_json}
+
+## What to extract
+
+### 1. Knowledge domains
+Identify domains the user engaged with. For each domain:
+- "domain": the knowledge area (e.g. "distributed systems", "machine learning")
+- "depth": assess from conversation evidence:
+    - "curious": user asked basic questions, requested explanations
+    - "learning": user followed discussion but needed guidance
+    - "practitioner": user showed hands-on experience, discussed trade-offs
+    - "expert": user corrected the assistant, discussed cutting-edge topics
+- "current_focus": specific sub-topic if identifiable (nullable)
+- "motivation": ONLY if the user EXPLICITLY stated why they're interested (nullable)
+  Do NOT infer motivation.
+- "confidence": signal strength — explicit self-description = 0.8, demonstrated expertise = 0.7, asked questions = 0.5
+
+### 2. Interaction style (only if clearly demonstrated)
+Only include fields with CLEAR evidence from this conversation.
+Do NOT extrapolate from a single instance.
+Possible keys: "detail_preference", "explanation_style", "challenge_tolerance", "format".
+
+### 3. Corrections
+User explicitly told the assistant to do/not do something.
+Include the user's stated reason.
+
+### 4. Session summary
+One concise sentence: what the user wanted and what was done.
+
+## Rules
+- One conversation = one evidence point.
+- For interaction style: require >= 2 instances in this conversation.
+- For motivation: ONLY extract from explicit statements. NEVER infer.
+- When uncertain, OMIT the field entirely.
+- Do NOT duplicate information already in the current model unless updating it.
+- Return ONLY a JSON object, no markdown fences.
+
+Return a JSON object with these optional fields:
+knowledge_domains, interaction_style_updates, new_corrections,
+remove_corrections, session_summary, session_domains_touched, follow_up."#;
+
+const EXPLICIT_EXTRACTION_PROMPT: &str = r#"The user just gave an explicit memory instruction in a KnowForge session.
+Extract what they want remembered or forgotten.
+
+## Current user model
+{current_memory_json}
+
+## Context messages
+{context_messages}
+
+For "forget" instructions, put the matching rule text in remove_corrections.
+For "remember" instructions, add to new_corrections (with reason from context),
+knowledge_domains, or interaction_style_updates as appropriate.
+
+Return ONLY a JSON object with these optional fields:
+knowledge_domains, interaction_style_updates, new_corrections,
+remove_corrections, session_summary, session_domains_touched, follow_up."#;
+
+pub struct MemoryManager {
+    pub memory: AgentMemory,
+    cloud: Option<Arc<dyn LlmProvider>>,
+    workspace_root: PathBuf,
+    dirty: bool,
+}
+
+impl MemoryManager {
+    pub fn new(workspace_root: PathBuf, cloud: Option<Arc<dyn LlmProvider>>) -> Self {
+        let mut memory = AgentMemory::load(&workspace_root);
+        memory.apply_confidence_decay();
+        Self {
+            memory,
+            cloud,
+            workspace_root,
+            dirty: false,
+        }
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn reset_dirty(&mut self) {
+        self.dirty = false;
+    }
+
+    pub fn format_for_injection(&self) -> Option<String> {
+        self.memory.format_for_injection()
+    }
+
+    pub async fn extract_explicit(&mut self, context_messages: &[LlmChatMessage]) {
+        let cloud = match &self.cloud {
+            Some(c) => c.clone(),
+            None => return,
+        };
+
+        let prompt = build_explicit_extraction_prompt(&self.memory, context_messages);
+        let messages = vec![LlmChatMessage {
+            role: "user".to_string(),
+            content: prompt,
+            ..Default::default()
+        }];
+
+        let overrides = CompletionOverrides {
+            json_mode: true,
+            temperature: Some(0.1),
+            ..Default::default()
+        };
+
+        match cloud.chat_completion(&messages, Some(&overrides)).await {
+            Ok(response) => match serde_json::from_str::<UserModelUpdate>(&response) {
+                Ok(update) => {
+                    self.memory.merge_user_model(update);
+                    if let Err(e) = self.memory.save(&self.workspace_root) {
+                        eprintln!("[memory] Failed to save after explicit extraction: {e}");
+                    }
+                    self.dirty = true;
+                }
+                Err(e) => eprintln!("[memory] Failed to parse extraction response: {e}"),
+            },
+            Err(e) => eprintln!("[memory] Explicit extraction failed: {e}"),
+        }
+    }
+
+    pub async fn extract_session_end(&mut self, messages: &[LlmChatMessage]) {
+        let cloud = match &self.cloud {
+            Some(c) => c.clone(),
+            None => return,
+        };
+
+        let user_msg_count = messages.iter().filter(|m| m.role == "user").count();
+        if user_msg_count < MIN_USER_MESSAGES_FOR_SESSION {
+            return;
+        }
+
+        let trimmed = trim_messages_for_extraction(messages);
+        let prompt = build_session_extraction_prompt(&self.memory, &trimmed);
+
+        let extraction_messages = vec![LlmChatMessage {
+            role: "user".to_string(),
+            content: prompt,
+            ..Default::default()
+        }];
+
+        let overrides = CompletionOverrides {
+            json_mode: true,
+            temperature: Some(0.1),
+            ..Default::default()
+        };
+
+        match cloud
+            .chat_completion(&extraction_messages, Some(&overrides))
+            .await
+        {
+            Ok(response) => match serde_json::from_str::<UserModelUpdate>(&response) {
+                Ok(update) => {
+                    self.memory.merge_user_model(update);
+                    if let Err(e) = self.memory.save(&self.workspace_root) {
+                        eprintln!("[memory] Failed to save after session extraction: {e}");
+                    }
+                }
+                Err(e) => eprintln!("[memory] Failed to parse session extraction: {e}"),
+            },
+            Err(e) => eprintln!("[memory] Session extraction failed: {e}"),
+        }
+    }
+}
+
+fn trim_messages_for_extraction(messages: &[LlmChatMessage]) -> Vec<LlmChatMessage> {
+    if messages.len() <= MAX_EXTRACTION_MESSAGES {
+        return messages.to_vec();
+    }
+    let mut result = Vec::with_capacity(MAX_EXTRACTION_MESSAGES);
+    result.extend_from_slice(&messages[..2]);
+    result.extend_from_slice(&messages[messages.len() - (MAX_EXTRACTION_MESSAGES - 2)..]);
+    result
+}
+
+fn build_session_extraction_prompt(memory: &AgentMemory, messages: &[LlmChatMessage]) -> String {
+    let memory_json = serde_json::to_string_pretty(memory).unwrap_or_default();
+    let conversation = messages
+        .iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .map(|m| format!("[{}]: {}", m.role, truncate_message(&m.content, 500)))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let prompt = SESSION_EXTRACTION_PROMPT.replace("{current_memory_json}", &memory_json);
+    format!("{prompt}\n\n## Conversation\n{conversation}")
+}
+
+fn build_explicit_extraction_prompt(
+    memory: &AgentMemory,
+    context_messages: &[LlmChatMessage],
+) -> String {
+    let memory_json = serde_json::to_string_pretty(memory).unwrap_or_default();
+    let context = context_messages
+        .iter()
+        .map(|m| format!("[{}]: {}", m.role, truncate_message(&m.content, 300)))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    EXPLICIT_EXTRACTION_PROMPT
+        .replace("{current_memory_json}", &memory_json)
+        .replace("{context_messages}", &context)
+}
+
+fn truncate_message(content: &str, max_chars: usize) -> &str {
+    if content.len() <= max_chars {
+        return content;
+    }
+    match content.char_indices().nth(max_chars) {
+        Some((idx, _)) => &content[..idx],
+        None => content,
     }
 }
 
@@ -1477,5 +1707,219 @@ mod tests {
         m.merge_user_model(update);
         assert!(m.sessions.len() <= MAX_SESSIONS);
         assert_eq!(m.sessions.last().unwrap().summary, "new session");
+    }
+
+    // -- MemoryManager --
+
+    #[test]
+    fn manager_new_loads_and_decays() {
+        let tmp = TempDir::new().unwrap();
+        let old_date = (Utc::now().date_naive() - chrono::Duration::days(61))
+            .format("%Y-%m-%d")
+            .to_string();
+        let mut m = AgentMemory::default();
+        m.knowledge_domains.push(KnowledgeDomain {
+            domain: "Rust".to_string(),
+            depth: "learning".to_string(),
+            current_focus: None,
+            motivation: None,
+            confidence: 0.7,
+            last_evidence: old_date,
+            evidence_count: 1,
+            archived: false,
+        });
+        m.save(tmp.path()).unwrap();
+
+        let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+        assert!((mgr.memory.knowledge_domains[0].confidence - 0.5).abs() < f64::EPSILON);
+        assert!(!mgr.is_dirty());
+    }
+
+    #[test]
+    fn manager_new_missing_file() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+        assert_eq!(mgr.memory.version, 2);
+        assert!(mgr.memory.knowledge_domains.is_empty());
+        assert!(!mgr.is_dirty());
+    }
+
+    #[test]
+    fn manager_dirty_flag() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+        assert!(!mgr.is_dirty());
+        mgr.dirty = true;
+        assert!(mgr.is_dirty());
+        mgr.reset_dirty();
+        assert!(!mgr.is_dirty());
+    }
+
+    #[tokio::test]
+    async fn extract_explicit_no_cloud_skips() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+        let messages = vec![LlmChatMessage {
+            role: "user".to_string(),
+            content: "remember I like bullet points".to_string(),
+            ..Default::default()
+        }];
+        mgr.extract_explicit(&messages).await;
+        assert!(!mgr.is_dirty());
+        assert!(mgr.memory.corrections.is_empty());
+    }
+
+    #[tokio::test]
+    async fn extract_session_end_short_conversation_skips() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+        let messages = vec![LlmChatMessage {
+            role: "user".to_string(),
+            content: "hello".to_string(),
+            ..Default::default()
+        }];
+        mgr.extract_session_end(&messages).await;
+        assert!(mgr.memory.sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn extract_session_end_no_cloud_skips() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+        let messages = vec![
+            LlmChatMessage {
+                role: "user".to_string(),
+                content: "first".to_string(),
+                ..Default::default()
+            },
+            LlmChatMessage {
+                role: "assistant".to_string(),
+                content: "reply".to_string(),
+                ..Default::default()
+            },
+            LlmChatMessage {
+                role: "user".to_string(),
+                content: "second".to_string(),
+                ..Default::default()
+            },
+        ];
+        mgr.extract_session_end(&messages).await;
+        assert!(mgr.memory.sessions.is_empty());
+    }
+
+    // -- trim_messages_for_extraction --
+
+    #[test]
+    fn trim_within_limit() {
+        let msgs: Vec<LlmChatMessage> = (0..10)
+            .map(|i| LlmChatMessage {
+                role: "user".to_string(),
+                content: format!("msg {i}"),
+                ..Default::default()
+            })
+            .collect();
+        let trimmed = trim_messages_for_extraction(&msgs);
+        assert_eq!(trimmed.len(), 10);
+    }
+
+    #[test]
+    fn trim_over_limit() {
+        let msgs: Vec<LlmChatMessage> = (0..40)
+            .map(|i| LlmChatMessage {
+                role: "user".to_string(),
+                content: format!("msg {i}"),
+                ..Default::default()
+            })
+            .collect();
+        let trimmed = trim_messages_for_extraction(&msgs);
+        assert_eq!(trimmed.len(), MAX_EXTRACTION_MESSAGES);
+        assert_eq!(trimmed[0].content, "msg 0");
+        assert_eq!(trimmed[1].content, "msg 1");
+        assert_eq!(trimmed[2].content, "msg 12");
+        assert_eq!(trimmed.last().unwrap().content, "msg 39");
+    }
+
+    // -- Prompt builders --
+
+    #[test]
+    fn session_prompt_contains_memory_and_conversation() {
+        let m = AgentMemory::default();
+        let msgs = vec![
+            LlmChatMessage {
+                role: "user".to_string(),
+                content: "tell me about Rust".to_string(),
+                ..Default::default()
+            },
+            LlmChatMessage {
+                role: "assistant".to_string(),
+                content: "Rust is a systems language".to_string(),
+                ..Default::default()
+            },
+        ];
+        let prompt = build_session_extraction_prompt(&m, &msgs);
+        assert!(prompt.contains("\"version\": 2"));
+        assert!(prompt.contains("[user]: tell me about Rust"));
+        assert!(prompt.contains("[assistant]: Rust is a systems language"));
+        assert!(prompt.contains("knowledge_domains"));
+    }
+
+    #[test]
+    fn session_prompt_filters_tool_messages() {
+        let m = AgentMemory::default();
+        let msgs = vec![
+            LlmChatMessage {
+                role: "user".to_string(),
+                content: "search something".to_string(),
+                ..Default::default()
+            },
+            LlmChatMessage {
+                role: "tool".to_string(),
+                content: "tool result".to_string(),
+                ..Default::default()
+            },
+            LlmChatMessage {
+                role: "assistant".to_string(),
+                content: "here's what I found".to_string(),
+                ..Default::default()
+            },
+        ];
+        let prompt = build_session_extraction_prompt(&m, &msgs);
+        assert!(!prompt.contains("[tool]"));
+        assert!(prompt.contains("[user]"));
+        assert!(prompt.contains("[assistant]"));
+    }
+
+    #[test]
+    fn explicit_prompt_contains_context() {
+        let m = AgentMemory::default();
+        let msgs = vec![LlmChatMessage {
+            role: "user".to_string(),
+            content: "remember I prefer concise answers".to_string(),
+            ..Default::default()
+        }];
+        let prompt = build_explicit_extraction_prompt(&m, &msgs);
+        assert!(prompt.contains("remember I prefer concise answers"));
+        assert!(prompt.contains("remove_corrections"));
+    }
+
+    // -- truncate_message --
+
+    #[test]
+    fn truncate_short_message() {
+        assert_eq!(truncate_message("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_long_message() {
+        let long = "a".repeat(600);
+        let truncated = truncate_message(&long, 500);
+        assert_eq!(truncated.len(), 500);
+    }
+
+    #[test]
+    fn truncate_multibyte() {
+        let msg = "你好世界这是一个测试";
+        let truncated = truncate_message(msg, 3);
+        assert_eq!(truncated, "你好世");
     }
 }
