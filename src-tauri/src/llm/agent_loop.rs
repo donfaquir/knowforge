@@ -20,11 +20,15 @@ use tokio_util::sync::CancellationToken;
 
 use super::approval::ToolApprovalState;
 use super::context_guard::ContextGuard;
+use super::memory;
 use super::provider::{LlmProvider, NormalizedToolCall};
 use super::{LlmChatMessage, LlmToolCall, LlmToolCallFunction};
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::types::{ApprovalPolicy, ToolError, ToolManifest};
+
+pub(crate) type SharedMemoryManager =
+    Option<Arc<tokio::sync::Mutex<memory::MemoryManager>>>;
 
 /// Shared discovery hint injected at the top of any tool-using turn (Iter 3.5 P0-2).
 ///
@@ -120,6 +124,7 @@ pub async fn run_agent_stream(
     config: AgentLoopConfig,
     conversation_id: String,
     approval_state: Arc<ToolApprovalState>,
+    memory_manager: SharedMemoryManager,
 ) -> String {
     let mut messages = initial_messages;
     let mut total_tool_result_chars: usize = 0;
@@ -132,7 +137,29 @@ pub async fn run_agent_stream(
             return String::new();
         }
 
+        if let Some(ref mm) = memory_manager {
+            let mut mgr = mm.lock().await;
+            if mgr.is_dirty() {
+                if let Some(mem_msg) = mgr.format_for_injection() {
+                    replace_or_insert_memory_message(&mut messages, &mem_msg);
+                }
+                mgr.reset_dirty();
+            }
+        }
+
         context_guard.trim_with_summary(&mut messages).await;
+
+        if tool_call_count == 0 {
+            if let Some(ref mm) = memory_manager {
+                if let Some(user_msg) = messages.iter().rev().find(|m| m.role == "user") {
+                    if memory::contains_trigger(&user_msg.content) {
+                        let context = extract_context_window(&messages, 5);
+                        let mut mgr = mm.lock().await;
+                        mgr.extract_explicit(&context).await;
+                    }
+                }
+            }
+        }
 
         // 1. 流式请求（携带 tools 字段；本轮文字会通过 emit_chunk/emit_done 推给前端）
         let stream_result = match provider
@@ -633,6 +660,40 @@ fn summarize_tool_input(args: &Value) -> String {
         s.push_str("...");
     }
     s
+}
+
+const MEMORY_HEADER: &str = "# User Model";
+
+fn replace_or_insert_memory_message(messages: &mut Vec<LlmChatMessage>, content: &str) {
+    if let Some(msg) = messages
+        .iter_mut()
+        .find(|m| m.role == "system" && m.content.starts_with(MEMORY_HEADER))
+    {
+        msg.content = content.to_string();
+    } else {
+        let pos = if messages.is_empty() { 0 } else { 1 };
+        messages.insert(
+            pos,
+            LlmChatMessage {
+                role: "system".to_string(),
+                content: content.to_string(),
+                ..Default::default()
+            },
+        );
+    }
+}
+
+fn extract_context_window(messages: &[LlmChatMessage], n: usize) -> Vec<LlmChatMessage> {
+    messages
+        .iter()
+        .rev()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .take(n)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 #[cfg(test)]

@@ -833,7 +833,7 @@ pub async fn start_ollama_chat_stream(
         Vec::new()
     };
     let outcome = assemble_ollama_messages(&root, &ai, &args, embed_paths, &skills_for_prompt)?;
-    let messages = outcome.messages;
+    let mut messages = outcome.messages;
     let resolved_depth = outcome.resolved_depth;
     let reply_context_sources = outcome.reply_context_sources;
 
@@ -874,7 +874,26 @@ pub async fn start_ollama_chat_stream(
         AgentMode::Direct
     };
 
+    let memory_enabled = ai.memory_enabled;
+    let ai_for_memory = ai.clone();
+
     tokio::spawn(async move {
+        let memory_manager: agent_loop::SharedMemoryManager = if memory_enabled {
+            let cloud = provider::create_cloud_provider(&ai_for_memory).ok();
+            let mgr = memory::MemoryManager::new(workspace_root.clone(), cloud);
+            if let Some(mem_msg) = mgr.format_for_injection() {
+                let pos = if messages.is_empty() { 0 } else { 1 };
+                messages.insert(pos, LlmChatMessage {
+                    role: "system".to_string(),
+                    content: mem_msg,
+                    ..Default::default()
+                });
+            }
+            Some(Arc::new(tokio::sync::Mutex::new(mgr)))
+        } else {
+            None
+        };
+
         if tools_enabled {
             let tool_filter = if agent_mode == AgentMode::Tiered {
                 ToolFilter::all()
@@ -904,6 +923,12 @@ pub async fn start_ollama_chat_stream(
                 ..Default::default()
             };
 
+            let messages_for_extraction = if memory_manager.is_some() {
+                Some(messages.clone())
+            } else {
+                None
+            };
+
             match agent_mode {
                 AgentMode::Direct => {
                     let _ = agent_loop::run_agent_stream(
@@ -921,6 +946,7 @@ pub async fn start_ollama_chat_stream(
                         loop_config,
                         conversation_id,
                         approval_arc,
+                        memory_manager.clone(),
                     )
                     .await;
                 }
@@ -940,6 +966,7 @@ pub async fn start_ollama_chat_stream(
                         loop_config,
                         conversation_id,
                         approval_arc,
+                        memory_manager.clone(),
                     )
                     .await;
                 }
@@ -947,7 +974,6 @@ pub async fn start_ollama_chat_stream(
                     let cloud = match provider::create_cloud_provider(&ai) {
                         Ok(p) => p,
                         Err(_) => {
-                            // Degrade to local planning
                             let _ = planning::run_planned_agent(
                                 app_h.clone(),
                                 sid.clone(),
@@ -963,6 +989,7 @@ pub async fn start_ollama_chat_stream(
                                 loop_config,
                                 conversation_id,
                                 approval_arc,
+                                memory_manager.clone(),
                             )
                             .await;
                             sessions_arc.remove_session(&sid);
@@ -987,6 +1014,7 @@ pub async fn start_ollama_chat_stream(
                                 loop_config,
                                 conversation_id,
                                 approval_arc,
+                                memory_manager.clone(),
                             )
                             .await;
                             sessions_arc.remove_session(&sid);
@@ -1009,9 +1037,17 @@ pub async fn start_ollama_chat_stream(
                         loop_config,
                         conversation_id,
                         approval_arc,
+                        memory_manager.clone(),
                     )
                     .await;
                 }
+            }
+
+            if let (Some(mm), Some(msgs)) = (memory_manager, messages_for_extraction) {
+                tokio::spawn(async move {
+                    let mut mgr = mm.lock().await;
+                    mgr.extract_session_end(&msgs).await;
+                });
             }
         } else {
             let _ = provider

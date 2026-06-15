@@ -251,9 +251,15 @@ pub struct AiConfig {
     pub tools_enabled: bool,
     #[serde(default)]
     pub planning_enabled: bool,
+    #[serde(default = "default_memory_enabled")]
+    pub memory_enabled: bool,
 }
 
 fn default_tools_enabled() -> bool {
+    true
+}
+
+fn default_memory_enabled() -> bool {
     true
 }
 
@@ -275,6 +281,7 @@ impl Default for AiConfig {
             privacy: AiPrivacy::default(),
             tools_enabled: true,
             planning_enabled: false,
+            memory_enabled: true,
         }
     }
 }
@@ -523,6 +530,7 @@ struct AiDiskPartial {
     privacy: Option<AiPrivacyPartial>,
     tools_enabled: Option<bool>,
     planning_enabled: Option<bool>,
+    memory_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -666,6 +674,7 @@ pub struct AiConfigPatch {
     pub privacy: Option<AiPrivacyPatch>,
     pub tools_enabled: Option<bool>,
     pub planning_enabled: Option<bool>,
+    pub memory_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -804,6 +813,7 @@ pub struct AiConfigForUi {
     pub privacy: AiPrivacy,
     pub tools_enabled: bool,
     pub planning_enabled: bool,
+    pub memory_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -957,6 +967,9 @@ fn merge_ai_from_disk_partial(mut cfg: AiConfig, partial: AiDiskPartial) -> AiCo
     if let Some(v) = partial.planning_enabled {
         cfg.planning_enabled = v;
     }
+    if let Some(v) = partial.memory_enabled {
+        cfg.memory_enabled = v;
+    }
     normalize_ai(&mut cfg);
     cfg
 }
@@ -1030,6 +1043,7 @@ fn to_ai_for_ui(ai: AiConfig) -> AiConfigForUi {
         privacy: ai.privacy,
         tools_enabled: ai.tools_enabled,
         planning_enabled: ai.planning_enabled,
+        memory_enabled: ai.memory_enabled,
     }
 }
 
@@ -1316,6 +1330,9 @@ fn apply_ai_patch(cfg: &mut AiConfig, patch: AiConfigPatch) {
     }
     if let Some(v) = patch.planning_enabled {
         cfg.planning_enabled = v;
+    }
+    if let Some(v) = patch.memory_enabled {
+        cfg.memory_enabled = v;
     }
 }
 

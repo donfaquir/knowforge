@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
-use super::agent_loop::{self, AgentLoopConfig};
+use super::agent_loop::{self, AgentLoopConfig, SharedMemoryManager};
 use super::approval::ToolApprovalState;
 use super::context_guard::ContextGuard;
 use super::planning;
@@ -267,6 +267,7 @@ pub async fn run_tiered_agent(
     config: AgentLoopConfig,
     conversation_id: String,
     approval_state: Arc<ToolApprovalState>,
+    memory_manager: SharedMemoryManager,
 ) -> String {
     // Step 1: Cloud planning (silent — separate session_id)
     let planning_sid = format!("plan-{}", uuid::Uuid::new_v4());
@@ -303,6 +304,7 @@ pub async fn run_tiered_agent(
                 config,
                 conversation_id,
                 approval_state,
+                memory_manager,
             )
             .await;
         }

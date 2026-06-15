@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
-use super::agent_loop::{self, AgentLoopConfig};
+use super::agent_loop::{self, AgentLoopConfig, SharedMemoryManager};
 use super::approval::ToolApprovalState;
 use super::provider::LlmProvider;
 use super::LlmChatMessage;
@@ -101,6 +101,7 @@ pub async fn run_planned_agent(
     config: AgentLoopConfig,
     conversation_id: String,
     approval_state: Arc<ToolApprovalState>,
+    memory_manager: SharedMemoryManager,
 ) -> String {
     // Phase A: Planning (no tools, text-only output)
     // Use a separate session_id so plan tokens don't stream into the user's chat
@@ -153,6 +154,7 @@ pub async fn run_planned_agent(
         config,
         conversation_id,
         approval_state,
+        memory_manager,
     )
     .await
 }
