@@ -25,6 +25,7 @@ pub struct CompletionOverrides {
     pub temperature: Option<f64>,
     pub top_p: Option<Option<f64>>,
     pub timeout_ms: Option<u64>,
+    pub json_mode: bool,
 }
 
 #[async_trait]

@@ -9,6 +9,7 @@ pub(crate) mod provider;
 pub(crate) mod provider_ollama;
 pub(crate) mod provider_openai;
 pub(crate) mod tiered;
+pub mod memory;
 
 pub use provider::{
     create_provider, resolve_model_name, CompletionOverrides, LlmProvider,
