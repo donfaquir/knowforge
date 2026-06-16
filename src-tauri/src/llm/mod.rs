@@ -1145,7 +1145,7 @@ pub fn clear_agent_memory(
     workspace: State<'_, crate::WorkspaceState>,
 ) -> Result<(), String> {
     let root = lock_workspace_root(&workspace)?;
-    let path = root.join(".knowforge").join("agent_memory.json");
+    let path = root.join(".knowforge/memory").join("agent_memory.json");
     if path.exists() {
         std::fs::remove_file(&path)
             .map_err(|e| format!("Failed to delete memory file: {e}"))?;
@@ -1159,7 +1159,7 @@ pub fn apply_memory_proposals(
     accepted_ids: Vec<String>,
 ) -> Result<(), String> {
     let root = lock_workspace_root(&workspace)?;
-    let pending_path = root.join(".knowforge").join("pending_proposals.json");
+    let pending_path = root.join(".knowforge/memory").join("pending_proposals.json");
 
     let content = std::fs::read_to_string(&pending_path)
         .map_err(|e| format!("No pending proposals: {e}"))?;
@@ -1176,7 +1176,7 @@ pub fn apply_memory_proposals(
 
     mem.save(&root)?;
     let _ = std::fs::remove_file(&pending_path);
-    let _ = std::fs::remove_file(root.join(".knowforge").join("agent_memory.snapshot.json"));
+    let _ = std::fs::remove_file(root.join(".knowforge/memory").join("agent_memory.snapshot.json"));
 
     Ok(())
 }
@@ -1186,7 +1186,7 @@ pub fn get_pending_memory_proposals(
     workspace: State<'_, crate::WorkspaceState>,
 ) -> Result<Option<memory::MemoryProposalBatch>, String> {
     let root = lock_workspace_root(&workspace)?;
-    let path = root.join(".knowforge").join("pending_proposals.json");
+    let path = root.join(".knowforge/memory").join("pending_proposals.json");
     if !path.exists() {
         return Ok(None);
     }

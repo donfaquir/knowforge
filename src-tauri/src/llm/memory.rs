@@ -19,7 +19,7 @@ const INJECTION_RECENT_SESSIONS: usize = 3;
 const MEMORY_FILE: &str = "agent_memory.json";
 const SNAPSHOT_FILE: &str = "agent_memory.snapshot.json";
 const PENDING_FILE: &str = "pending_proposals.json";
-const KNOWFORGE_DIR: &str = ".knowforge";
+const KNOWFORGE_DIR: &str = ".knowforge/memory";
 const WORKSPACE_STALENESS_DAYS: i64 = 7;
 const PROPOSAL_EXPIRY_DAYS: i64 = 7;
 
@@ -334,7 +334,7 @@ impl AgentMemory {
     pub fn save(&self, workspace_root: &Path) -> Result<(), String> {
         let dir = workspace_root.join(KNOWFORGE_DIR);
         std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("Failed to create .knowforge dir: {e}"))?;
+            .map_err(|e| format!("Failed to create .knowforge/memory dir: {e}"))?;
         let path = dir.join(MEMORY_FILE);
         let tmp = dir.join(format!("{MEMORY_FILE}.tmp"));
         let json = serde_json::to_string_pretty(self)
@@ -1178,7 +1178,7 @@ impl MemoryManager {
         let content = serde_json::to_string_pretty(&self.memory)
             .map_err(|e| format!("Snapshot serialization failed: {e}"))?;
         std::fs::create_dir_all(self.workspace_root.join(KNOWFORGE_DIR))
-            .map_err(|e| format!("Failed to create .knowforge dir: {e}"))?;
+            .map_err(|e| format!("Failed to create .knowforge/memory dir: {e}"))?;
         std::fs::write(&path, format!("{content}\n"))
             .map_err(|e| format!("Snapshot write failed: {e}"))?;
         Ok(())
@@ -1206,7 +1206,7 @@ impl MemoryManager {
     pub fn save_pending_proposals(&self, batch: &MemoryProposalBatch) -> Result<(), String> {
         let path = self.workspace_root.join(KNOWFORGE_DIR).join(PENDING_FILE);
         std::fs::create_dir_all(self.workspace_root.join(KNOWFORGE_DIR))
-            .map_err(|e| format!("Failed to create .knowforge dir: {e}"))?;
+            .map_err(|e| format!("Failed to create .knowforge/memory dir: {e}"))?;
         let content = serde_json::to_string_pretty(batch)
             .map_err(|e| format!("Pending serialization failed: {e}"))?;
         std::fs::write(&path, format!("{content}\n"))
