@@ -89,6 +89,7 @@ impl LlmProvider for OllamaProvider {
         let timeout = overrides
             .and_then(|o| o.timeout_ms)
             .unwrap_or(self.timeout_ms);
+        let json_mode = overrides.map_or(false, |o| o.json_mode);
 
         ollama::run_chat_completion(
             &self.base_url,
@@ -97,6 +98,7 @@ impl LlmProvider for OllamaProvider {
             temp,
             top_p,
             timeout,
+            json_mode,
         )
         .await
     }

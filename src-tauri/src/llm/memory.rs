@@ -13,12 +13,12 @@ const MAX_KNOWLEDGE_DOMAINS: usize = 15;
 const MAX_CORRECTIONS: usize = 20;
 const MAX_SESSIONS: usize = 10;
 const MAX_FREQUENT_PATHS: usize = 15;
-
 const MAX_TOPICS: usize = 20;
 const INJECTION_RECENT_SESSIONS: usize = 3;
 
 const MEMORY_FILE: &str = "agent_memory.json";
 const KNOWFORGE_DIR: &str = ".knowforge";
+const WORKSPACE_STALENESS_DAYS: i64 = 7;
 
 // ── Core user model ──
 
@@ -152,8 +152,11 @@ pub struct UserModelUpdate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DomainUpdate {
+    #[serde(alias = "name")]
     pub domain: String,
+    #[serde(alias = "level")]
     pub depth: String,
+    #[serde(alias = "focus")]
     pub current_focus: Option<String>,
     pub motivation: Option<String>,
     #[serde(default = "default_confidence")]
@@ -166,6 +169,7 @@ fn default_confidence() -> f64 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewCorrection {
+    #[serde(alias = "instruction")]
     pub rule: String,
     pub reason: String,
 }
@@ -303,6 +307,52 @@ pub fn observe_workspace(
         frequent_paths,
         tag_vocabulary,
         topics,
+    }
+}
+
+fn is_workspace_stale(updated_at: &Option<String>) -> bool {
+    let ts = match updated_at {
+        Some(s) => s,
+        None => return true,
+    };
+    match chrono::DateTime::parse_from_rfc3339(ts) {
+        Ok(dt) => (Utc::now() - dt.with_timezone(&Utc)).num_days() >= WORKSPACE_STALENESS_DAYS,
+        Err(_) => true,
+    }
+}
+
+fn scan_md_paths(root: &Path) -> Vec<String> {
+    let mut paths = Vec::new();
+    scan_md_recursive(root, root, &mut paths);
+    paths
+}
+
+fn scan_md_recursive(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            scan_md_recursive(root, &path, out);
+        } else if meta.is_file() && name_str.ends_with(".md") {
+            if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
     }
 }
 
@@ -752,6 +802,15 @@ impl MemoryManager {
     pub fn new(workspace_root: PathBuf, cloud: Option<Arc<dyn LlmProvider>>) -> Self {
         let mut memory = AgentMemory::load(&workspace_root);
         memory.apply_confidence_decay();
+
+        if is_workspace_stale(&memory.workspace.updated_at) {
+            let note_paths = scan_md_paths(&workspace_root);
+            memory.workspace = observe_workspace(&note_paths, None);
+            if let Err(e) = memory.save(&workspace_root) {
+                eprintln!("[memory] Failed to save after workspace observation: {e}");
+            }
+        }
+
         Self {
             memory,
             cloud,
@@ -775,8 +834,12 @@ impl MemoryManager {
     pub async fn extract_explicit(&mut self, context_messages: &[LlmChatMessage]) {
         let cloud = match &self.cloud {
             Some(c) => c.clone(),
-            None => return,
+            None => {
+                eprintln!("[memory] extract_explicit: no provider available, skipping");
+                return;
+            }
         };
+        eprintln!("[memory] extract_explicit: starting with {} context messages", context_messages.len());
 
         let prompt = build_explicit_extraction_prompt(&self.memory, context_messages);
         let messages = vec![LlmChatMessage {
@@ -792,16 +855,19 @@ impl MemoryManager {
         };
 
         match cloud.chat_completion(&messages, Some(&overrides)).await {
-            Ok(response) => match serde_json::from_str::<UserModelUpdate>(&response) {
-                Ok(update) => {
-                    self.memory.merge_user_model(update);
-                    if let Err(e) = self.memory.save(&self.workspace_root) {
-                        eprintln!("[memory] Failed to save after explicit extraction: {e}");
+            Ok(response) => {
+                eprintln!("[memory] extract_explicit raw response: {response}");
+                match serde_json::from_str::<UserModelUpdate>(&response) {
+                    Ok(update) => {
+                        self.memory.merge_user_model(update);
+                        if let Err(e) = self.memory.save(&self.workspace_root) {
+                            eprintln!("[memory] Failed to save after explicit extraction: {e}");
+                        }
+                        self.dirty = true;
                     }
-                    self.dirty = true;
+                    Err(e) => eprintln!("[memory] Failed to parse extraction response: {e}"),
                 }
-                Err(e) => eprintln!("[memory] Failed to parse extraction response: {e}"),
-            },
+            }
             Err(e) => eprintln!("[memory] Explicit extraction failed: {e}"),
         }
     }
@@ -836,15 +902,18 @@ impl MemoryManager {
             .chat_completion(&extraction_messages, Some(&overrides))
             .await
         {
-            Ok(response) => match serde_json::from_str::<UserModelUpdate>(&response) {
-                Ok(update) => {
-                    self.memory.merge_user_model(update);
-                    if let Err(e) = self.memory.save(&self.workspace_root) {
-                        eprintln!("[memory] Failed to save after session extraction: {e}");
+            Ok(response) => {
+                eprintln!("[memory] extract_session_end raw response: {response}");
+                match serde_json::from_str::<UserModelUpdate>(&response) {
+                    Ok(update) => {
+                        self.memory.merge_user_model(update);
+                        if let Err(e) = self.memory.save(&self.workspace_root) {
+                            eprintln!("[memory] Failed to save after session extraction: {e}");
+                        }
                     }
+                    Err(e) => eprintln!("[memory] Failed to parse session extraction: {e}"),
                 }
-                Err(e) => eprintln!("[memory] Failed to parse session extraction: {e}"),
-            },
+            }
             Err(e) => eprintln!("[memory] Session extraction failed: {e}"),
         }
     }

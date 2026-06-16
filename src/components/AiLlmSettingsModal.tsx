@@ -1186,7 +1186,13 @@ export function AiLlmSettingsModal({
                 className="app-modal__btn app-modal__btn--danger"
                 disabled={!tauriRuntime || !workspaceReady}
                 onClick={async () => {
-                  if (!window.confirm(t("settings.clearMemoryConfirm"))) return;
+                  const confirmed = isTauri()
+                    ? await ask(t("settings.clearMemoryConfirm"), {
+                        title: t("settings.clearMemory"),
+                        kind: "warning",
+                      })
+                    : window.confirm(t("settings.clearMemoryConfirm"));
+                  if (!confirmed) return;
                   try {
                     await invoke("clear_agent_memory");
                   } catch (e) {

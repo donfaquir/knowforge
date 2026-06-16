@@ -152,12 +152,16 @@ pub async fn run_agent_stream(
         if tool_call_count == 0 {
             if let Some(ref mm) = memory_manager {
                 if let Some(user_msg) = messages.iter().rev().find(|m| m.role == "user") {
-                    if memory::contains_trigger(&user_msg.content) {
+                    let triggered = memory::contains_trigger(&user_msg.content);
+                    eprintln!("[memory] trigger check: triggered={triggered}, msg={:.60}", user_msg.content);
+                    if triggered {
                         let context = extract_context_window(&messages, 5);
                         let mut mgr = mm.lock().await;
                         mgr.extract_explicit(&context).await;
                     }
                 }
+            } else {
+                eprintln!("[memory] memory_manager is None, skipping trigger check");
             }
         }
 

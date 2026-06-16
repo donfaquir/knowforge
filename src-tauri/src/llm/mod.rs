@@ -879,8 +879,10 @@ pub async fn start_ollama_chat_stream(
 
     tokio::spawn(async move {
         let memory_manager: agent_loop::SharedMemoryManager = if memory_enabled {
-            let cloud = provider::create_cloud_provider(&ai_for_memory).ok();
-            let mgr = memory::MemoryManager::new(workspace_root.clone(), cloud);
+            let extraction_provider = provider::create_cloud_provider(&ai_for_memory)
+                .or_else(|_| provider::create_local_provider(&ai_for_memory))
+                .ok();
+            let mgr = memory::MemoryManager::new(workspace_root.clone(), extraction_provider);
             if let Some(mem_msg) = mgr.format_for_injection() {
                 let pos = if messages.is_empty() { 0 } else { 1 };
                 messages.insert(pos, LlmChatMessage {
