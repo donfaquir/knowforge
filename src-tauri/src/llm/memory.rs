@@ -1002,6 +1002,10 @@ impl MemoryManager {
         }
     }
 
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }

@@ -875,6 +875,7 @@ pub async fn start_ollama_chat_stream(
     };
 
     let memory_enabled = ai.memory_enabled;
+    let reflection_mode = ai.memory_reflection_mode.clone();
     let ai_for_memory = ai.clone();
 
     tokio::spawn(async move {
@@ -1046,9 +1047,74 @@ pub async fn start_ollama_chat_stream(
             }
 
             if let (Some(mm), Some(msgs)) = (memory_manager, messages_for_extraction) {
+                let reflection_mode = reflection_mode.clone();
+                let app_for_reflect = app_h.clone();
+                let sid_for_reflect = sid.clone();
                 tokio::spawn(async move {
                     let mut mgr = mm.lock().await;
-                    mgr.extract_session_end(&msgs).await;
+
+                    let update = match mgr.extract_session_update(&msgs).await {
+                        Some(u) => u,
+                        None => return,
+                    };
+
+                    match reflection_mode.as_str() {
+                        "off" => {
+                            mgr.memory.merge_user_model(update);
+                            if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                                eprintln!("[memory] Save failed: {e}");
+                            }
+                        }
+                        "auto" => {
+                            if memory::should_reflect(&msgs, &mgr.memory) {
+                                let proposals = mgr.reflect_on_memory(&update).await;
+                                if let Err(e) = mgr.create_snapshot() {
+                                    eprintln!("[memory] Snapshot failed: {e}");
+                                }
+                                for p in &proposals {
+                                    if let Err(e) = memory::apply_single_proposal(&mut mgr.memory, p) {
+                                        eprintln!("[memory] Apply proposal failed: {e}");
+                                    }
+                                }
+                            } else {
+                                mgr.memory.merge_user_model(update);
+                            }
+                            if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                                eprintln!("[memory] Save failed: {e}");
+                            }
+                            mgr.delete_snapshot();
+                        }
+                        _ => {
+                            // "confirm" (default)
+                            if memory::should_reflect(&msgs, &mgr.memory) {
+                                let proposals = mgr.reflect_on_memory(&update).await;
+                                if proposals.is_empty() {
+                                    mgr.memory.merge_user_model(update);
+                                    if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                                        eprintln!("[memory] Save failed: {e}");
+                                    }
+                                } else {
+                                    if let Err(e) = mgr.create_snapshot() {
+                                        eprintln!("[memory] Snapshot failed: {e}");
+                                    }
+                                    let batch = memory::MemoryProposalBatch {
+                                        session_id: sid_for_reflect.clone(),
+                                        proposals,
+                                        created_at: chrono::Utc::now().to_rfc3339(),
+                                    };
+                                    if let Err(e) = mgr.save_pending_proposals(&batch) {
+                                        eprintln!("[memory] Save pending failed: {e}");
+                                    }
+                                    let _ = app_for_reflect.emit("llm:memory-proposals", &batch);
+                                }
+                            } else {
+                                mgr.memory.merge_user_model(update);
+                                if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                                    eprintln!("[memory] Save failed: {e}");
+                                }
+                            }
+                        }
+                    }
                 });
             }
         } else {
@@ -1085,6 +1151,50 @@ pub fn clear_agent_memory(
             .map_err(|e| format!("Failed to delete memory file: {e}"))?;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn apply_memory_proposals(
+    workspace: State<'_, crate::WorkspaceState>,
+    accepted_ids: Vec<String>,
+) -> Result<(), String> {
+    let root = lock_workspace_root(&workspace)?;
+    let pending_path = root.join(".knowforge").join("pending_proposals.json");
+
+    let content = std::fs::read_to_string(&pending_path)
+        .map_err(|e| format!("No pending proposals: {e}"))?;
+    let batch: memory::MemoryProposalBatch = serde_json::from_str(&content)
+        .map_err(|e| format!("Invalid pending proposals: {e}"))?;
+
+    let mut mem = memory::AgentMemory::load(&root);
+
+    for proposal in &batch.proposals {
+        if accepted_ids.contains(&proposal.id) {
+            memory::apply_single_proposal(&mut mem, proposal)?;
+        }
+    }
+
+    mem.save(&root)?;
+    let _ = std::fs::remove_file(&pending_path);
+    let _ = std::fs::remove_file(root.join(".knowforge").join("agent_memory.snapshot.json"));
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_pending_memory_proposals(
+    workspace: State<'_, crate::WorkspaceState>,
+) -> Result<Option<memory::MemoryProposalBatch>, String> {
+    let root = lock_workspace_root(&workspace)?;
+    let path = root.join(".knowforge").join("pending_proposals.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Read pending failed: {e}"))?;
+    let batch: memory::MemoryProposalBatch = serde_json::from_str(&content)
+        .map_err(|e| format!("Parse pending failed: {e}"))?;
+    Ok(Some(batch))
 }
 
 #[derive(Debug, Deserialize)]
