@@ -1186,6 +1186,29 @@ export function AiLlmSettingsModal({
                 {t("settings.memoryEnabled")}
               </label>
               <p className="app-modal__hint">{t("settings.memoryEnabledHint")}</p>
+              {form.memoryEnabled && (
+                <div className="ai-settings__reflection-mode">
+                  <p className="app-modal__hint">{t("settings.memoryReflectionMode")}</p>
+                  <div className="settings-lang-toggle">
+                    {(["confirm", "auto", "off"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`app-modal__btn settings-lang-toggle__btn${
+                          form.memoryReflectionMode === mode
+                            ? " settings-lang-toggle__btn--active"
+                            : ""
+                        }`}
+                        onClick={() =>
+                          setForm((f) => ({ ...f, memoryReflectionMode: mode }))
+                        }
+                      >
+                        {t(`settings.memoryReflection.${mode}`)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <button
                 type="button"
                 className="app-modal__btn app-modal__btn--danger"
