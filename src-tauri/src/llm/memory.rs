@@ -275,8 +275,12 @@ pub fn apply_single_proposal(
                                 d.current_focus = Some(f.to_string());
                             }
                             if let Some(dep) = upd.get("depth").and_then(|v| v.as_str()) {
-                                d.depth = dep.to_string();
+                                if depth_rank(dep) > depth_rank(&d.depth) {
+                                    d.depth = dep.to_string();
+                                }
                             }
+                            d.last_evidence = Utc::now().format("%Y-%m-%d").to_string();
+                            d.evidence_count += 1;
                         }
                     }
                 }
@@ -685,15 +689,27 @@ fn format_domain_entry(d: &KnowledgeDomain) -> String {
 pub fn contains_trigger(message: &str) -> bool {
     let lower = message.to_lowercase();
     let zh_triggers = ["记住", "忘记", "以后都", "以后每次", "不要再"];
-    let en_triggers = [
-        "remember ",
-        "forget ",
-        "from now on",
-        "always ",
-        "never ",
-    ];
-    zh_triggers.iter().any(|t| lower.contains(t))
-        || en_triggers.iter().any(|t| lower.contains(t))
+    let en_triggers = ["remember ", "forget ", "from now on"];
+
+    if zh_triggers.iter().any(|t| lower.contains(t)) {
+        return true;
+    }
+    if en_triggers.iter().any(|t| lower.contains(t)) {
+        return true;
+    }
+
+    for trigger in &["always ", "never "] {
+        if lower.starts_with(trigger) {
+            return true;
+        }
+        for sep in &[". ", "! ", "? ", "\n"] {
+            if lower.contains(&format!("{sep}{trigger}")) {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 // ── Merge algorithm (Spec 3) ──
@@ -1258,9 +1274,22 @@ fn trim_messages_for_extraction(messages: &[LlmChatMessage]) -> Vec<LlmChatMessa
     if messages.len() <= MAX_EXTRACTION_MESSAGES {
         return messages.to_vec();
     }
+    let mut head_end = 0;
+    for (i, m) in messages.iter().enumerate() {
+        head_end = i + 1;
+        if m.role != "system" {
+            break;
+        }
+    }
+    head_end = head_end.min(MAX_EXTRACTION_MESSAGES / 2);
+    let tail_count = MAX_EXTRACTION_MESSAGES - head_end;
+    let tail_start = messages.len().saturating_sub(tail_count);
+
     let mut result = Vec::with_capacity(MAX_EXTRACTION_MESSAGES);
-    result.extend_from_slice(&messages[..2]);
-    result.extend_from_slice(&messages[messages.len() - (MAX_EXTRACTION_MESSAGES - 2)..]);
+    result.extend_from_slice(&messages[..head_end]);
+    if tail_start > head_end {
+        result.extend_from_slice(&messages[tail_start..]);
+    }
     result
 }
 
@@ -1669,6 +1698,20 @@ mod tests {
         assert!(!contains_trigger("hello, how are you?"));
         assert!(!contains_trigger("help me write a note"));
         assert!(!contains_trigger("搜索一下 Rust async"));
+    }
+
+    #[test]
+    fn trigger_always_never_mid_sentence_returns_false() {
+        assert!(!contains_trigger("I always check the docs"));
+        assert!(!contains_trigger("I never used Rust before"));
+        assert!(!contains_trigger("this is always a good idea"));
+    }
+
+    #[test]
+    fn trigger_always_never_at_sentence_boundary() {
+        assert!(contains_trigger("ok. always do this"));
+        assert!(contains_trigger("sure! never use that approach"));
+        assert!(contains_trigger("got it?\nnever skip tests"));
     }
 
     // -- Merge: knowledge domains --
@@ -2247,6 +2290,37 @@ mod tests {
     }
 
     #[test]
+    fn proposal_update_respects_depth_upgrade_only() {
+        let mut m = AgentMemory::default();
+        m.knowledge_domains.push(KnowledgeDomain {
+            domain: "Rust".to_string(),
+            depth: "practitioner".to_string(),
+            current_focus: Some("async".to_string()),
+            motivation: None,
+            confidence: 0.7,
+            last_evidence: "2026-06-10".to_string(),
+            evidence_count: 2,
+            archived: false,
+        });
+        let proposal = MemoryProposal {
+            id: "mp-dg".to_string(),
+            action: ProposalAction::Update,
+            category: "knowledge_domain".to_string(),
+            target: Some("Rust".to_string()),
+            content: serde_json::json!({
+                "depth": "curious",
+                "current_focus": "macros"
+            }),
+            reason: "downgrade test".to_string(),
+        };
+        apply_single_proposal(&mut m, &proposal).unwrap();
+        assert_eq!(m.knowledge_domains[0].depth, "practitioner");
+        assert_eq!(m.knowledge_domains[0].current_focus.as_deref(), Some("macros"));
+        assert_eq!(m.knowledge_domains[0].evidence_count, 3);
+        assert_ne!(m.knowledge_domains[0].last_evidence, "2026-06-10");
+    }
+
+    #[test]
     fn proposal_archive_domain() {
         let mut m = AgentMemory::default();
         m.knowledge_domains.push(KnowledgeDomain {
@@ -2350,6 +2424,42 @@ mod tests {
         assert!(prompt.contains("Existing memory"));
         assert!(prompt.contains("New extraction"));
         assert!(prompt.contains("Rust"));
+    }
+
+    // -- trim_messages_for_extraction --
+
+    #[test]
+    fn trim_preserves_system_messages_and_first_user() {
+        let mut msgs = Vec::new();
+        msgs.push(LlmChatMessage { role: "system".to_string(), content: "sys1".to_string(), ..Default::default() });
+        msgs.push(LlmChatMessage { role: "system".to_string(), content: "sys2".to_string(), ..Default::default() });
+        msgs.push(LlmChatMessage { role: "user".to_string(), content: "first user".to_string(), ..Default::default() });
+        for i in 0..40 {
+            msgs.push(LlmChatMessage {
+                role: if i % 2 == 0 { "assistant" } else { "user" }.to_string(),
+                content: format!("msg {i}"),
+                ..Default::default()
+            });
+        }
+        let trimmed = trim_messages_for_extraction(&msgs);
+        assert!(trimmed.len() <= MAX_EXTRACTION_MESSAGES);
+        assert_eq!(trimmed[0].content, "sys1");
+        assert_eq!(trimmed[1].content, "sys2");
+        assert_eq!(trimmed[2].content, "first user");
+        assert_eq!(trimmed.last().unwrap().content, msgs.last().unwrap().content);
+    }
+
+    #[test]
+    fn trim_short_conversation_unchanged() {
+        let msgs: Vec<LlmChatMessage> = (0..5)
+            .map(|i| LlmChatMessage {
+                role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
+                content: format!("msg {i}"),
+                ..Default::default()
+            })
+            .collect();
+        let trimmed = trim_messages_for_extraction(&msgs);
+        assert_eq!(trimmed.len(), 5);
     }
 
     // -- Snapshot & pending proposals --
@@ -2597,8 +2707,7 @@ mod tests {
         let trimmed = trim_messages_for_extraction(&msgs);
         assert_eq!(trimmed.len(), MAX_EXTRACTION_MESSAGES);
         assert_eq!(trimmed[0].content, "msg 0");
-        assert_eq!(trimmed[1].content, "msg 1");
-        assert_eq!(trimmed[2].content, "msg 12");
+        assert_eq!(trimmed[1].content, "msg 11");
         assert_eq!(trimmed.last().unwrap().content, "msg 39");
     }
 

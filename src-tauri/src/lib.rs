@@ -1689,6 +1689,7 @@ pub fn run() {
             llm::clear_agent_memory,
             llm::apply_memory_proposals,
             llm::get_pending_memory_proposals,
+            llm::dismiss_memory_proposals,
             llm::start_ollama_chat_stream,
             llm::abort_llm_stream,
             llm::respond_tool_approval,

@@ -1200,7 +1200,7 @@ export function AiConversationPanel() {
   }, [memoryProposals]);
 
   const handleDismissAllProposals = useCallback(async () => {
-    await invoke("apply_memory_proposals", { acceptedIds: [] });
+    await invoke("dismiss_memory_proposals");
     setMemoryProposals(null);
   }, []);
 
@@ -1213,7 +1213,13 @@ export function AiConversationPanel() {
   }, [proposalDecisions]);
 
   const toggleProposalDecision = useCallback((id: string, accept: boolean) => {
-    setProposalDecisions((prev) => ({ ...prev, [id]: accept }));
+    setProposalDecisions((prev) => {
+      if (prev[id] === accept) {
+        const { [id]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [id]: accept };
+    });
   }, []);
 
   const handleStop = useCallback(async () => {

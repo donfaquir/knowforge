@@ -1071,6 +1071,7 @@ pub async fn start_ollama_chat_stream(
                                 if let Err(e) = mgr.create_snapshot() {
                                     eprintln!("[memory] Snapshot failed: {e}");
                                 }
+                                mgr.memory.merge_user_model(update);
                                 for p in &proposals {
                                     if let Err(e) = memory::apply_single_proposal(&mut mgr.memory, p) {
                                         eprintln!("[memory] Apply proposal failed: {e}");
@@ -1094,12 +1095,12 @@ pub async fn start_ollama_chat_stream(
                                         eprintln!("[memory] Save failed: {e}");
                                     }
                                 } else {
-                                    if let Err(e) = mgr.create_snapshot() {
-                                        eprintln!("[memory] Snapshot failed: {e}");
-                                    }
                                     mgr.memory.merge_user_model(update);
                                     if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
                                         eprintln!("[memory] Save failed: {e}");
+                                    }
+                                    if let Err(e) = mgr.create_snapshot() {
+                                        eprintln!("[memory] Snapshot failed: {e}");
                                     }
                                     let batch = memory::MemoryProposalBatch {
                                         session_id: sid_for_reflect.clone(),
@@ -1206,6 +1207,17 @@ pub fn get_pending_memory_proposals(
         }
     }
     Ok(Some(batch))
+}
+
+#[tauri::command]
+pub fn dismiss_memory_proposals(
+    workspace: State<'_, crate::WorkspaceState>,
+) -> Result<(), String> {
+    let root = lock_workspace_root(&workspace)?;
+    let dir = root.join(".knowforge/memory");
+    let _ = std::fs::remove_file(dir.join("pending_proposals.json"));
+    let _ = std::fs::remove_file(dir.join("agent_memory.snapshot.json"));
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
