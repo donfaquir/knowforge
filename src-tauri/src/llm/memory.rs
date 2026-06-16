@@ -174,6 +174,140 @@ pub struct NewCorrection {
     pub reason: String,
 }
 
+// ── Reflection proposals (Spec 8) ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryProposal {
+    #[serde(default)]
+    pub id: String,
+    pub action: ProposalAction,
+    pub category: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub content: serde_json::Value,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalAction {
+    Add,
+    Update,
+    Archive,
+    Merge,
+    Skip,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryProposalBatch {
+    pub session_id: String,
+    pub proposals: Vec<MemoryProposal>,
+    pub created_at: String,
+}
+
+const MAX_ARCHIVES_PER_REFLECTION: usize = 3;
+
+fn generate_proposal_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("mp-{ts:x}")
+}
+
+pub fn should_reflect(messages: &[LlmChatMessage], memory: &AgentMemory) -> bool {
+    let user_msg_count = messages.iter().filter(|m| m.role == "user").count();
+    if user_msg_count < 3 {
+        return false;
+    }
+    let has_existing = !memory.knowledge_domains.is_empty()
+        || !memory.corrections.is_empty()
+        || !memory.sessions.is_empty();
+    has_existing
+}
+
+pub fn apply_single_proposal(
+    memory: &mut AgentMemory,
+    proposal: &MemoryProposal,
+) -> Result<(), String> {
+    match proposal.action {
+        ProposalAction::Add => match proposal.category.as_str() {
+            "knowledge_domain" => {
+                let domain: DomainUpdate = serde_json::from_value(proposal.content.clone())
+                    .map_err(|e| format!("Invalid domain content: {e}"))?;
+                let update = UserModelUpdate {
+                    knowledge_domains: vec![domain],
+                    ..Default::default()
+                };
+                memory.merge_user_model(update);
+            }
+            "correction" => {
+                let corr: NewCorrection = serde_json::from_value(proposal.content.clone())
+                    .map_err(|e| format!("Invalid correction content: {e}"))?;
+                let update = UserModelUpdate {
+                    new_corrections: vec![corr],
+                    ..Default::default()
+                };
+                memory.merge_user_model(update);
+            }
+            _ => {}
+        },
+        ProposalAction::Update => {
+            if let Some(ref target) = proposal.target {
+                if proposal.category == "knowledge_domain" {
+                    if let Some(d) = memory
+                        .knowledge_domains
+                        .iter_mut()
+                        .find(|d| d.domain == *target)
+                    {
+                        if let Ok(upd) =
+                            serde_json::from_value::<serde_json::Value>(proposal.content.clone())
+                        {
+                            if let Some(f) = upd.get("current_focus").and_then(|v| v.as_str()) {
+                                d.current_focus = Some(f.to_string());
+                            }
+                            if let Some(dep) = upd.get("depth").and_then(|v| v.as_str()) {
+                                d.depth = dep.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ProposalAction::Archive => {
+            if let Some(ref target) = proposal.target {
+                if let Some(d) = memory
+                    .knowledge_domains
+                    .iter_mut()
+                    .find(|d| d.domain == *target)
+                {
+                    d.archived = true;
+                }
+            }
+        }
+        ProposalAction::Merge => {
+            if let Some(ref target) = proposal.target {
+                if let Some(d) = memory
+                    .knowledge_domains
+                    .iter_mut()
+                    .find(|d| d.domain == *target)
+                {
+                    d.archived = true;
+                }
+            }
+            let add_proposal = MemoryProposal {
+                action: ProposalAction::Add,
+                ..proposal.clone()
+            };
+            apply_single_proposal(memory, &add_proposal)?;
+        }
+        ProposalAction::Skip => {}
+    }
+    Ok(())
+}
+
 // ── Load / Save ──
 
 impl AgentMemory {
@@ -728,6 +862,52 @@ impl AgentMemory {
 const MIN_USER_MESSAGES_FOR_SESSION: usize = 2;
 const MAX_EXTRACTION_MESSAGES: usize = 30;
 
+const REFLECTION_PROMPT: &str = r#"You are a memory curator for KnowForge, a personal knowledge management tool.
+Your task: compare the EXISTING memory with a NEW extraction from this session,
+and produce a list of proposals to keep the memory accurate, non-redundant, and up-to-date.
+
+## Existing memory
+{current_memory_json}
+
+## New extraction from this session
+{new_update_json}
+
+## What to check
+
+### 1. Conflicts
+Does the new extraction contradict anything in existing memory?
+(e.g. user was "learning Rust" but now clearly "expert" level)
+→ Propose UPDATE or MERGE.
+
+### 2. Staleness
+Are there domains/corrections that haven't been referenced in a long time
+and the new session shows the user has moved on?
+→ Propose ARCHIVE (soft-delete, recoverable).
+
+### 3. Redundancy
+Does the new extraction duplicate an existing entry?
+→ Propose SKIP (do not add) or MERGE (combine into one).
+
+### 4. Additions
+Genuinely new information not already captured?
+→ Propose ADD.
+
+## Rules
+- Every proposal must have a clear reason.
+- Prefer MERGE over ARCHIVE when two entries overlap.
+- A single reflection may archive at most 3 domains — be conservative.
+- If nothing needs changing, return an empty array [].
+- Return ONLY a JSON array of proposals, no markdown fences.
+
+## Proposal schema
+[{
+  "action": "add" | "update" | "archive" | "merge" | "skip",
+  "category": "knowledge_domain" | "correction" | "interaction_style",
+  "target": "name of existing entry to modify (null for add)",
+  "content": { ... fields for the new/updated entry ... },
+  "reason": "why this change"
+}]"#;
+
 const SESSION_EXTRACTION_PROMPT: &str = r#"You are a user modeling agent for KnowForge, a personal knowledge management tool.
 Your task: analyze the conversation and update the user model to help future sessions
 understand this user better.
@@ -872,15 +1052,18 @@ impl MemoryManager {
         }
     }
 
-    pub async fn extract_session_end(&mut self, messages: &[LlmChatMessage]) {
+    pub async fn extract_session_update(
+        &self,
+        messages: &[LlmChatMessage],
+    ) -> Option<UserModelUpdate> {
         let cloud = match &self.cloud {
             Some(c) => c.clone(),
-            None => return,
+            None => return None,
         };
 
         let user_msg_count = messages.iter().filter(|m| m.role == "user").count();
         if user_msg_count < MIN_USER_MESSAGES_FOR_SESSION {
-            return;
+            return None;
         }
 
         let trimmed = trim_messages_for_extraction(messages);
@@ -903,18 +1086,81 @@ impl MemoryManager {
             .await
         {
             Ok(response) => {
-                eprintln!("[memory] extract_session_end raw response: {response}");
+                eprintln!("[memory] extract_session_update raw response: {response}");
                 match serde_json::from_str::<UserModelUpdate>(&response) {
-                    Ok(update) => {
-                        self.memory.merge_user_model(update);
-                        if let Err(e) = self.memory.save(&self.workspace_root) {
-                            eprintln!("[memory] Failed to save after session extraction: {e}");
-                        }
+                    Ok(update) => Some(update),
+                    Err(e) => {
+                        eprintln!("[memory] Failed to parse session extraction: {e}");
+                        None
                     }
-                    Err(e) => eprintln!("[memory] Failed to parse session extraction: {e}"),
                 }
             }
-            Err(e) => eprintln!("[memory] Session extraction failed: {e}"),
+            Err(e) => {
+                eprintln!("[memory] Session extraction failed: {e}");
+                None
+            }
+        }
+    }
+
+    pub async fn extract_session_end(&mut self, messages: &[LlmChatMessage]) {
+        if let Some(update) = self.extract_session_update(messages).await {
+            self.memory.merge_user_model(update);
+            if let Err(e) = self.memory.save(&self.workspace_root) {
+                eprintln!("[memory] Failed to save after session extraction: {e}");
+            }
+        }
+    }
+
+    pub async fn reflect_on_memory(&self, update: &UserModelUpdate) -> Vec<MemoryProposal> {
+        let cloud = match &self.cloud {
+            Some(c) => c.clone(),
+            None => return Vec::new(),
+        };
+
+        let prompt = build_reflection_prompt(&self.memory, update);
+        let messages = vec![LlmChatMessage {
+            role: "user".to_string(),
+            content: prompt,
+            ..Default::default()
+        }];
+
+        let overrides = CompletionOverrides {
+            json_mode: true,
+            temperature: Some(0.1),
+            ..Default::default()
+        };
+
+        match cloud.chat_completion(&messages, Some(&overrides)).await {
+            Ok(response) => {
+                eprintln!("[memory] reflect_on_memory raw response: {response}");
+                match serde_json::from_str::<Vec<MemoryProposal>>(&response) {
+                    Ok(mut proposals) => {
+                        for p in &mut proposals {
+                            if p.id.is_empty() {
+                                p.id = generate_proposal_id();
+                            }
+                        }
+                        let mut archive_count = 0;
+                        proposals.retain(|p| {
+                            if matches!(p.action, ProposalAction::Archive) {
+                                archive_count += 1;
+                                archive_count <= MAX_ARCHIVES_PER_REFLECTION
+                            } else {
+                                true
+                            }
+                        });
+                        proposals
+                    }
+                    Err(e) => {
+                        eprintln!("[memory] Failed to parse reflection: {e}");
+                        Vec::new()
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[memory] Reflection LLM call failed: {e}");
+                Vec::new()
+            }
         }
     }
 }
@@ -956,6 +1202,14 @@ fn build_explicit_extraction_prompt(
     EXPLICIT_EXTRACTION_PROMPT
         .replace("{current_memory_json}", &memory_json)
         .replace("{context_messages}", &context)
+}
+
+fn build_reflection_prompt(memory: &AgentMemory, update: &UserModelUpdate) -> String {
+    let memory_json = serde_json::to_string_pretty(memory).unwrap_or_default();
+    let update_json = serde_json::to_string_pretty(update).unwrap_or_default();
+    REFLECTION_PROMPT
+        .replace("{current_memory_json}", &memory_json)
+        .replace("{new_update_json}", &update_json)
 }
 
 fn truncate_message(content: &str, max_chars: usize) -> &str {
@@ -1776,6 +2030,237 @@ mod tests {
         m.merge_user_model(update);
         assert!(m.sessions.len() <= MAX_SESSIONS);
         assert_eq!(m.sessions.last().unwrap().summary, "new session");
+    }
+
+    // -- Reflection: should_reflect --
+
+    #[test]
+    fn should_reflect_empty_memory_returns_false() {
+        let memory = AgentMemory::default();
+        let messages: Vec<LlmChatMessage> = (0..5)
+            .map(|i| LlmChatMessage {
+                role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
+                content: format!("msg {i}"),
+                ..Default::default()
+            })
+            .collect();
+        assert!(!should_reflect(&messages, &memory));
+    }
+
+    #[test]
+    fn should_reflect_short_conversation_returns_false() {
+        let mut memory = AgentMemory::default();
+        memory.corrections.push(MemoryCorrection {
+            rule: "test".to_string(),
+            reason: "test".to_string(),
+            date: "2026-06-15".to_string(),
+            source: "explicit".to_string(),
+        });
+        let messages = vec![
+            LlmChatMessage { role: "user".to_string(), content: "hi".to_string(), ..Default::default() },
+            LlmChatMessage { role: "assistant".to_string(), content: "hello".to_string(), ..Default::default() },
+            LlmChatMessage { role: "user".to_string(), content: "bye".to_string(), ..Default::default() },
+        ];
+        assert!(!should_reflect(&messages, &memory));
+    }
+
+    #[test]
+    fn should_reflect_sufficient_returns_true() {
+        let mut memory = AgentMemory::default();
+        memory.knowledge_domains.push(KnowledgeDomain {
+            domain: "Rust".to_string(),
+            depth: "learning".to_string(),
+            current_focus: None,
+            motivation: None,
+            confidence: 0.7,
+            last_evidence: "2026-06-15".to_string(),
+            evidence_count: 1,
+            archived: false,
+        });
+        let messages: Vec<LlmChatMessage> = (0..6)
+            .map(|i| LlmChatMessage {
+                role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
+                content: format!("msg {i}"),
+                ..Default::default()
+            })
+            .collect();
+        assert!(should_reflect(&messages, &memory));
+    }
+
+    // -- Reflection: apply_single_proposal --
+
+    #[test]
+    fn proposal_add_knowledge_domain() {
+        let mut m = AgentMemory::default();
+        let proposal = MemoryProposal {
+            id: "mp-1".to_string(),
+            action: ProposalAction::Add,
+            category: "knowledge_domain".to_string(),
+            target: None,
+            content: serde_json::json!({
+                "domain": "Python",
+                "depth": "practitioner",
+                "confidence": 0.8
+            }),
+            reason: "user discussed Python".to_string(),
+        };
+        apply_single_proposal(&mut m, &proposal).unwrap();
+        assert_eq!(m.knowledge_domains.len(), 1);
+        assert_eq!(m.knowledge_domains[0].domain, "Python");
+    }
+
+    #[test]
+    fn proposal_add_correction() {
+        let mut m = AgentMemory::default();
+        let proposal = MemoryProposal {
+            id: "mp-2".to_string(),
+            action: ProposalAction::Add,
+            category: "correction".to_string(),
+            target: None,
+            content: serde_json::json!({
+                "rule": "always use Chinese",
+                "reason": "user preference"
+            }),
+            reason: "explicit instruction".to_string(),
+        };
+        apply_single_proposal(&mut m, &proposal).unwrap();
+        assert_eq!(m.corrections.len(), 1);
+        assert_eq!(m.corrections[0].rule, "always use Chinese");
+    }
+
+    #[test]
+    fn proposal_update_domain() {
+        let mut m = AgentMemory::default();
+        m.knowledge_domains.push(KnowledgeDomain {
+            domain: "Rust".to_string(),
+            depth: "learning".to_string(),
+            current_focus: Some("async".to_string()),
+            motivation: None,
+            confidence: 0.7,
+            last_evidence: "2026-06-15".to_string(),
+            evidence_count: 2,
+            archived: false,
+        });
+        let proposal = MemoryProposal {
+            id: "mp-3".to_string(),
+            action: ProposalAction::Update,
+            category: "knowledge_domain".to_string(),
+            target: Some("Rust".to_string()),
+            content: serde_json::json!({
+                "depth": "practitioner",
+                "current_focus": "macros"
+            }),
+            reason: "user showed deeper expertise".to_string(),
+        };
+        apply_single_proposal(&mut m, &proposal).unwrap();
+        assert_eq!(m.knowledge_domains[0].depth, "practitioner");
+        assert_eq!(m.knowledge_domains[0].current_focus.as_deref(), Some("macros"));
+    }
+
+    #[test]
+    fn proposal_archive_domain() {
+        let mut m = AgentMemory::default();
+        m.knowledge_domains.push(KnowledgeDomain {
+            domain: "React".to_string(),
+            depth: "curious".to_string(),
+            current_focus: None,
+            motivation: None,
+            confidence: 0.5,
+            last_evidence: "2026-01-01".to_string(),
+            evidence_count: 1,
+            archived: false,
+        });
+        let proposal = MemoryProposal {
+            id: "mp-4".to_string(),
+            action: ProposalAction::Archive,
+            category: "knowledge_domain".to_string(),
+            target: Some("React".to_string()),
+            content: serde_json::json!({}),
+            reason: "user moved to Vue".to_string(),
+        };
+        apply_single_proposal(&mut m, &proposal).unwrap();
+        assert!(m.knowledge_domains[0].archived);
+    }
+
+    #[test]
+    fn proposal_merge_archives_old_and_adds_new() {
+        let mut m = AgentMemory::default();
+        m.knowledge_domains.push(KnowledgeDomain {
+            domain: "frontend".to_string(),
+            depth: "learning".to_string(),
+            current_focus: Some("React".to_string()),
+            motivation: None,
+            confidence: 0.6,
+            last_evidence: "2026-03-01".to_string(),
+            evidence_count: 2,
+            archived: false,
+        });
+        let proposal = MemoryProposal {
+            id: "mp-5".to_string(),
+            action: ProposalAction::Merge,
+            category: "knowledge_domain".to_string(),
+            target: Some("frontend".to_string()),
+            content: serde_json::json!({
+                "domain": "frontend",
+                "depth": "practitioner",
+                "current_focus": "Vue",
+                "confidence": 0.7
+            }),
+            reason: "merge React and Vue into single frontend entry".to_string(),
+        };
+        apply_single_proposal(&mut m, &proposal).unwrap();
+        // merge_user_model matches by domain name, so the archived entry
+        // gets reactivated and updated in-place (1 entry, not 2).
+        assert_eq!(m.knowledge_domains.len(), 1);
+        let entry = &m.knowledge_domains[0];
+        assert!(!entry.archived);
+        assert_eq!(entry.current_focus.as_deref(), Some("Vue"));
+    }
+
+    #[test]
+    fn proposal_skip_no_change() {
+        let mut m = AgentMemory::default();
+        m.knowledge_domains.push(KnowledgeDomain {
+            domain: "Rust".to_string(),
+            depth: "learning".to_string(),
+            current_focus: None,
+            motivation: None,
+            confidence: 0.7,
+            last_evidence: "2026-06-15".to_string(),
+            evidence_count: 1,
+            archived: false,
+        });
+        let before = m.knowledge_domains.clone();
+        let proposal = MemoryProposal {
+            id: "mp-6".to_string(),
+            action: ProposalAction::Skip,
+            category: "knowledge_domain".to_string(),
+            target: Some("Rust".to_string()),
+            content: serde_json::json!({}),
+            reason: "already captured".to_string(),
+        };
+        apply_single_proposal(&mut m, &proposal).unwrap();
+        assert_eq!(m.knowledge_domains.len(), before.len());
+        assert_eq!(m.knowledge_domains[0].depth, before[0].depth);
+    }
+
+    #[test]
+    fn reflection_prompt_contains_both_inputs() {
+        let m = AgentMemory::default();
+        let update = UserModelUpdate {
+            knowledge_domains: vec![DomainUpdate {
+                domain: "Rust".to_string(),
+                depth: "learning".to_string(),
+                current_focus: None,
+                motivation: None,
+                confidence: 0.5,
+            }],
+            ..Default::default()
+        };
+        let prompt = build_reflection_prompt(&m, &update);
+        assert!(prompt.contains("Existing memory"));
+        assert!(prompt.contains("New extraction"));
+        assert!(prompt.contains("Rust"));
     }
 
     // -- MemoryManager --
