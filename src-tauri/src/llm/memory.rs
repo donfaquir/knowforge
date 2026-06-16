@@ -17,8 +17,11 @@ const MAX_TOPICS: usize = 20;
 const INJECTION_RECENT_SESSIONS: usize = 3;
 
 const MEMORY_FILE: &str = "agent_memory.json";
+const SNAPSHOT_FILE: &str = "agent_memory.snapshot.json";
+const PENDING_FILE: &str = "pending_proposals.json";
 const KNOWFORGE_DIR: &str = ".knowforge";
 const WORKSPACE_STALENESS_DAYS: i64 = 7;
+const PROPOSAL_EXPIRY_DAYS: i64 = 7;
 
 // ── Core user model ──
 
@@ -1163,6 +1166,77 @@ impl MemoryManager {
             }
         }
     }
+
+    // ── Snapshot & pending proposals (Spec 9) ──
+
+    pub fn create_snapshot(&self) -> Result<(), String> {
+        let path = self.workspace_root.join(KNOWFORGE_DIR).join(SNAPSHOT_FILE);
+        let content = serde_json::to_string_pretty(&self.memory)
+            .map_err(|e| format!("Snapshot serialization failed: {e}"))?;
+        std::fs::create_dir_all(self.workspace_root.join(KNOWFORGE_DIR))
+            .map_err(|e| format!("Failed to create .knowforge dir: {e}"))?;
+        std::fs::write(&path, format!("{content}\n"))
+            .map_err(|e| format!("Snapshot write failed: {e}"))?;
+        Ok(())
+    }
+
+    pub fn rollback_from_snapshot(&mut self) -> Result<(), String> {
+        let path = self.workspace_root.join(KNOWFORGE_DIR).join(SNAPSHOT_FILE);
+        if !path.exists() {
+            return Err("No snapshot to rollback to".to_string());
+        }
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Snapshot read failed: {e}"))?;
+        self.memory = serde_json::from_str(&content)
+            .map_err(|e| format!("Snapshot parse failed: {e}"))?;
+        self.memory.save(&self.workspace_root)?;
+        self.delete_snapshot();
+        Ok(())
+    }
+
+    pub fn delete_snapshot(&self) {
+        let path = self.workspace_root.join(KNOWFORGE_DIR).join(SNAPSHOT_FILE);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    pub fn save_pending_proposals(&self, batch: &MemoryProposalBatch) -> Result<(), String> {
+        let path = self.workspace_root.join(KNOWFORGE_DIR).join(PENDING_FILE);
+        std::fs::create_dir_all(self.workspace_root.join(KNOWFORGE_DIR))
+            .map_err(|e| format!("Failed to create .knowforge dir: {e}"))?;
+        let content = serde_json::to_string_pretty(batch)
+            .map_err(|e| format!("Pending serialization failed: {e}"))?;
+        std::fs::write(&path, format!("{content}\n"))
+            .map_err(|e| format!("Pending write failed: {e}"))?;
+        Ok(())
+    }
+
+    pub fn load_pending_proposals(&self) -> Option<MemoryProposalBatch> {
+        let path = self.workspace_root.join(KNOWFORGE_DIR).join(PENDING_FILE);
+        let content = std::fs::read_to_string(&path).ok()?;
+        let batch: MemoryProposalBatch = serde_json::from_str(&content).ok()?;
+
+        if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&batch.created_at) {
+            let age_days = (Utc::now() - created.with_timezone(&Utc)).num_days();
+            if age_days > PROPOSAL_EXPIRY_DAYS {
+                let _ = std::fs::remove_file(&path);
+                return None;
+            }
+        }
+
+        Some(batch)
+    }
+
+    pub fn has_pending_proposals(&self) -> bool {
+        self.workspace_root
+            .join(KNOWFORGE_DIR)
+            .join(PENDING_FILE)
+            .exists()
+    }
+
+    pub fn delete_pending_proposals(&self) {
+        let path = self.workspace_root.join(KNOWFORGE_DIR).join(PENDING_FILE);
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 fn trim_messages_for_extraction(messages: &[LlmChatMessage]) -> Vec<LlmChatMessage> {
@@ -2261,6 +2335,126 @@ mod tests {
         assert!(prompt.contains("Existing memory"));
         assert!(prompt.contains("New extraction"));
         assert!(prompt.contains("Rust"));
+    }
+
+    // -- Snapshot & pending proposals --
+
+    #[test]
+    fn snapshot_create_and_rollback() {
+        let tmp = TempDir::new().unwrap();
+        let mut m = AgentMemory::default();
+        m.corrections.push(MemoryCorrection {
+            rule: "original".to_string(),
+            reason: "test".to_string(),
+            date: "2026-06-15".to_string(),
+            source: "explicit".to_string(),
+        });
+        m.save(tmp.path()).unwrap();
+
+        let mut mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+        assert_eq!(mgr.memory.corrections.len(), 1);
+
+        mgr.create_snapshot().unwrap();
+        assert!(tmp.path().join(KNOWFORGE_DIR).join(SNAPSHOT_FILE).exists());
+
+        // Mutate memory after snapshot
+        mgr.memory.corrections.push(MemoryCorrection {
+            rule: "added after snapshot".to_string(),
+            reason: "test".to_string(),
+            date: "2026-06-16".to_string(),
+            source: "explicit".to_string(),
+        });
+        mgr.memory.save(tmp.path()).unwrap();
+        assert_eq!(mgr.memory.corrections.len(), 2);
+
+        // Rollback restores to snapshot state
+        mgr.rollback_from_snapshot().unwrap();
+        assert_eq!(mgr.memory.corrections.len(), 1);
+        assert_eq!(mgr.memory.corrections[0].rule, "original");
+
+        // Snapshot file is deleted after rollback
+        assert!(!tmp.path().join(KNOWFORGE_DIR).join(SNAPSHOT_FILE).exists());
+    }
+
+    #[test]
+    fn snapshot_rollback_no_snapshot_returns_err() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+        let result = mgr.rollback_from_snapshot();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn snapshot_delete_nonexistent_no_panic() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+        mgr.delete_snapshot(); // should not panic
+    }
+
+    #[test]
+    fn pending_proposals_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+
+        let batch = MemoryProposalBatch {
+            session_id: "test-session".to_string(),
+            proposals: vec![MemoryProposal {
+                id: "mp-1".to_string(),
+                action: ProposalAction::Add,
+                category: "knowledge_domain".to_string(),
+                target: None,
+                content: serde_json::json!({"domain": "Rust", "depth": "learning", "confidence": 0.5}),
+                reason: "test".to_string(),
+            }],
+            created_at: Utc::now().to_rfc3339(),
+        };
+
+        mgr.save_pending_proposals(&batch).unwrap();
+        assert!(mgr.has_pending_proposals());
+
+        let loaded = mgr.load_pending_proposals().unwrap();
+        assert_eq!(loaded.session_id, "test-session");
+        assert_eq!(loaded.proposals.len(), 1);
+        assert_eq!(loaded.proposals[0].id, "mp-1");
+    }
+
+    #[test]
+    fn pending_proposals_expired_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+
+        let old_date = (Utc::now() - chrono::Duration::days(8)).to_rfc3339();
+        let batch = MemoryProposalBatch {
+            session_id: "old-session".to_string(),
+            proposals: vec![],
+            created_at: old_date,
+        };
+
+        mgr.save_pending_proposals(&batch).unwrap();
+        assert!(mgr.has_pending_proposals());
+
+        let loaded = mgr.load_pending_proposals();
+        assert!(loaded.is_none());
+        // File should be deleted after expiry check
+        assert!(!mgr.has_pending_proposals());
+    }
+
+    #[test]
+    fn pending_proposals_has_and_delete() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+        assert!(!mgr.has_pending_proposals());
+
+        let batch = MemoryProposalBatch {
+            session_id: "s".to_string(),
+            proposals: vec![],
+            created_at: Utc::now().to_rfc3339(),
+        };
+        mgr.save_pending_proposals(&batch).unwrap();
+        assert!(mgr.has_pending_proposals());
+
+        mgr.delete_pending_proposals();
+        assert!(!mgr.has_pending_proposals());
     }
 
     // -- MemoryManager --
