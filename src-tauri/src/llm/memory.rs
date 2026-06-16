@@ -213,11 +213,14 @@ const MAX_ARCHIVES_PER_REFLECTION: usize = 3;
 
 fn generate_proposal_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    format!("mp-{ts:x}")
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("mp-{ts:x}-{seq:04x}")
 }
 
 pub fn should_reflect(messages: &[LlmChatMessage], memory: &AgentMemory) -> bool {
@@ -1174,13 +1177,17 @@ impl MemoryManager {
     // ── Snapshot & pending proposals (Spec 9) ──
 
     pub fn create_snapshot(&self) -> Result<(), String> {
-        let path = self.workspace_root.join(KNOWFORGE_DIR).join(SNAPSHOT_FILE);
+        let dir = self.workspace_root.join(KNOWFORGE_DIR);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create .knowforge/memory dir: {e}"))?;
+        let path = dir.join(SNAPSHOT_FILE);
+        let tmp = dir.join(format!("{SNAPSHOT_FILE}.tmp"));
         let content = serde_json::to_string_pretty(&self.memory)
             .map_err(|e| format!("Snapshot serialization failed: {e}"))?;
-        std::fs::create_dir_all(self.workspace_root.join(KNOWFORGE_DIR))
-            .map_err(|e| format!("Failed to create .knowforge/memory dir: {e}"))?;
-        std::fs::write(&path, format!("{content}\n"))
+        std::fs::write(&tmp, format!("{content}\n"))
             .map_err(|e| format!("Snapshot write failed: {e}"))?;
+        std::fs::rename(&tmp, &path)
+            .map_err(|e| format!("Snapshot rename failed: {e}"))?;
         Ok(())
     }
 
@@ -1204,13 +1211,17 @@ impl MemoryManager {
     }
 
     pub fn save_pending_proposals(&self, batch: &MemoryProposalBatch) -> Result<(), String> {
-        let path = self.workspace_root.join(KNOWFORGE_DIR).join(PENDING_FILE);
-        std::fs::create_dir_all(self.workspace_root.join(KNOWFORGE_DIR))
+        let dir = self.workspace_root.join(KNOWFORGE_DIR);
+        std::fs::create_dir_all(&dir)
             .map_err(|e| format!("Failed to create .knowforge/memory dir: {e}"))?;
+        let path = dir.join(PENDING_FILE);
+        let tmp = dir.join(format!("{PENDING_FILE}.tmp"));
         let content = serde_json::to_string_pretty(batch)
             .map_err(|e| format!("Pending serialization failed: {e}"))?;
-        std::fs::write(&path, format!("{content}\n"))
+        std::fs::write(&tmp, format!("{content}\n"))
             .map_err(|e| format!("Pending write failed: {e}"))?;
+        std::fs::rename(&tmp, &path)
+            .map_err(|e| format!("Pending rename failed: {e}"))?;
         Ok(())
     }
 

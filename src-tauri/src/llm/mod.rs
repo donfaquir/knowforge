@@ -1097,6 +1097,10 @@ pub async fn start_ollama_chat_stream(
                                     if let Err(e) = mgr.create_snapshot() {
                                         eprintln!("[memory] Snapshot failed: {e}");
                                     }
+                                    mgr.memory.merge_user_model(update);
+                                    if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                                        eprintln!("[memory] Save failed: {e}");
+                                    }
                                     let batch = memory::MemoryProposalBatch {
                                         session_id: sid_for_reflect.clone(),
                                         proposals,
@@ -1194,6 +1198,13 @@ pub fn get_pending_memory_proposals(
         .map_err(|e| format!("Read pending failed: {e}"))?;
     let batch: memory::MemoryProposalBatch = serde_json::from_str(&content)
         .map_err(|e| format!("Parse pending failed: {e}"))?;
+    if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&batch.created_at) {
+        let age_days = (chrono::Utc::now() - created.with_timezone(&chrono::Utc)).num_days();
+        if age_days > 7 {
+            let _ = std::fs::remove_file(&path);
+            return Ok(None);
+        }
+    }
     Ok(Some(batch))
 }
 
