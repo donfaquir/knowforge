@@ -253,6 +253,8 @@ pub struct AiConfig {
     pub planning_enabled: bool,
     #[serde(default = "default_memory_enabled")]
     pub memory_enabled: bool,
+    #[serde(default = "default_memory_reflection_mode")]
+    pub memory_reflection_mode: String,
 }
 
 fn default_tools_enabled() -> bool {
@@ -261,6 +263,10 @@ fn default_tools_enabled() -> bool {
 
 fn default_memory_enabled() -> bool {
     true
+}
+
+fn default_memory_reflection_mode() -> String {
+    "confirm".to_string()
 }
 
 impl Default for AiConfig {
@@ -282,6 +288,7 @@ impl Default for AiConfig {
             tools_enabled: true,
             planning_enabled: false,
             memory_enabled: true,
+            memory_reflection_mode: default_memory_reflection_mode(),
         }
     }
 }
@@ -531,6 +538,7 @@ struct AiDiskPartial {
     tools_enabled: Option<bool>,
     planning_enabled: Option<bool>,
     memory_enabled: Option<bool>,
+    memory_reflection_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -675,6 +683,7 @@ pub struct AiConfigPatch {
     pub tools_enabled: Option<bool>,
     pub planning_enabled: Option<bool>,
     pub memory_enabled: Option<bool>,
+    pub memory_reflection_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -814,6 +823,7 @@ pub struct AiConfigForUi {
     pub tools_enabled: bool,
     pub planning_enabled: bool,
     pub memory_enabled: bool,
+    pub memory_reflection_mode: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -970,6 +980,9 @@ fn merge_ai_from_disk_partial(mut cfg: AiConfig, partial: AiDiskPartial) -> AiCo
     if let Some(v) = partial.memory_enabled {
         cfg.memory_enabled = v;
     }
+    if let Some(v) = partial.memory_reflection_mode {
+        cfg.memory_reflection_mode = v;
+    }
     normalize_ai(&mut cfg);
     cfg
 }
@@ -1044,6 +1057,7 @@ fn to_ai_for_ui(ai: AiConfig) -> AiConfigForUi {
         tools_enabled: ai.tools_enabled,
         planning_enabled: ai.planning_enabled,
         memory_enabled: ai.memory_enabled,
+        memory_reflection_mode: ai.memory_reflection_mode,
     }
 }
 
@@ -1333,6 +1347,9 @@ fn apply_ai_patch(cfg: &mut AiConfig, patch: AiConfigPatch) {
     }
     if let Some(v) = patch.memory_enabled {
         cfg.memory_enabled = v;
+    }
+    if let Some(v) = patch.memory_reflection_mode {
+        cfg.memory_reflection_mode = v;
     }
 }
 

@@ -46,6 +46,7 @@ export type AiConfigForUi = {
   toolsEnabled: boolean;
   planningEnabled: boolean;
   memoryEnabled: boolean;
+  memoryReflectionMode: string;
 };
 
 export type SemanticConfigForUi = {
@@ -110,6 +111,7 @@ export type AiConfigSavePatch = {
   toolsEnabled: boolean;
   planningEnabled: boolean;
   memoryEnabled: boolean;
+  memoryReflectionMode: string;
 };
 
 export type SemanticConfigSavePatch = {

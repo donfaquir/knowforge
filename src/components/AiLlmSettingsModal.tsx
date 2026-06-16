@@ -129,6 +129,7 @@ type FormState = {
   toolsEnabled: boolean;
   planningEnabled: boolean;
   memoryEnabled: boolean;
+  memoryReflectionMode: string;
   passiveHighlightEnabled: boolean;
   passiveHighlightConfidenceMin: string;
   writingCoachEnabled: boolean;
@@ -231,6 +232,7 @@ function defaultForm(): FormState {
     toolsEnabled: true,
     planningEnabled: false,
     memoryEnabled: true,
+    memoryReflectionMode: "confirm",
     passiveHighlightEnabled: true,
     passiveHighlightConfidenceMin: "0.55",
     writingCoachEnabled: true,
@@ -269,6 +271,7 @@ function aiFormEqualsPersisted(a: FormState, b: FormState): boolean {
     "toolsEnabled",
     "planningEnabled",
     "memoryEnabled",
+    "memoryReflectionMode",
     "passiveHighlightEnabled",
     "passiveHighlightConfidenceMin",
     "writingCoachEnabled",
@@ -319,6 +322,7 @@ function vaultConfigToForm(cfg: VaultConfigForUi): FormState {
     toolsEnabled: ai.toolsEnabled !== false,
     planningEnabled: ai.planningEnabled === true,
     memoryEnabled: ai.memoryEnabled !== false,
+    memoryReflectionMode: ai.memoryReflectionMode ?? "confirm",
     passiveHighlightEnabled: cognitive.passiveHighlightEnabled !== false,
     passiveHighlightConfidenceMin: String(cognitive.passiveHighlightConfidenceMin ?? 0.55),
     writingCoachEnabled: cognitive.writingCoachEnabled !== false,
@@ -711,6 +715,7 @@ export function AiLlmSettingsModal({
         toolsEnabled: form.toolsEnabled,
         planningEnabled: form.planningEnabled,
         memoryEnabled: form.memoryEnabled,
+        memoryReflectionMode: form.memoryReflectionMode,
         openaiCompatible: {
           baseUrl: form.openaiBaseUrl.trim(),
           defaultModel: form.openaiDefaultModel.trim(),
