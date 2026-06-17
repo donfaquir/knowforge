@@ -177,7 +177,7 @@ impl ThoughtCreateTool {
                 name: "thought.create".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
-                description: "创建一条新的独立想法（Thought）条目".to_string(),
+                description: "创建一条新的独立想法（Thought）条目。想法是用户对某个主题的思考、洞察、灵感或假设，不包括对 AI 的行为指令、个人偏好或记忆指令（如「记住…」「以后都…」「always…」「never…」）。".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "required": ["content"],

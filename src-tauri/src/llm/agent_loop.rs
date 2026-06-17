@@ -316,6 +316,15 @@ pub async fn run_agent_stream(
             });
         }
 
+        // 6b. Reload memory if any memory.* tool was called
+        if normalized_calls.iter().any(|tc| tc.name.starts_with("memory.")) {
+            if let Some(ref mm) = memory_manager {
+                let mut mgr = mm.lock().await;
+                mgr.memory = memory::AgentMemory::load(mgr.workspace_root());
+                mgr.mark_dirty();
+            }
+        }
+
         // 7. 上限检查
         tool_call_count = tool_call_count.saturating_add(normalized_calls.len() as u16);
 

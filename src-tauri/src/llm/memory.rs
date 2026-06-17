@@ -1049,6 +1049,10 @@ impl MemoryManager {
         self.dirty = false;
     }
 
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
     pub fn format_for_injection(&self) -> Option<String> {
         self.memory.format_for_injection()
     }

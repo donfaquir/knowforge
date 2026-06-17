@@ -932,18 +932,6 @@ pub async fn start_ollama_chat_stream(
                 None
             };
 
-            if let Some(ref mm) = memory_manager {
-                if let Some(user_msg) = messages.iter().rev().find(|m| m.role == "user") {
-                    let triggered = memory::contains_trigger(&user_msg.content);
-                    eprintln!("[memory] trigger check: triggered={triggered}, msg={:.60}", user_msg.content);
-                    if triggered {
-                        let context = agent_loop::extract_context_window(&messages, 5);
-                        let mut mgr = mm.lock().await;
-                        mgr.extract_explicit(&context).await;
-                    }
-                }
-            }
-
             match agent_mode {
                 AgentMode::Direct => {
                     let _ = agent_loop::run_agent_stream(
