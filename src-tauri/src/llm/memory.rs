@@ -1128,15 +1128,6 @@ impl MemoryManager {
         }
     }
 
-    pub async fn extract_session_end(&mut self, messages: &[LlmChatMessage]) {
-        if let Some(update) = self.extract_session_update(messages).await {
-            self.memory.merge_user_model(update);
-            if let Err(e) = self.memory.save(&self.workspace_root) {
-                eprintln!("[memory] Failed to save after session extraction: {e}");
-            }
-        }
-    }
-
     pub async fn reflect_on_memory(&self, update: &UserModelUpdate) -> Vec<MemoryProposal> {
         let cloud = match &self.cloud {
             Some(c) => c.clone(),
@@ -1190,84 +1181,87 @@ impl MemoryManager {
         }
     }
 
-    // ── Snapshot & pending proposals (Spec 9) ──
-
     pub fn create_snapshot(&self) -> Result<(), String> {
-        let dir = self.workspace_root.join(KNOWFORGE_DIR);
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("Failed to create .knowforge/memory dir: {e}"))?;
-        let path = dir.join(SNAPSHOT_FILE);
-        let tmp = dir.join(format!("{SNAPSHOT_FILE}.tmp"));
-        let content = serde_json::to_string_pretty(&self.memory)
-            .map_err(|e| format!("Snapshot serialization failed: {e}"))?;
-        std::fs::write(&tmp, format!("{content}\n"))
-            .map_err(|e| format!("Snapshot write failed: {e}"))?;
-        std::fs::rename(&tmp, &path)
-            .map_err(|e| format!("Snapshot rename failed: {e}"))?;
-        Ok(())
-    }
-
-    pub fn rollback_from_snapshot(&mut self) -> Result<(), String> {
-        let path = self.workspace_root.join(KNOWFORGE_DIR).join(SNAPSHOT_FILE);
-        if !path.exists() {
-            return Err("No snapshot to rollback to".to_string());
-        }
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Snapshot read failed: {e}"))?;
-        self.memory = serde_json::from_str(&content)
-            .map_err(|e| format!("Snapshot parse failed: {e}"))?;
-        self.memory.save(&self.workspace_root)?;
-        self.delete_snapshot();
-        Ok(())
+        create_snapshot(&self.workspace_root, &self.memory)
     }
 
     pub fn delete_snapshot(&self) {
-        let path = self.workspace_root.join(KNOWFORGE_DIR).join(SNAPSHOT_FILE);
-        let _ = std::fs::remove_file(&path);
+        delete_snapshot(&self.workspace_root)
     }
 
     pub fn save_pending_proposals(&self, batch: &MemoryProposalBatch) -> Result<(), String> {
-        let dir = self.workspace_root.join(KNOWFORGE_DIR);
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("Failed to create .knowforge/memory dir: {e}"))?;
-        let path = dir.join(PENDING_FILE);
-        let tmp = dir.join(format!("{PENDING_FILE}.tmp"));
-        let content = serde_json::to_string_pretty(batch)
-            .map_err(|e| format!("Pending serialization failed: {e}"))?;
-        std::fs::write(&tmp, format!("{content}\n"))
-            .map_err(|e| format!("Pending write failed: {e}"))?;
-        std::fs::rename(&tmp, &path)
-            .map_err(|e| format!("Pending rename failed: {e}"))?;
-        Ok(())
+        save_pending_proposals(&self.workspace_root, batch)
     }
+}
 
-    pub fn load_pending_proposals(&self) -> Option<MemoryProposalBatch> {
-        let path = self.workspace_root.join(KNOWFORGE_DIR).join(PENDING_FILE);
-        let content = std::fs::read_to_string(&path).ok()?;
-        let batch: MemoryProposalBatch = serde_json::from_str(&content).ok()?;
+// ── Snapshot & pending proposals (Spec 9) ──
 
-        if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&batch.created_at) {
-            let age_days = (Utc::now() - created.with_timezone(&Utc)).num_days();
-            if age_days > PROPOSAL_EXPIRY_DAYS {
-                let _ = std::fs::remove_file(&path);
-                return None;
-            }
+pub fn create_snapshot(workspace_root: &Path, memory: &AgentMemory) -> Result<(), String> {
+    let dir = workspace_root.join(KNOWFORGE_DIR);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create .knowforge/memory dir: {e}"))?;
+    let path = dir.join(SNAPSHOT_FILE);
+    let tmp = dir.join(format!("{SNAPSHOT_FILE}.tmp"));
+    let content = serde_json::to_string_pretty(memory)
+        .map_err(|e| format!("Snapshot serialization failed: {e}"))?;
+    std::fs::write(&tmp, format!("{content}\n"))
+        .map_err(|e| format!("Snapshot write failed: {e}"))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| format!("Snapshot rename failed: {e}"))?;
+    Ok(())
+}
+
+pub fn delete_snapshot(workspace_root: &Path) {
+    let path = workspace_root.join(KNOWFORGE_DIR).join(SNAPSHOT_FILE);
+    let _ = std::fs::remove_file(&path);
+}
+
+pub fn save_pending_proposals(
+    workspace_root: &Path,
+    batch: &MemoryProposalBatch,
+) -> Result<(), String> {
+    let dir = workspace_root.join(KNOWFORGE_DIR);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create .knowforge/memory dir: {e}"))?;
+    let path = dir.join(PENDING_FILE);
+    let tmp = dir.join(format!("{PENDING_FILE}.tmp"));
+    let content = serde_json::to_string_pretty(batch)
+        .map_err(|e| format!("Pending serialization failed: {e}"))?;
+    std::fs::write(&tmp, format!("{content}\n"))
+        .map_err(|e| format!("Pending write failed: {e}"))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| format!("Pending rename failed: {e}"))?;
+    Ok(())
+}
+
+pub fn load_pending_proposals(workspace_root: &Path) -> Option<MemoryProposalBatch> {
+    let path = workspace_root.join(KNOWFORGE_DIR).join(PENDING_FILE);
+    let content = std::fs::read_to_string(&path).ok()?;
+    let batch: MemoryProposalBatch = serde_json::from_str(&content).ok()?;
+
+    if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&batch.created_at) {
+        let age_days = (Utc::now() - created.with_timezone(&Utc)).num_days();
+        if age_days > PROPOSAL_EXPIRY_DAYS {
+            let _ = std::fs::remove_file(&path);
+            return None;
         }
-
-        Some(batch)
     }
 
-    pub fn has_pending_proposals(&self) -> bool {
-        self.workspace_root
-            .join(KNOWFORGE_DIR)
-            .join(PENDING_FILE)
-            .exists()
-    }
+    Some(batch)
+}
 
-    pub fn delete_pending_proposals(&self) {
-        let path = self.workspace_root.join(KNOWFORGE_DIR).join(PENDING_FILE);
-        let _ = std::fs::remove_file(&path);
+pub fn delete_pending_proposals(workspace_root: &Path) {
+    let path = workspace_root.join(KNOWFORGE_DIR).join(PENDING_FILE);
+    let _ = std::fs::remove_file(&path);
+}
+
+pub fn clear_memory_file(workspace_root: &Path) -> Result<(), String> {
+    let path = workspace_root.join(KNOWFORGE_DIR).join(MEMORY_FILE);
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| format!("Failed to delete memory file: {e}"))?;
     }
+    Ok(())
 }
 
 fn trim_messages_for_extraction(messages: &[LlmChatMessage]) -> Vec<LlmChatMessage> {
@@ -2465,61 +2459,25 @@ mod tests {
     // -- Snapshot & pending proposals --
 
     #[test]
-    fn snapshot_create_and_rollback() {
+    fn snapshot_create_and_delete() {
         let tmp = TempDir::new().unwrap();
-        let mut m = AgentMemory::default();
-        m.corrections.push(MemoryCorrection {
-            rule: "original".to_string(),
-            reason: "test".to_string(),
-            date: "2026-06-15".to_string(),
-            source: "explicit".to_string(),
-        });
-        m.save(tmp.path()).unwrap();
-
-        let mut mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
-        assert_eq!(mgr.memory.corrections.len(), 1);
-
-        mgr.create_snapshot().unwrap();
+        let m = AgentMemory::default();
+        create_snapshot(tmp.path(), &m).unwrap();
         assert!(tmp.path().join(KNOWFORGE_DIR).join(SNAPSHOT_FILE).exists());
 
-        // Mutate memory after snapshot
-        mgr.memory.corrections.push(MemoryCorrection {
-            rule: "added after snapshot".to_string(),
-            reason: "test".to_string(),
-            date: "2026-06-16".to_string(),
-            source: "explicit".to_string(),
-        });
-        mgr.memory.save(tmp.path()).unwrap();
-        assert_eq!(mgr.memory.corrections.len(), 2);
-
-        // Rollback restores to snapshot state
-        mgr.rollback_from_snapshot().unwrap();
-        assert_eq!(mgr.memory.corrections.len(), 1);
-        assert_eq!(mgr.memory.corrections[0].rule, "original");
-
-        // Snapshot file is deleted after rollback
+        delete_snapshot(tmp.path());
         assert!(!tmp.path().join(KNOWFORGE_DIR).join(SNAPSHOT_FILE).exists());
-    }
-
-    #[test]
-    fn snapshot_rollback_no_snapshot_returns_err() {
-        let tmp = TempDir::new().unwrap();
-        let mut mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
-        let result = mgr.rollback_from_snapshot();
-        assert!(result.is_err());
     }
 
     #[test]
     fn snapshot_delete_nonexistent_no_panic() {
         let tmp = TempDir::new().unwrap();
-        let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
-        mgr.delete_snapshot(); // should not panic
+        delete_snapshot(tmp.path());
     }
 
     #[test]
     fn pending_proposals_roundtrip() {
         let tmp = TempDir::new().unwrap();
-        let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
 
         let batch = MemoryProposalBatch {
             session_id: "test-session".to_string(),
@@ -2534,10 +2492,10 @@ mod tests {
             created_at: Utc::now().to_rfc3339(),
         };
 
-        mgr.save_pending_proposals(&batch).unwrap();
-        assert!(mgr.has_pending_proposals());
+        save_pending_proposals(tmp.path(), &batch).unwrap();
+        assert!(tmp.path().join(KNOWFORGE_DIR).join(PENDING_FILE).exists());
 
-        let loaded = mgr.load_pending_proposals().unwrap();
+        let loaded = load_pending_proposals(tmp.path()).unwrap();
         assert_eq!(loaded.session_id, "test-session");
         assert_eq!(loaded.proposals.len(), 1);
         assert_eq!(loaded.proposals[0].id, "mp-1");
@@ -2546,7 +2504,6 @@ mod tests {
     #[test]
     fn pending_proposals_expired_returns_none() {
         let tmp = TempDir::new().unwrap();
-        let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
 
         let old_date = (Utc::now() - chrono::Duration::days(8)).to_rfc3339();
         let batch = MemoryProposalBatch {
@@ -2555,31 +2512,29 @@ mod tests {
             created_at: old_date,
         };
 
-        mgr.save_pending_proposals(&batch).unwrap();
-        assert!(mgr.has_pending_proposals());
+        save_pending_proposals(tmp.path(), &batch).unwrap();
+        assert!(tmp.path().join(KNOWFORGE_DIR).join(PENDING_FILE).exists());
 
-        let loaded = mgr.load_pending_proposals();
+        let loaded = load_pending_proposals(tmp.path());
         assert!(loaded.is_none());
-        // File should be deleted after expiry check
-        assert!(!mgr.has_pending_proposals());
+        assert!(!tmp.path().join(KNOWFORGE_DIR).join(PENDING_FILE).exists());
     }
 
     #[test]
-    fn pending_proposals_has_and_delete() {
+    fn pending_proposals_save_and_delete() {
         let tmp = TempDir::new().unwrap();
-        let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
-        assert!(!mgr.has_pending_proposals());
+        assert!(!tmp.path().join(KNOWFORGE_DIR).join(PENDING_FILE).exists());
 
         let batch = MemoryProposalBatch {
             session_id: "s".to_string(),
             proposals: vec![],
             created_at: Utc::now().to_rfc3339(),
         };
-        mgr.save_pending_proposals(&batch).unwrap();
-        assert!(mgr.has_pending_proposals());
+        save_pending_proposals(tmp.path(), &batch).unwrap();
+        assert!(tmp.path().join(KNOWFORGE_DIR).join(PENDING_FILE).exists());
 
-        mgr.delete_pending_proposals();
-        assert!(!mgr.has_pending_proposals());
+        delete_pending_proposals(tmp.path());
+        assert!(!tmp.path().join(KNOWFORGE_DIR).join(PENDING_FILE).exists());
     }
 
     // -- MemoryManager --
@@ -2643,22 +2598,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_session_end_short_conversation_skips() {
+    async fn extract_session_update_short_conversation_skips() {
         let tmp = TempDir::new().unwrap();
-        let mut mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+        let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
         let messages = vec![LlmChatMessage {
             role: "user".to_string(),
             content: "hello".to_string(),
             ..Default::default()
         }];
-        mgr.extract_session_end(&messages).await;
-        assert!(mgr.memory.sessions.is_empty());
+        let result = mgr.extract_session_update(&messages).await;
+        assert!(result.is_none());
     }
 
     #[tokio::test]
-    async fn extract_session_end_no_cloud_skips() {
+    async fn extract_session_update_no_cloud_skips() {
         let tmp = TempDir::new().unwrap();
-        let mut mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
+        let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
         let messages = vec![
             LlmChatMessage {
                 role: "user".to_string(),
@@ -2676,8 +2631,8 @@ mod tests {
                 ..Default::default()
             },
         ];
-        mgr.extract_session_end(&messages).await;
-        assert!(mgr.memory.sessions.is_empty());
+        let result = mgr.extract_session_update(&messages).await;
+        assert!(result.is_none());
     }
 
     // -- trim_messages_for_extraction --

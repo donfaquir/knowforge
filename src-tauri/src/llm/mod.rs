@@ -1150,12 +1150,7 @@ pub fn clear_agent_memory(
     workspace: State<'_, crate::WorkspaceState>,
 ) -> Result<(), String> {
     let root = lock_workspace_root(&workspace)?;
-    let path = root.join(".knowforge/memory").join("agent_memory.json");
-    if path.exists() {
-        std::fs::remove_file(&path)
-            .map_err(|e| format!("Failed to delete memory file: {e}"))?;
-    }
-    Ok(())
+    memory::clear_memory_file(&root)
 }
 
 #[tauri::command]
@@ -1164,12 +1159,8 @@ pub fn apply_memory_proposals(
     accepted_ids: Vec<String>,
 ) -> Result<(), String> {
     let root = lock_workspace_root(&workspace)?;
-    let pending_path = root.join(".knowforge/memory").join("pending_proposals.json");
-
-    let content = std::fs::read_to_string(&pending_path)
-        .map_err(|e| format!("No pending proposals: {e}"))?;
-    let batch: memory::MemoryProposalBatch = serde_json::from_str(&content)
-        .map_err(|e| format!("Invalid pending proposals: {e}"))?;
+    let batch = memory::load_pending_proposals(&root)
+        .ok_or_else(|| "No pending proposals".to_string())?;
 
     let mut mem = memory::AgentMemory::load(&root);
 
@@ -1180,8 +1171,8 @@ pub fn apply_memory_proposals(
     }
 
     mem.save(&root)?;
-    let _ = std::fs::remove_file(&pending_path);
-    let _ = std::fs::remove_file(root.join(".knowforge/memory").join("agent_memory.snapshot.json"));
+    memory::delete_pending_proposals(&root);
+    memory::delete_snapshot(&root);
 
     Ok(())
 }
@@ -1191,22 +1182,7 @@ pub fn get_pending_memory_proposals(
     workspace: State<'_, crate::WorkspaceState>,
 ) -> Result<Option<memory::MemoryProposalBatch>, String> {
     let root = lock_workspace_root(&workspace)?;
-    let path = root.join(".knowforge/memory").join("pending_proposals.json");
-    if !path.exists() {
-        return Ok(None);
-    }
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Read pending failed: {e}"))?;
-    let batch: memory::MemoryProposalBatch = serde_json::from_str(&content)
-        .map_err(|e| format!("Parse pending failed: {e}"))?;
-    if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&batch.created_at) {
-        let age_days = (chrono::Utc::now() - created.with_timezone(&chrono::Utc)).num_days();
-        if age_days > 7 {
-            let _ = std::fs::remove_file(&path);
-            return Ok(None);
-        }
-    }
-    Ok(Some(batch))
+    Ok(memory::load_pending_proposals(&root))
 }
 
 #[tauri::command]
@@ -1214,9 +1190,8 @@ pub fn dismiss_memory_proposals(
     workspace: State<'_, crate::WorkspaceState>,
 ) -> Result<(), String> {
     let root = lock_workspace_root(&workspace)?;
-    let dir = root.join(".knowforge/memory");
-    let _ = std::fs::remove_file(dir.join("pending_proposals.json"));
-    let _ = std::fs::remove_file(dir.join("agent_memory.snapshot.json"));
+    memory::delete_pending_proposals(&root);
+    memory::delete_snapshot(&root);
     Ok(())
 }
 
