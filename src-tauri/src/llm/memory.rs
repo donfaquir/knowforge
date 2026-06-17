@@ -781,34 +781,6 @@ fn format_domain_entry(d: &KnowledgeDomain) -> String {
     entry
 }
 
-// ── Trigger detection ──
-
-pub fn contains_trigger(message: &str) -> bool {
-    let lower = message.to_lowercase();
-    let zh_triggers = ["记住", "忘记", "以后都", "以后每次", "不要再"];
-    let en_triggers = ["remember ", "forget ", "from now on"];
-
-    if zh_triggers.iter().any(|t| lower.contains(t)) {
-        return true;
-    }
-    if en_triggers.iter().any(|t| lower.contains(t)) {
-        return true;
-    }
-
-    for trigger in &["always ", "never "] {
-        if lower.starts_with(trigger) {
-            return true;
-        }
-        for sep in &[". ", "! ", "? ", "\n"] {
-            if lower.contains(&format!("{sep}{trigger}")) {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
 // ── Merge algorithm (Spec 3) ──
 
 fn depth_rank(depth: &str) -> u32 {
@@ -1073,39 +1045,6 @@ Return a JSON object with these optional fields:
 knowledge_domains, interaction_style_updates, new_corrections,
 remove_corrections, session_summary, session_domains_touched, follow_up."#;
 
-const EXPLICIT_EXTRACTION_PROMPT: &str = r#"The user just gave an explicit memory instruction in a KnowForge session.
-Extract what they want remembered or forgotten.
-
-## Current user model
-{current_memory_json}
-
-## Context messages
-{context_messages}
-
-## What to extract
-
-### Corrections (most common for explicit instructions)
-When the user says "remember", "记住", "以后都", "always", "never", "不要再":
-Add to `new_corrections`. Each entry needs:
-- "rule": the instruction to follow (concise imperative sentence)
-- "reason": why the user wants this (from context)
-
-Example input: "记住，我喜欢简洁的代码风格，不要加多余注释"
-Example output:
-{"new_corrections": [{"rule": "Use concise code style without unnecessary comments", "reason": "User prefers minimal, clean code"}]}
-
-### Removals
-When the user says "forget", "忘记", or retracts a previous instruction:
-Add the matching rule text from the current user model to `remove_corrections`.
-
-### Other fields (use only when appropriate)
-- `knowledge_domains`: only if the instruction is about a knowledge area
-- `interaction_style_updates`: only if about communication style (keys: "detail_preference", "explanation_style", "challenge_tolerance", "format")
-
-Return ONLY a JSON object (no markdown fences) with these optional fields:
-new_corrections, remove_corrections, knowledge_domains, interaction_style_updates,
-session_summary, session_domains_touched, follow_up."#;
-
 pub struct MemoryManager {
     pub memory: AgentMemory,
     cloud: Option<Arc<dyn LlmProvider>>,
@@ -1162,47 +1101,6 @@ impl MemoryManager {
 
     pub fn format_for_injection(&self) -> Option<String> {
         self.memory.format_for_injection()
-    }
-
-    pub async fn extract_explicit(&mut self, context_messages: &[LlmChatMessage]) {
-        let cloud = match &self.cloud {
-            Some(c) => c.clone(),
-            None => {
-                eprintln!("[memory] extract_explicit: no provider available, skipping");
-                return;
-            }
-        };
-        eprintln!("[memory] extract_explicit: starting with {} context messages", context_messages.len());
-
-        let prompt = build_explicit_extraction_prompt(&self.memory, context_messages);
-        let messages = vec![LlmChatMessage {
-            role: "user".to_string(),
-            content: prompt,
-            ..Default::default()
-        }];
-
-        let overrides = CompletionOverrides {
-            json_mode: true,
-            temperature: Some(0.1),
-            ..Default::default()
-        };
-
-        match cloud.chat_completion(&messages, Some(&overrides)).await {
-            Ok(response) => {
-                eprintln!("[memory] extract_explicit raw response: {response}");
-                match serde_json::from_str::<UserModelUpdate>(&response) {
-                    Ok(update) => {
-                        self.memory.merge_user_model(update);
-                        if let Err(e) = self.memory.save(&self.workspace_root) {
-                            eprintln!("[memory] Failed to save after explicit extraction: {e}");
-                        }
-                        self.dirty = true;
-                    }
-                    Err(e) => eprintln!("[memory] Failed to parse extraction response: {e}"),
-                }
-            }
-            Err(e) => eprintln!("[memory] Explicit extraction failed: {e}"),
-        }
     }
 
     pub async fn extract_session_update(
@@ -1425,22 +1323,6 @@ fn build_session_extraction_prompt(memory: &AgentMemory, messages: &[LlmChatMess
 
     let prompt = SESSION_EXTRACTION_PROMPT.replace("{current_memory_json}", &memory_json);
     format!("{prompt}\n\n## Conversation\n{conversation}")
-}
-
-fn build_explicit_extraction_prompt(
-    memory: &AgentMemory,
-    context_messages: &[LlmChatMessage],
-) -> String {
-    let memory_json = serde_json::to_string_pretty(memory).unwrap_or_default();
-    let context = context_messages
-        .iter()
-        .map(|m| format!("[{}]: {}", m.role, truncate_message(&m.content, 300)))
-        .collect::<Vec<_>>()
-        .join("\n\n");
-
-    EXPLICIT_EXTRACTION_PROMPT
-        .replace("{current_memory_json}", &memory_json)
-        .replace("{context_messages}", &context)
 }
 
 fn build_reflection_prompt(memory: &AgentMemory, update: &UserModelUpdate) -> String {
@@ -1878,53 +1760,6 @@ mod tests {
         assert!(text.contains("session 2"));
         assert!(text.contains("session 3"));
         assert!(text.contains("session 4"));
-    }
-
-    // -- Trigger detection --
-
-    #[test]
-    fn trigger_zh_keywords() {
-        assert!(contains_trigger("记住我喜欢用中文标题"));
-        assert!(contains_trigger("忘记这个偏好"));
-        assert!(contains_trigger("以后都用简洁模式"));
-        assert!(contains_trigger("以后每次都这样"));
-        assert!(contains_trigger("不要再用英文标题"));
-    }
-
-    #[test]
-    fn trigger_en_keywords() {
-        assert!(contains_trigger("remember I like bullet points"));
-        assert!(contains_trigger("forget that preference"));
-        assert!(contains_trigger("from now on use concise mode"));
-        assert!(contains_trigger("always use Chinese"));
-        assert!(contains_trigger("never use English titles"));
-    }
-
-    #[test]
-    fn trigger_case_insensitive() {
-        assert!(contains_trigger("Remember this please"));
-        assert!(contains_trigger("ALWAYS use this format"));
-    }
-
-    #[test]
-    fn trigger_normal_message_returns_false() {
-        assert!(!contains_trigger("hello, how are you?"));
-        assert!(!contains_trigger("help me write a note"));
-        assert!(!contains_trigger("搜索一下 Rust async"));
-    }
-
-    #[test]
-    fn trigger_always_never_mid_sentence_returns_false() {
-        assert!(!contains_trigger("I always check the docs"));
-        assert!(!contains_trigger("I never used Rust before"));
-        assert!(!contains_trigger("this is always a good idea"));
-    }
-
-    #[test]
-    fn trigger_always_never_at_sentence_boundary() {
-        assert!(contains_trigger("ok. always do this"));
-        assert!(contains_trigger("sure! never use that approach"));
-        assert!(contains_trigger("got it?\nnever skip tests"));
     }
 
     // -- Merge: knowledge domains --
@@ -2803,20 +2638,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_explicit_no_cloud_skips() {
-        let tmp = TempDir::new().unwrap();
-        let mut mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
-        let messages = vec![LlmChatMessage {
-            role: "user".to_string(),
-            content: "remember I like bullet points".to_string(),
-            ..Default::default()
-        }];
-        mgr.extract_explicit(&messages).await;
-        assert!(!mgr.is_dirty());
-        assert!(mgr.memory.corrections.is_empty());
-    }
-
-    #[tokio::test]
     async fn extract_session_update_short_conversation_skips() {
         let tmp = TempDir::new().unwrap();
         let mgr = MemoryManager::new(tmp.path().to_path_buf(), None);
@@ -2933,19 +2754,6 @@ mod tests {
         assert!(!prompt.contains("[tool]"));
         assert!(prompt.contains("[user]"));
         assert!(prompt.contains("[assistant]"));
-    }
-
-    #[test]
-    fn explicit_prompt_contains_context() {
-        let m = AgentMemory::default();
-        let msgs = vec![LlmChatMessage {
-            role: "user".to_string(),
-            content: "remember I prefer concise answers".to_string(),
-            ..Default::default()
-        }];
-        let prompt = build_explicit_extraction_prompt(&m, &msgs);
-        assert!(prompt.contains("remember I prefer concise answers"));
-        assert!(prompt.contains("remove_corrections"));
     }
 
     // -- truncate_message --

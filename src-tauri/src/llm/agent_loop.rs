@@ -696,19 +696,6 @@ fn replace_or_insert_memory_message(messages: &mut Vec<LlmChatMessage>, content:
     }
 }
 
-pub(crate) fn extract_context_window(messages: &[LlmChatMessage], n: usize) -> Vec<LlmChatMessage> {
-    messages
-        .iter()
-        .rev()
-        .filter(|m| m.role == "user" || m.role == "assistant")
-        .take(n)
-        .cloned()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect()
-}
-
 #[cfg(test)]
 mod error_format_tests {
     use super::*;

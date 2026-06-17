@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::llm::memory::{AgentMemory, MemoryCorrection, NewCorrection};
+use crate::llm::memory::{AgentMemory, NewCorrection};
 use crate::tools::context::ToolContext;
 use crate::tools::types::{
     ApprovalPolicy, Effect, Risk, Tool, ToolCategory, ToolError, ToolErrorCode, ToolManifest,
