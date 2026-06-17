@@ -968,163 +968,150 @@ pub async fn start_ollama_chat_stream(
                     .await;
                 }
                 AgentMode::Tiered => {
-                    let cloud = match provider::create_cloud_provider(&ai) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            let _ = planning::run_planned_agent(
-                                app_h.clone(),
-                                sid.clone(),
-                                messages,
-                                tools_json,
-                                registry_arc,
-                                ctx_factory_arc,
-                                workspace_root,
-                                Some(cache),
-                                Some(bundle),
-                                provider.clone(),
-                                cancel,
-                                loop_config,
-                                conversation_id,
-                                approval_arc,
-                                memory_manager.clone(),
-                            )
-                            .await;
-                            sessions_arc.remove_session(&sid);
-                            return;
-                        }
-                    };
-                    let local = match provider::create_local_provider(&ai) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            let _ = planning::run_planned_agent(
-                                app_h.clone(),
-                                sid.clone(),
-                                messages,
-                                tools_json,
-                                registry_arc,
-                                ctx_factory_arc,
-                                workspace_root,
-                                Some(cache),
-                                Some(bundle),
-                                provider.clone(),
-                                cancel,
-                                loop_config,
-                                conversation_id,
-                                approval_arc,
-                                memory_manager.clone(),
-                            )
-                            .await;
-                            sessions_arc.remove_session(&sid);
-                            return;
-                        }
-                    };
-                    let _ = tiered::run_tiered_agent(
-                        cloud,
-                        local,
-                        app_h.clone(),
-                        sid.clone(),
-                        messages,
-                        tools_json,
-                        registry_arc,
-                        ctx_factory_arc,
-                        workspace_root,
-                        Some(cache),
-                        Some(bundle),
-                        cancel,
-                        loop_config,
-                        conversation_id,
-                        approval_arc,
-                        memory_manager.clone(),
-                    )
-                    .await;
+                    let cloud_ok = provider::create_cloud_provider(&ai).ok();
+                    let local_ok = provider::create_local_provider(&ai).ok();
+                    if let (Some(cloud), Some(local)) = (cloud_ok, local_ok) {
+                        let _ = tiered::run_tiered_agent(
+                            cloud,
+                            local,
+                            app_h.clone(),
+                            sid.clone(),
+                            messages,
+                            tools_json,
+                            registry_arc,
+                            ctx_factory_arc,
+                            workspace_root,
+                            Some(cache),
+                            Some(bundle),
+                            cancel,
+                            loop_config,
+                            conversation_id,
+                            approval_arc,
+                            memory_manager.clone(),
+                        )
+                        .await;
+                    } else {
+                        let _ = planning::run_planned_agent(
+                            app_h.clone(),
+                            sid.clone(),
+                            messages,
+                            tools_json,
+                            registry_arc,
+                            ctx_factory_arc,
+                            workspace_root,
+                            Some(cache),
+                            Some(bundle),
+                            provider.clone(),
+                            cancel,
+                            loop_config,
+                            conversation_id,
+                            approval_arc,
+                            memory_manager.clone(),
+                        )
+                        .await;
+                    }
                 }
             }
 
-            if let Some(mm) = memory_manager {
-                let reflection_mode = reflection_mode.clone();
-                let app_for_reflect = app_h.clone();
-                let sid_for_reflect = sid.clone();
-                tokio::spawn(async move {
-                    let mut mgr = mm.lock().await;
-                    let msgs = match mgr.take_extraction_messages() {
-                        Some(m) => m,
-                        None => return,
-                    };
+        } else {
+            let msgs_for_extraction = messages.clone();
+            let result = provider
+                .chat_stream(&app_h, &sid, messages, None, cancel)
+                .await;
+            if let Ok(ref r) = result {
+                let mut final_msgs = msgs_for_extraction;
+                if !r.content.is_empty() {
+                    final_msgs.push(LlmChatMessage {
+                        role: "assistant".to_string(),
+                        content: r.content.clone(),
+                        ..Default::default()
+                    });
+                }
+                agent_loop::store_extraction_msgs(&memory_manager, &final_msgs).await;
+            }
+        }
 
-                    let update = match mgr.extract_session_update(&msgs).await {
-                        Some(u) => u,
-                        None => return,
-                    };
+        if let Some(mm) = memory_manager {
+            let reflection_mode = reflection_mode.clone();
+            let app_for_reflect = app_h.clone();
+            let sid_for_reflect = sid.clone();
+            tokio::spawn(async move {
+                let mut mgr = mm.lock().await;
+                let msgs = match mgr.take_extraction_messages() {
+                    Some(m) => m,
+                    None => return,
+                };
 
-                    match reflection_mode.as_str() {
-                        "off" => {
+                let update = match mgr.extract_session_update(&msgs).await {
+                    Some(u) => u,
+                    None => return,
+                };
+
+                match reflection_mode.as_str() {
+                    "off" => {
+                        mgr.memory.merge_user_model(update);
+                        if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                            eprintln!("[memory] Save failed: {e}");
+                        }
+                    }
+                    "auto" => {
+                        if memory::should_reflect(&msgs, &mgr.memory) {
+                            let proposals = mgr.reflect_on_memory(&update).await;
+                            if let Err(e) = mgr.create_snapshot() {
+                                eprintln!("[memory] Snapshot failed: {e}");
+                            }
                             mgr.memory.merge_user_model(update);
-                            if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
-                                eprintln!("[memory] Save failed: {e}");
-                            }
-                        }
-                        "auto" => {
-                            if memory::should_reflect(&msgs, &mgr.memory) {
-                                let proposals = mgr.reflect_on_memory(&update).await;
-                                if let Err(e) = mgr.create_snapshot() {
-                                    eprintln!("[memory] Snapshot failed: {e}");
+                            for p in &proposals {
+                                if let Err(e) = memory::apply_single_proposal(&mut mgr.memory, p) {
+                                    eprintln!("[memory] Apply proposal failed: {e}");
                                 }
-                                mgr.memory.merge_user_model(update);
-                                for p in &proposals {
-                                    if let Err(e) = memory::apply_single_proposal(&mut mgr.memory, p) {
-                                        eprintln!("[memory] Apply proposal failed: {e}");
-                                    }
-                                }
-                            } else {
-                                mgr.memory.merge_user_model(update);
                             }
-                            if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
-                                eprintln!("[memory] Save failed: {e}");
-                            }
-                            mgr.delete_snapshot();
+                        } else {
+                            mgr.memory.merge_user_model(update);
                         }
-                        _ => {
-                            // "confirm" (default)
-                            if memory::should_reflect(&msgs, &mgr.memory) {
-                                let proposals = mgr.reflect_on_memory(&update).await;
-                                if proposals.is_empty() {
-                                    mgr.memory.merge_user_model(update);
-                                    if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
-                                        eprintln!("[memory] Save failed: {e}");
-                                    }
-                                } else {
-                                    mgr.memory.merge_user_model(update);
-                                    if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
-                                        eprintln!("[memory] Save failed: {e}");
-                                    }
-                                    if let Err(e) = mgr.create_snapshot() {
-                                        eprintln!("[memory] Snapshot failed: {e}");
-                                    }
-                                    let batch = memory::MemoryProposalBatch {
-                                        session_id: sid_for_reflect.clone(),
-                                        proposals,
-                                        created_at: chrono::Utc::now().to_rfc3339(),
-                                    };
-                                    if let Err(e) = mgr.save_pending_proposals(&batch) {
-                                        eprintln!("[memory] Save pending failed: {e}");
-                                    }
-                                    let _ = app_for_reflect.emit("llm:memory-proposals", &batch);
+                        if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                            eprintln!("[memory] Save failed: {e}");
+                        }
+                        mgr.delete_snapshot();
+                    }
+                    _ => {
+                        // "confirm" (default)
+                        if memory::should_reflect(&msgs, &mgr.memory) {
+                            let proposals = mgr.reflect_on_memory(&update).await;
+                            if proposals.is_empty() {
+                                mgr.memory.merge_user_model(update);
+                                if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                                    eprintln!("[memory] Save failed: {e}");
                                 }
                             } else {
                                 mgr.memory.merge_user_model(update);
                                 if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
                                     eprintln!("[memory] Save failed: {e}");
                                 }
+                                if let Err(e) = mgr.create_snapshot() {
+                                    eprintln!("[memory] Snapshot failed: {e}");
+                                }
+                                let batch = memory::MemoryProposalBatch {
+                                    session_id: sid_for_reflect.clone(),
+                                    proposals,
+                                    created_at: chrono::Utc::now().to_rfc3339(),
+                                };
+                                if let Err(e) = mgr.save_pending_proposals(&batch) {
+                                    eprintln!("[memory] Save pending failed: {e}");
+                                }
+                                let _ = app_for_reflect.emit("llm:memory-proposals", &batch);
+                            }
+                        } else {
+                            mgr.memory.merge_user_model(update);
+                            if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                                eprintln!("[memory] Save failed: {e}");
                             }
                         }
                     }
-                });
-            }
-        } else {
-            let _ = provider
-                .chat_stream(&app_h, &sid, messages, None, cancel)
-                .await;
+                }
+            });
         }
+
         sessions_arc.remove_session(&sid);
     });
 

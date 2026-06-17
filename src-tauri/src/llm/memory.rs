@@ -1,11 +1,13 @@
 use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::provider::{CompletionOverrides, LlmProvider};
 use super::LlmChatMessage;
+use crate::thought_parser::{split_frontmatter, FrontmatterSplit};
+use crate::topic_network;
 
 // ── Capacity constants ──
 
@@ -356,6 +358,10 @@ impl AgentMemory {
 
 // ── Workspace observation (no LLM) ──
 
+const SAMPLE_FILE_COUNT: usize = 30;
+const CONTENT_PEEK_CHARS: usize = 1024;
+const MAX_TAG_VOCABULARY: usize = 30;
+
 fn is_cjk(c: char) -> bool {
     matches!(c,
         '\u{4E00}'..='\u{9FFF}'
@@ -368,10 +374,55 @@ fn is_cjk(c: char) -> bool {
     )
 }
 
-pub fn observe_workspace(
-    note_paths: &[String],
-    _graph_summary: Option<&str>,
-) -> MemoryWorkspace {
+fn evenly_spaced_indices(total: usize, max_sample: usize) -> Vec<usize> {
+    if total == 0 {
+        return Vec::new();
+    }
+    if total <= max_sample {
+        return (0..total).collect();
+    }
+    let step = total as f64 / max_sample as f64;
+    (0..max_sample).map(|i| (i as f64 * step) as usize).collect()
+}
+
+fn extract_yaml_tags(yaml: &str, out: &mut HashSet<String>) {
+    let mut in_tags = false;
+    for line in yaml.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("tags:") {
+            let rest = trimmed.strip_prefix("tags:").unwrap().trim();
+            if rest.starts_with('[') {
+                let inner = rest.trim_start_matches('[').trim_end_matches(']');
+                for tag in inner.split(',') {
+                    let tag = tag.trim().trim_matches('"').trim_matches('\'').trim();
+                    if !tag.is_empty() {
+                        out.insert(tag.to_string());
+                    }
+                }
+                return;
+            }
+            in_tags = true;
+            continue;
+        }
+        if in_tags {
+            if trimmed.starts_with("- ") {
+                let tag = trimmed
+                    .strip_prefix("- ")
+                    .unwrap()
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'');
+                if !tag.is_empty() {
+                    out.insert(tag.to_string());
+                }
+            } else if !trimmed.is_empty() {
+                in_tags = false;
+            }
+        }
+    }
+}
+
+pub fn observe_workspace(workspace_root: &Path, note_paths: &[String]) -> MemoryWorkspace {
     if note_paths.is_empty() {
         return MemoryWorkspace {
             updated_at: Some(Utc::now().to_rfc3339()),
@@ -379,20 +430,44 @@ pub fn observe_workspace(
         };
     }
 
-    // 1. Language distribution: count CJK vs ASCII in filenames
+    let sample_indices = evenly_spaced_indices(note_paths.len(), SAMPLE_FILE_COUNT);
+
+    // 1. Language distribution + tag extraction in a single pass over sampled files
     let mut cjk_count: usize = 0;
     let mut ascii_count: usize = 0;
-    for path in note_paths {
-        let filename = path.rsplit('/').next().unwrap_or(path);
-        let stem = filename.strip_suffix(".md").unwrap_or(filename);
-        for c in stem.chars() {
-            if is_cjk(c) {
-                cjk_count += 1;
-            } else if c.is_ascii_alphanumeric() {
-                ascii_count += 1;
+    let mut tag_set: HashSet<String> = HashSet::new();
+
+    for &idx in &sample_indices {
+        let full_path = workspace_root.join(&note_paths[idx]);
+        if let Ok(content) = std::fs::read_to_string(&full_path) {
+            for c in content.chars().take(CONTENT_PEEK_CHARS) {
+                if is_cjk(c) {
+                    cjk_count += 1;
+                } else if c.is_ascii_alphanumeric() {
+                    ascii_count += 1;
+                }
+            }
+            if let FrontmatterSplit::Closed { yaml, .. } = split_frontmatter(&content) {
+                extract_yaml_tags(&yaml, &mut tag_set);
             }
         }
     }
+
+    // Fallback to filename-based counting when no content was readable
+    if cjk_count == 0 && ascii_count == 0 {
+        for path in note_paths {
+            let filename = path.rsplit('/').next().unwrap_or(path);
+            let stem = filename.strip_suffix(".md").unwrap_or(filename);
+            for c in stem.chars() {
+                if is_cjk(c) {
+                    cjk_count += 1;
+                } else if c.is_ascii_alphanumeric() {
+                    ascii_count += 1;
+                }
+            }
+        }
+    }
+
     let total_chars = (cjk_count + ascii_count).max(1);
     let mut language_distribution = HashMap::new();
     let zh_ratio = cjk_count as f64 / total_chars as f64;
@@ -426,23 +501,39 @@ pub fn observe_workspace(
         })
         .collect();
 
-    // 3. Tag vocabulary: not available from note.list (only paths)
-    let tag_vocabulary = Vec::new();
+    // 3. Tag vocabulary from frontmatter
+    let mut tag_vocabulary: Vec<String> = tag_set.into_iter().collect();
+    tag_vocabulary.sort();
+    tag_vocabulary.truncate(MAX_TAG_VOCABULARY);
 
-    // 4. Topics: derived from directory names as a heuristic
-    let mut topics: Vec<String> = frequent_paths
-        .iter()
-        .take(MAX_TOPICS)
-        .filter_map(|fp| {
-            let name = fp.path.trim_end_matches('/');
-            let name = name.rsplit('/').next().unwrap_or(name);
-            if name.is_empty() {
-                None
-            } else {
-                Some(name.to_string())
+    // 4. Topics: prefer canonical topics from SQLite, fallback to directory names
+    let mut topics: Vec<String> = Vec::new();
+    let db_path = topic_network::topic_db_path(workspace_root);
+    if db_path.exists() {
+        if let Ok(conn) = rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) {
+            if let Ok(canonicals) = topic_network::list_dictionary_canonicals(&conn) {
+                topics = canonicals;
             }
-        })
-        .collect();
+        }
+    }
+    if topics.is_empty() {
+        topics = frequent_paths
+            .iter()
+            .take(MAX_TOPICS)
+            .filter_map(|fp| {
+                let name = fp.path.trim_end_matches('/');
+                let name = name.rsplit('/').next().unwrap_or(name);
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(name.to_string())
+                }
+            })
+            .collect();
+    }
     topics.truncate(MAX_TOPICS);
 
     MemoryWorkspace {
@@ -596,7 +687,9 @@ impl AgentMemory {
         }
 
         // ## Workspace
-        if !self.workspace.frequent_paths.is_empty() || !self.workspace.language_distribution.is_empty()
+        if !self.workspace.frequent_paths.is_empty()
+            || !self.workspace.language_distribution.is_empty()
+            || !self.workspace.tag_vocabulary.is_empty()
         {
             let mut ws = String::from("## Workspace");
             if !self.workspace.language_distribution.is_empty() {
@@ -623,6 +716,10 @@ impl AgentMemory {
                     "\n- Topics: {}",
                     self.workspace.topics.join(", ")
                 ));
+            }
+            if !self.workspace.tag_vocabulary.is_empty() {
+                let tags: Vec<&str> = self.workspace.tag_vocabulary.iter().take(20).map(|s| s.as_str()).collect();
+                ws.push_str(&format!("\n- Tags: {}", tags.join(", ")));
             }
             parts.push(ws);
         }
@@ -1024,7 +1121,7 @@ impl MemoryManager {
 
         if is_workspace_stale(&memory.workspace.updated_at) {
             let note_paths = scan_md_paths(&workspace_root);
-            memory.workspace = observe_workspace(&note_paths, None);
+            memory.workspace = observe_workspace(&workspace_root, &note_paths);
             if let Err(e) = memory.save(&workspace_root) {
                 eprintln!("[memory] Failed to save after workspace observation: {e}");
             }
@@ -1440,7 +1537,8 @@ mod tests {
 
     #[test]
     fn observe_empty_paths() {
-        let ws = observe_workspace(&[], None);
+        let tmp = TempDir::new().unwrap();
+        let ws = observe_workspace(tmp.path(), &[]);
         assert!(ws.frequent_paths.is_empty());
         assert!(ws.language_distribution.is_empty());
         assert!(ws.updated_at.is_some());
@@ -1448,12 +1546,17 @@ mod tests {
 
     #[test]
     fn observe_language_distribution() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("notes")).unwrap();
+        std::fs::write(tmp.path().join("notes/a.md"), "这是中文笔记的内容，包含很多中文字符").unwrap();
+        std::fs::write(tmp.path().join("notes/b.md"), "另一篇中文笔记，同样以中文为主").unwrap();
+        std::fs::write(tmp.path().join("notes/c.md"), "This is English content").unwrap();
         let paths = vec![
-            "notes/中文笔记.md".to_string(),
-            "notes/另一个中文笔记标题.md".to_string(),
-            "notes/english.md".to_string(),
+            "notes/a.md".to_string(),
+            "notes/b.md".to_string(),
+            "notes/c.md".to_string(),
         ];
-        let ws = observe_workspace(&paths, None);
+        let ws = observe_workspace(tmp.path(), &paths);
         let zh = ws.language_distribution.get("zh").copied().unwrap_or(0.0);
         let en = ws.language_distribution.get("en").copied().unwrap_or(0.0);
         assert!(zh > 0.0, "should detect CJK characters");
@@ -1462,14 +1565,35 @@ mod tests {
     }
 
     #[test]
+    fn observe_language_fallback_to_filename() {
+        let tmp = TempDir::new().unwrap();
+        // Files exist but are unreadable (we simulate by giving non-existent paths)
+        let paths = vec![
+            "notes/中文笔记.md".to_string(),
+            "notes/另一个.md".to_string(),
+            "notes/english.md".to_string(),
+        ];
+        let ws = observe_workspace(tmp.path(), &paths);
+        let zh = ws.language_distribution.get("zh").copied().unwrap_or(0.0);
+        assert!(zh > 0.0, "should fallback to filename-based CJK detection");
+    }
+
+    #[test]
     fn observe_frequent_paths() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("reading-notes")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("daily")).unwrap();
+        std::fs::write(tmp.path().join("reading-notes/a.md"), "a").unwrap();
+        std::fs::write(tmp.path().join("reading-notes/b.md"), "b").unwrap();
+        std::fs::write(tmp.path().join("reading-notes/c.md"), "c").unwrap();
+        std::fs::write(tmp.path().join("daily/d.md"), "d").unwrap();
         let paths = vec![
             "reading-notes/a.md".to_string(),
             "reading-notes/b.md".to_string(),
             "reading-notes/c.md".to_string(),
             "daily/d.md".to_string(),
         ];
-        let ws = observe_workspace(&paths, None);
+        let ws = observe_workspace(tmp.path(), &paths);
         assert!(!ws.frequent_paths.is_empty());
         assert_eq!(ws.frequent_paths[0].path, "reading-notes/");
         assert!(ws.frequent_paths[0].description.contains("3"));
@@ -1477,12 +1601,77 @@ mod tests {
 
     #[test]
     fn observe_frequent_paths_truncated() {
+        let tmp = TempDir::new().unwrap();
         let mut paths = Vec::new();
         for i in 0..20 {
-            paths.push(format!("dir{i}/note.md"));
+            let dir = format!("dir{i}");
+            std::fs::create_dir_all(tmp.path().join(&dir)).unwrap();
+            std::fs::write(tmp.path().join(format!("{dir}/note.md")), "x").unwrap();
+            paths.push(format!("{dir}/note.md"));
         }
-        let ws = observe_workspace(&paths, None);
+        let ws = observe_workspace(tmp.path(), &paths);
         assert!(ws.frequent_paths.len() <= MAX_FREQUENT_PATHS);
+    }
+
+    #[test]
+    fn observe_tag_vocabulary() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("notes")).unwrap();
+        std::fs::write(
+            tmp.path().join("notes/a.md"),
+            "---\ntitle: A\ntags:\n  - rust\n  - async\n---\nContent here",
+        ).unwrap();
+        std::fs::write(
+            tmp.path().join("notes/b.md"),
+            "---\ntags: [rust, networking]\n---\nMore content",
+        ).unwrap();
+        let paths = vec!["notes/a.md".to_string(), "notes/b.md".to_string()];
+        let ws = observe_workspace(tmp.path(), &paths);
+        assert!(ws.tag_vocabulary.contains(&"rust".to_string()));
+        assert!(ws.tag_vocabulary.contains(&"async".to_string()));
+        assert!(ws.tag_vocabulary.contains(&"networking".to_string()));
+    }
+
+    #[test]
+    fn observe_topics_fallback_to_dirs() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("reading-notes")).unwrap();
+        std::fs::write(tmp.path().join("reading-notes/a.md"), "content").unwrap();
+        let paths = vec!["reading-notes/a.md".to_string()];
+        let ws = observe_workspace(tmp.path(), &paths);
+        assert!(ws.topics.contains(&"reading-notes".to_string()));
+    }
+
+    #[test]
+    fn extract_yaml_tags_list_form() {
+        let mut out = HashSet::new();
+        extract_yaml_tags("title: X\ntags:\n  - alpha\n  - beta\ndate: 2026", &mut out);
+        assert!(out.contains("alpha"));
+        assert!(out.contains("beta"));
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn extract_yaml_tags_inline_form() {
+        let mut out = HashSet::new();
+        extract_yaml_tags("tags: [foo, \"bar baz\", 'qux']", &mut out);
+        assert!(out.contains("foo"));
+        assert!(out.contains("bar baz"));
+        assert!(out.contains("qux"));
+    }
+
+    #[test]
+    fn evenly_spaced_indices_small() {
+        assert_eq!(evenly_spaced_indices(3, 10), vec![0, 1, 2]);
+        assert_eq!(evenly_spaced_indices(0, 10), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn evenly_spaced_indices_large() {
+        let indices = evenly_spaced_indices(100, 5);
+        assert_eq!(indices.len(), 5);
+        assert_eq!(indices[0], 0);
+        assert!(indices[4] < 100);
     }
 
     // -- Confidence decay --
