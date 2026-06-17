@@ -103,6 +103,12 @@ impl LoopDetector {
     }
 }
 
+pub(crate) async fn store_extraction_msgs(mm: &SharedMemoryManager, msgs: &[LlmChatMessage]) {
+    if let Some(mm) = mm {
+        mm.lock().await.set_extraction_messages(msgs.to_vec());
+    }
+}
+
 /// 启动 Tool Calling Loop。当 LLM 不再返回 tool_calls 时正常结束并 emit `llm:agent-done`。
 ///
 /// Returns the **final assistant text** — the content from the iteration that ended without
@@ -134,6 +140,7 @@ pub async fn run_agent_stream(
 
     loop {
         if cancel.is_cancelled() {
+            store_extraction_msgs(&memory_manager, &messages).await;
             return String::new();
         }
 
@@ -162,6 +169,7 @@ pub async fn run_agent_stream(
         {
             Ok(r) => r,
             Err(_) => {
+                store_extraction_msgs(&memory_manager, &messages).await;
                 emit_agent_done(&app, &session_id);
                 return String::new();
             }
@@ -171,6 +179,12 @@ pub async fn run_agent_stream(
         let normalized_calls = match stream_result.tool_calls {
             Some(calls) if !calls.is_empty() => calls,
             _ => {
+                messages.push(LlmChatMessage {
+                    role: "assistant".to_string(),
+                    content: stream_result.content.clone(),
+                    ..Default::default()
+                });
+                store_extraction_msgs(&memory_manager, &messages).await;
                 emit_agent_done(&app, &session_id);
                 return stream_result.content;
             }
@@ -356,6 +370,7 @@ pub async fn run_agent_stream(
             // No context trimming here: this is the final iteration, so all
             // gathered tool results should remain visible to the model.
             // ContextGuard trimming is for future iterations that won't happen.
+            store_extraction_msgs(&memory_manager, &messages).await;
             let final_result = provider
                 .chat_stream(&app, &session_id, messages, None, cancel.clone())
                 .await;
@@ -364,6 +379,7 @@ pub async fn run_agent_stream(
         }
 
         if cancel.is_cancelled() {
+            store_extraction_msgs(&memory_manager, &messages).await;
             return String::new();
         }
         // 继续 loop：下一轮流式请求会带上完整的 messages 历史

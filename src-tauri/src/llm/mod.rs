@@ -926,12 +926,6 @@ pub async fn start_ollama_chat_stream(
                 ..Default::default()
             };
 
-            let messages_for_extraction = if memory_manager.is_some() {
-                Some(messages.clone())
-            } else {
-                None
-            };
-
             match agent_mode {
                 AgentMode::Direct => {
                     let _ = agent_loop::run_agent_stream(
@@ -1046,12 +1040,16 @@ pub async fn start_ollama_chat_stream(
                 }
             }
 
-            if let (Some(mm), Some(msgs)) = (memory_manager, messages_for_extraction) {
+            if let Some(mm) = memory_manager {
                 let reflection_mode = reflection_mode.clone();
                 let app_for_reflect = app_h.clone();
                 let sid_for_reflect = sid.clone();
                 tokio::spawn(async move {
                     let mut mgr = mm.lock().await;
+                    let msgs = match mgr.take_extraction_messages() {
+                        Some(m) => m,
+                        None => return,
+                    };
 
                     let update = match mgr.extract_session_update(&msgs).await {
                         Some(u) => u,

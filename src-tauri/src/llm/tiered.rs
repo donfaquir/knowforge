@@ -425,15 +425,24 @@ pub async fn run_tiered_agent(
     );
     context_guard.trim_with_summary(&mut gen_messages).await;
 
+    let msgs_for_extraction = gen_messages.clone();
     match local_provider
         .chat_stream(&app, &session_id, gen_messages, None, cancel)
         .await
     {
         Ok(r) => {
+            let mut msgs = msgs_for_extraction;
+            msgs.push(LlmChatMessage {
+                role: "assistant".to_string(),
+                content: r.content.clone(),
+                ..Default::default()
+            });
+            agent_loop::store_extraction_msgs(&memory_manager, &msgs).await;
             emit_agent_done(&app, &session_id);
             r.content
         }
         Err(_) => {
+            agent_loop::store_extraction_msgs(&memory_manager, &msgs_for_extraction).await;
             emit_agent_done(&app, &session_id);
             String::new()
         }

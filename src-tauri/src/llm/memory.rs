@@ -1014,6 +1014,7 @@ pub struct MemoryManager {
     cloud: Option<Arc<dyn LlmProvider>>,
     workspace_root: PathBuf,
     dirty: bool,
+    extraction_messages: Option<Vec<LlmChatMessage>>,
 }
 
 impl MemoryManager {
@@ -1034,6 +1035,7 @@ impl MemoryManager {
             cloud,
             workspace_root,
             dirty: false,
+            extraction_messages: None,
         }
     }
 
@@ -1051,6 +1053,14 @@ impl MemoryManager {
 
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+
+    pub fn set_extraction_messages(&mut self, msgs: Vec<LlmChatMessage>) {
+        self.extraction_messages = Some(msgs);
+    }
+
+    pub fn take_extraction_messages(&mut self) -> Option<Vec<LlmChatMessage>> {
+        self.extraction_messages.take()
     }
 
     pub fn format_for_injection(&self) -> Option<String> {
