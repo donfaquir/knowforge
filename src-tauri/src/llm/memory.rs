@@ -1106,15 +1106,15 @@ impl MemoryManager {
     pub async fn extract_session_update(
         &self,
         messages: &[LlmChatMessage],
-    ) -> Option<UserModelUpdate> {
+    ) -> Result<Option<UserModelUpdate>, String> {
         let cloud = match &self.cloud {
             Some(c) => c.clone(),
-            None => return None,
+            None => return Ok(None),
         };
 
         let user_msg_count = messages.iter().filter(|m| m.role == "user").count();
         if user_msg_count < MIN_USER_MESSAGES_FOR_SESSION {
-            return None;
+            return Ok(None);
         }
 
         let trimmed = trim_messages_for_extraction(messages);
@@ -1139,16 +1139,16 @@ impl MemoryManager {
             Ok(response) => {
                 eprintln!("[memory] extract_session_update raw response: {response}");
                 match serde_json::from_str::<UserModelUpdate>(&response) {
-                    Ok(update) => Some(update),
+                    Ok(update) => Ok(Some(update)),
                     Err(e) => {
                         eprintln!("[memory] Failed to parse session extraction: {e}");
-                        None
+                        Err(format!("Failed to parse session extraction: {e}"))
                     }
                 }
             }
             Err(e) => {
                 eprintln!("[memory] Session extraction failed: {e}");
-                None
+                Err(format!("Session extraction LLM call failed: {e}"))
             }
         }
     }
@@ -2647,7 +2647,7 @@ mod tests {
             ..Default::default()
         }];
         let result = mgr.extract_session_update(&messages).await;
-        assert!(result.is_none());
+        assert!(matches!(result, Ok(None)));
     }
 
     #[tokio::test]
@@ -2672,7 +2672,7 @@ mod tests {
             },
         ];
         let result = mgr.extract_session_update(&messages).await;
-        assert!(result.is_none());
+        assert!(matches!(result, Ok(None)));
     }
 
     // -- trim_messages_for_extraction --

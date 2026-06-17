@@ -1043,8 +1043,17 @@ pub async fn start_ollama_chat_stream(
                 };
 
                 let update = match mgr.extract_session_update(&msgs).await {
-                    Some(u) => u,
-                    None => return,
+                    Ok(Some(u)) => u,
+                    Ok(None) => return,
+                    Err(e) => {
+                        emit_error(
+                            &app_for_reflect,
+                            &sid_for_reflect,
+                            Some("memory_extraction_failed"),
+                            &e,
+                        );
+                        return;
+                    }
                 };
 
                 match reflection_mode.as_str() {

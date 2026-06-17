@@ -177,13 +177,13 @@ impl ThoughtCreateTool {
                 name: "thought.create".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
-                description: "创建一条新的独立想法（Thought）条目。想法是用户对某个主题的思考、洞察、灵感或假设，不包括对 AI 的行为指令、个人偏好或记忆指令（如「记住…」「以后都…」「always…」「never…」）。".to_string(),
+                description: "Create a new independent Thought entry. A thought captures the user's thinking, insight, inspiration, or hypothesis about a topic. Do NOT use for behavioral instructions, personal preferences, or memory directives (e.g. \"remember...\", \"always...\", \"never...\") — those belong in memory.save.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "required": ["content"],
                     "properties": {
-                        "content": { "type": "string", "description": "想法正文" },
-                        "summary": { "type": "string", "description": "一句话摘要（可选）" }
+                        "content": { "type": "string", "description": "The thought content" },
+                        "summary": { "type": "string", "description": "One-line summary (optional)" }
                     },
                     "additionalProperties": false
                 }),
