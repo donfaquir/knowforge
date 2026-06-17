@@ -149,22 +149,6 @@ pub async fn run_agent_stream(
 
         context_guard.trim_with_summary(&mut messages).await;
 
-        if tool_call_count == 0 {
-            if let Some(ref mm) = memory_manager {
-                if let Some(user_msg) = messages.iter().rev().find(|m| m.role == "user") {
-                    let triggered = memory::contains_trigger(&user_msg.content);
-                    eprintln!("[memory] trigger check: triggered={triggered}, msg={:.60}", user_msg.content);
-                    if triggered {
-                        let context = extract_context_window(&messages, 5);
-                        let mut mgr = mm.lock().await;
-                        mgr.extract_explicit(&context).await;
-                    }
-                }
-            } else {
-                eprintln!("[memory] memory_manager is None, skipping trigger check");
-            }
-        }
-
         // 1. 流式请求（携带 tools 字段；本轮文字会通过 emit_chunk/emit_done 推给前端）
         let stream_result = match provider
             .chat_stream(
@@ -687,7 +671,7 @@ fn replace_or_insert_memory_message(messages: &mut Vec<LlmChatMessage>, content:
     }
 }
 
-fn extract_context_window(messages: &[LlmChatMessage], n: usize) -> Vec<LlmChatMessage> {
+pub(crate) fn extract_context_window(messages: &[LlmChatMessage], n: usize) -> Vec<LlmChatMessage> {
     messages
         .iter()
         .rev()

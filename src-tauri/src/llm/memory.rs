@@ -141,9 +141,9 @@ pub struct UserModelUpdate {
     pub knowledge_domains: Vec<DomainUpdate>,
     #[serde(default)]
     pub interaction_style_updates: HashMap<String, Option<String>>,
-    #[serde(default)]
+    #[serde(default, alias = "corrections")]
     pub new_corrections: Vec<NewCorrection>,
-    #[serde(default)]
+    #[serde(default, alias = "forget_corrections")]
     pub remove_corrections: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_summary: Option<String>,
@@ -985,13 +985,29 @@ Extract what they want remembered or forgotten.
 ## Context messages
 {context_messages}
 
-For "forget" instructions, put the matching rule text in remove_corrections.
-For "remember" instructions, add to new_corrections (with reason from context),
-knowledge_domains, or interaction_style_updates as appropriate.
+## What to extract
 
-Return ONLY a JSON object with these optional fields:
-knowledge_domains, interaction_style_updates, new_corrections,
-remove_corrections, session_summary, session_domains_touched, follow_up."#;
+### Corrections (most common for explicit instructions)
+When the user says "remember", "记住", "以后都", "always", "never", "不要再":
+Add to `new_corrections`. Each entry needs:
+- "rule": the instruction to follow (concise imperative sentence)
+- "reason": why the user wants this (from context)
+
+Example input: "记住，我喜欢简洁的代码风格，不要加多余注释"
+Example output:
+{"new_corrections": [{"rule": "Use concise code style without unnecessary comments", "reason": "User prefers minimal, clean code"}]}
+
+### Removals
+When the user says "forget", "忘记", or retracts a previous instruction:
+Add the matching rule text from the current user model to `remove_corrections`.
+
+### Other fields (use only when appropriate)
+- `knowledge_domains`: only if the instruction is about a knowledge area
+- `interaction_style_updates`: only if about communication style (keys: "detail_preference", "explanation_style", "challenge_tolerance", "format")
+
+Return ONLY a JSON object (no markdown fences) with these optional fields:
+new_corrections, remove_corrections, knowledge_domains, interaction_style_updates,
+session_summary, session_domains_touched, follow_up."#;
 
 pub struct MemoryManager {
     pub memory: AgentMemory,
@@ -2748,5 +2764,17 @@ mod tests {
         let msg = "你好世界这是一个测试";
         let truncated = truncate_message(msg, 3);
         assert_eq!(truncated, "你好世");
+    }
+
+    #[test]
+    fn user_model_update_accepts_corrections_alias() {
+        let json = r#"{
+            "corrections": [{"rule": "use concise style", "reason": "user preference"}],
+            "forget_corrections": ["old rule"]
+        }"#;
+        let update: UserModelUpdate = serde_json::from_str(json).unwrap();
+        assert_eq!(update.new_corrections.len(), 1);
+        assert_eq!(update.new_corrections[0].rule, "use concise style");
+        assert_eq!(update.remove_corrections, vec!["old rule"]);
     }
 }
