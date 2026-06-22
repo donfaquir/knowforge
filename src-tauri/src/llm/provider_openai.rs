@@ -402,6 +402,9 @@ impl LlmProvider for OpenAiCompatibleProvider {
         if let Some(tp) = top_p_val {
             body["top_p"] = json!(tp);
         }
+        if overrides.map_or(false, |o| o.json_mode) {
+            body["response_format"] = json!({"type": "json_object"});
+        }
 
         let req = self.build_auth_headers(client.post(&url)).json(&body);
         let resp = req

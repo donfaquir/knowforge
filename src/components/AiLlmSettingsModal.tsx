@@ -128,6 +128,8 @@ type FormState = {
   allowPrivateContentInLocalLlm: boolean;
   toolsEnabled: boolean;
   planningEnabled: boolean;
+  memoryEnabled: boolean;
+  memoryReflectionMode: string;
   passiveHighlightEnabled: boolean;
   passiveHighlightConfidenceMin: string;
   writingCoachEnabled: boolean;
@@ -229,6 +231,8 @@ function defaultForm(): FormState {
     allowPrivateContentInLocalLlm: false,
     toolsEnabled: true,
     planningEnabled: false,
+    memoryEnabled: true,
+    memoryReflectionMode: "confirm",
     passiveHighlightEnabled: true,
     passiveHighlightConfidenceMin: "0.55",
     writingCoachEnabled: true,
@@ -266,6 +270,8 @@ function aiFormEqualsPersisted(a: FormState, b: FormState): boolean {
     "allowPrivateContentInLocalLlm",
     "toolsEnabled",
     "planningEnabled",
+    "memoryEnabled",
+    "memoryReflectionMode",
     "passiveHighlightEnabled",
     "passiveHighlightConfidenceMin",
     "writingCoachEnabled",
@@ -315,6 +321,8 @@ function vaultConfigToForm(cfg: VaultConfigForUi): FormState {
     allowPrivateContentInLocalLlm: ai.privacy.allowPrivateContentInLocalLlm,
     toolsEnabled: ai.toolsEnabled !== false,
     planningEnabled: ai.planningEnabled === true,
+    memoryEnabled: ai.memoryEnabled !== false,
+    memoryReflectionMode: ai.memoryReflectionMode ?? "confirm",
     passiveHighlightEnabled: cognitive.passiveHighlightEnabled !== false,
     passiveHighlightConfidenceMin: String(cognitive.passiveHighlightConfidenceMin ?? 0.55),
     writingCoachEnabled: cognitive.writingCoachEnabled !== false,
@@ -706,6 +714,8 @@ export function AiLlmSettingsModal({
         },
         toolsEnabled: form.toolsEnabled,
         planningEnabled: form.planningEnabled,
+        memoryEnabled: form.memoryEnabled,
+        memoryReflectionMode: form.memoryReflectionMode,
         openaiCompatible: {
           baseUrl: form.openaiBaseUrl.trim(),
           defaultModel: form.openaiDefaultModel.trim(),
@@ -1165,6 +1175,61 @@ export function AiLlmSettingsModal({
                 {t("settings.planningEnabled")}
               </label>
               <p className="app-modal__hint">{t("settings.planningEnabledHint")}</p>
+              <label className="ai-settings__check" title={t("settings.memoryEnabledHint")}>
+                <input
+                  type="checkbox"
+                  checked={form.memoryEnabled}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, memoryEnabled: e.target.checked }))
+                  }
+                />
+                {t("settings.memoryEnabled")}
+              </label>
+              <p className="app-modal__hint">{t("settings.memoryEnabledHint")}</p>
+              {form.memoryEnabled && (
+                <div className="ai-settings__reflection-mode">
+                  <p className="app-modal__hint">{t("settings.memoryReflectionMode")}</p>
+                  <div className="settings-lang-toggle">
+                    {(["confirm", "auto", "off"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`app-modal__btn settings-lang-toggle__btn${
+                          form.memoryReflectionMode === mode
+                            ? " settings-lang-toggle__btn--active"
+                            : ""
+                        }`}
+                        onClick={() =>
+                          setForm((f) => ({ ...f, memoryReflectionMode: mode }))
+                        }
+                      >
+                        {t(`settings.memoryReflection.${mode}`)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <button
+                type="button"
+                className="app-modal__btn app-modal__btn--danger"
+                disabled={!tauriRuntime || !workspaceReady}
+                onClick={async () => {
+                  const confirmed = isTauri()
+                    ? await ask(t("settings.clearMemoryConfirm"), {
+                        title: t("settings.clearMemory"),
+                        kind: "warning",
+                      })
+                    : window.confirm(t("settings.clearMemoryConfirm"));
+                  if (!confirmed) return;
+                  try {
+                    await invoke("clear_agent_memory");
+                  } catch (e) {
+                    setSaveError(String(e));
+                  }
+                }}
+              >
+                {t("settings.clearMemory")}
+              </button>
             </fieldset>
 
               </div>

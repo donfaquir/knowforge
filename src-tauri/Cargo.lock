@@ -2664,7 +2664,7 @@ dependencies = [
 
 [[package]]
 name = "knowforge"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "aho-corasick",
  "async-trait",

@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
-use super::agent_loop::{self, AgentLoopConfig};
+use super::agent_loop::{self, AgentLoopConfig, SharedMemoryManager};
 use super::approval::ToolApprovalState;
 use super::context_guard::ContextGuard;
 use super::planning;
@@ -267,6 +267,7 @@ pub async fn run_tiered_agent(
     config: AgentLoopConfig,
     conversation_id: String,
     approval_state: Arc<ToolApprovalState>,
+    memory_manager: SharedMemoryManager,
 ) -> String {
     // Step 1: Cloud planning (silent — separate session_id)
     let planning_sid = format!("plan-{}", uuid::Uuid::new_v4());
@@ -303,6 +304,7 @@ pub async fn run_tiered_agent(
                 config,
                 conversation_id,
                 approval_state,
+                memory_manager,
             )
             .await;
         }
@@ -331,6 +333,7 @@ pub async fn run_tiered_agent(
             &approval_state,
             &cancel,
             &config,
+            &cloud_provider,
         )
         .await;
         all_tool_results.extend(results);
@@ -398,6 +401,7 @@ pub async fn run_tiered_agent(
                         &approval_state,
                         &cancel,
                         &config,
+                        &cloud_provider,
                     )
                     .await;
                     all_tool_results.extend(extra_results);
@@ -423,15 +427,24 @@ pub async fn run_tiered_agent(
     );
     context_guard.trim_with_summary(&mut gen_messages).await;
 
+    let msgs_for_extraction = gen_messages.clone();
     match local_provider
         .chat_stream(&app, &session_id, gen_messages, None, cancel)
         .await
     {
         Ok(r) => {
+            let mut msgs = msgs_for_extraction;
+            msgs.push(LlmChatMessage {
+                role: "assistant".to_string(),
+                content: r.content.clone(),
+                ..Default::default()
+            });
+            agent_loop::store_extraction_msgs(&memory_manager, &msgs).await;
             emit_agent_done(&app, &session_id);
             r.content
         }
         Err(_) => {
+            agent_loop::store_extraction_msgs(&memory_manager, &msgs_for_extraction).await;
             emit_agent_done(&app, &session_id);
             String::new()
         }
@@ -452,6 +465,7 @@ async fn execute_tool_calls(
     approval_state: &Arc<ToolApprovalState>,
     cancel: &CancellationToken,
     config: &AgentLoopConfig,
+    provider: &Arc<dyn LlmProvider>,
 ) -> Vec<(String, String, bool)> {
     // Emit tool-call-start for each
     for tc in calls {
@@ -481,6 +495,7 @@ async fn execute_tool_calls(
         let app = app.clone();
         let session_id = session_id.to_string();
         let tc = tc.clone();
+        let provider = provider.clone();
         async move {
             let nesting_depth = config.nesting_depth;
             let exec_start = std::time::Instant::now();
@@ -489,6 +504,7 @@ async fn execute_tool_calls(
                     &app, &session_id, &registry, &ctx_factory,
                     &workspace_root, app_cache_dir, app_bundle_resource_dir,
                     &conversation_id, &tc, &approval_state, &cancel, nesting_depth,
+                    Some(provider),
                 )) => {
                     match res {
                         Ok(r) => r,

@@ -182,6 +182,7 @@ pub async fn run_skill_with_depth(
         config,
         conv_id,
         approval_state,
+        None,
     )
     .await
 }

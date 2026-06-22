@@ -9,6 +9,7 @@ pub(crate) mod provider;
 pub(crate) mod provider_ollama;
 pub(crate) mod provider_openai;
 pub(crate) mod tiered;
+pub mod memory;
 
 pub use provider::{
     create_provider, resolve_model_name, CompletionOverrides, LlmProvider,
@@ -832,7 +833,7 @@ pub async fn start_ollama_chat_stream(
         Vec::new()
     };
     let outcome = assemble_ollama_messages(&root, &ai, &args, embed_paths, &skills_for_prompt)?;
-    let messages = outcome.messages;
+    let mut messages = outcome.messages;
     let resolved_depth = outcome.resolved_depth;
     let reply_context_sources = outcome.reply_context_sources;
 
@@ -873,7 +874,29 @@ pub async fn start_ollama_chat_stream(
         AgentMode::Direct
     };
 
+    let memory_enabled = ai.memory_enabled;
+    let reflection_mode = ai.memory_reflection_mode.clone();
+    let ai_for_memory = ai.clone();
+
     tokio::spawn(async move {
+        let memory_manager: agent_loop::SharedMemoryManager = if memory_enabled {
+            let extraction_provider = provider::create_cloud_provider(&ai_for_memory)
+                .or_else(|_| provider::create_local_provider(&ai_for_memory))
+                .ok();
+            let mgr = memory::MemoryManager::new(workspace_root.clone(), extraction_provider);
+            if let Some(mem_msg) = mgr.format_for_injection() {
+                let pos = if messages.is_empty() { 0 } else { 1 };
+                messages.insert(pos, LlmChatMessage {
+                    role: "system".to_string(),
+                    content: mem_msg,
+                    ..Default::default()
+                });
+            }
+            Some(Arc::new(tokio::sync::Mutex::new(mgr)))
+        } else {
+            None
+        };
+
         if tools_enabled {
             let tool_filter = if agent_mode == AgentMode::Tiered {
                 ToolFilter::all()
@@ -920,6 +943,7 @@ pub async fn start_ollama_chat_stream(
                         loop_config,
                         conversation_id,
                         approval_arc,
+                        memory_manager.clone(),
                     )
                     .await;
                 }
@@ -939,84 +963,164 @@ pub async fn start_ollama_chat_stream(
                         loop_config,
                         conversation_id,
                         approval_arc,
+                        memory_manager.clone(),
                     )
                     .await;
                 }
                 AgentMode::Tiered => {
-                    let cloud = match provider::create_cloud_provider(&ai) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            // Degrade to local planning
-                            let _ = planning::run_planned_agent(
-                                app_h.clone(),
-                                sid.clone(),
-                                messages,
-                                tools_json,
-                                registry_arc,
-                                ctx_factory_arc,
-                                workspace_root,
-                                Some(cache),
-                                Some(bundle),
-                                provider.clone(),
-                                cancel,
-                                loop_config,
-                                conversation_id,
-                                approval_arc,
-                            )
-                            .await;
-                            sessions_arc.remove_session(&sid);
-                            return;
-                        }
-                    };
-                    let local = match provider::create_local_provider(&ai) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            let _ = planning::run_planned_agent(
-                                app_h.clone(),
-                                sid.clone(),
-                                messages,
-                                tools_json,
-                                registry_arc,
-                                ctx_factory_arc,
-                                workspace_root,
-                                Some(cache),
-                                Some(bundle),
-                                provider.clone(),
-                                cancel,
-                                loop_config,
-                                conversation_id,
-                                approval_arc,
-                            )
-                            .await;
-                            sessions_arc.remove_session(&sid);
-                            return;
-                        }
-                    };
-                    let _ = tiered::run_tiered_agent(
-                        cloud,
-                        local,
-                        app_h.clone(),
-                        sid.clone(),
-                        messages,
-                        tools_json,
-                        registry_arc,
-                        ctx_factory_arc,
-                        workspace_root,
-                        Some(cache),
-                        Some(bundle),
-                        cancel,
-                        loop_config,
-                        conversation_id,
-                        approval_arc,
-                    )
-                    .await;
+                    let cloud_ok = provider::create_cloud_provider(&ai).ok();
+                    let local_ok = provider::create_local_provider(&ai).ok();
+                    if let (Some(cloud), Some(local)) = (cloud_ok, local_ok) {
+                        let _ = tiered::run_tiered_agent(
+                            cloud,
+                            local,
+                            app_h.clone(),
+                            sid.clone(),
+                            messages,
+                            tools_json,
+                            registry_arc,
+                            ctx_factory_arc,
+                            workspace_root,
+                            Some(cache),
+                            Some(bundle),
+                            cancel,
+                            loop_config,
+                            conversation_id,
+                            approval_arc,
+                            memory_manager.clone(),
+                        )
+                        .await;
+                    } else {
+                        let _ = planning::run_planned_agent(
+                            app_h.clone(),
+                            sid.clone(),
+                            messages,
+                            tools_json,
+                            registry_arc,
+                            ctx_factory_arc,
+                            workspace_root,
+                            Some(cache),
+                            Some(bundle),
+                            provider.clone(),
+                            cancel,
+                            loop_config,
+                            conversation_id,
+                            approval_arc,
+                            memory_manager.clone(),
+                        )
+                        .await;
+                    }
                 }
             }
+
         } else {
-            let _ = provider
+            let msgs_for_extraction = messages.clone();
+            let result = provider
                 .chat_stream(&app_h, &sid, messages, None, cancel)
                 .await;
+            if let Ok(ref r) = result {
+                let mut final_msgs = msgs_for_extraction;
+                if !r.content.is_empty() {
+                    final_msgs.push(LlmChatMessage {
+                        role: "assistant".to_string(),
+                        content: r.content.clone(),
+                        ..Default::default()
+                    });
+                }
+                agent_loop::store_extraction_msgs(&memory_manager, &final_msgs).await;
+            }
         }
+
+        if let Some(mm) = memory_manager {
+            let reflection_mode = reflection_mode.clone();
+            let app_for_reflect = app_h.clone();
+            let sid_for_reflect = sid.clone();
+            tokio::spawn(async move {
+                let mut mgr = mm.lock().await;
+                let msgs = match mgr.take_extraction_messages() {
+                    Some(m) => m,
+                    None => return,
+                };
+
+                let update = match mgr.extract_session_update(&msgs).await {
+                    Ok(Some(u)) => u,
+                    Ok(None) => return,
+                    Err(e) => {
+                        emit_error(
+                            &app_for_reflect,
+                            &sid_for_reflect,
+                            Some("memory_extraction_failed"),
+                            &e,
+                        );
+                        return;
+                    }
+                };
+
+                match reflection_mode.as_str() {
+                    "off" => {
+                        mgr.memory.merge_user_model(update);
+                        if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                            eprintln!("[memory] Save failed: {e}");
+                        }
+                    }
+                    "auto" => {
+                        if memory::should_reflect(&msgs, &mgr.memory) {
+                            let proposals = mgr.reflect_on_memory(&update).await;
+                            if let Err(e) = mgr.create_snapshot() {
+                                eprintln!("[memory] Snapshot failed: {e}");
+                            }
+                            mgr.memory.merge_user_model(update);
+                            for p in &proposals {
+                                if let Err(e) = memory::apply_single_proposal(&mut mgr.memory, p) {
+                                    eprintln!("[memory] Apply proposal failed: {e}");
+                                }
+                            }
+                        } else {
+                            mgr.memory.merge_user_model(update);
+                        }
+                        if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                            eprintln!("[memory] Save failed: {e}");
+                        }
+                        mgr.delete_snapshot();
+                    }
+                    _ => {
+                        // "confirm" (default)
+                        if memory::should_reflect(&msgs, &mgr.memory) {
+                            let proposals = mgr.reflect_on_memory(&update).await;
+                            if proposals.is_empty() {
+                                mgr.memory.merge_user_model(update);
+                                if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                                    eprintln!("[memory] Save failed: {e}");
+                                }
+                            } else {
+                                if let Err(e) = mgr.create_snapshot() {
+                                    eprintln!("[memory] Snapshot failed: {e}");
+                                }
+                                mgr.memory.merge_user_model(update);
+                                if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                                    eprintln!("[memory] Save failed: {e}");
+                                }
+                                let batch = memory::MemoryProposalBatch {
+                                    session_id: sid_for_reflect.clone(),
+                                    proposals,
+                                    created_at: chrono::Utc::now().to_rfc3339(),
+                                };
+                                if let Err(e) = mgr.save_pending_proposals(&batch) {
+                                    eprintln!("[memory] Save pending failed: {e}");
+                                }
+                                let _ = app_for_reflect.emit("llm:memory-proposals", &batch);
+                            }
+                        } else {
+                            mgr.memory.merge_user_model(update);
+                            if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
+                                eprintln!("[memory] Save failed: {e}");
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         sessions_arc.remove_session(&sid);
     });
 
@@ -1032,6 +1136,56 @@ pub fn abort_llm_stream(session_id: String, sessions: State<'_, Arc<LlmSessionSt
     if let Some(token) = sessions.take_cancel(&session_id) {
         token.cancel();
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_agent_memory(
+    workspace: State<'_, crate::WorkspaceState>,
+) -> Result<(), String> {
+    let root = lock_workspace_root(&workspace)?;
+    memory::clear_memory_file(&root)
+}
+
+#[tauri::command]
+pub fn apply_memory_proposals(
+    workspace: State<'_, crate::WorkspaceState>,
+    accepted_ids: Vec<String>,
+) -> Result<(), String> {
+    let root = lock_workspace_root(&workspace)?;
+    let batch = memory::load_pending_proposals(&root)
+        .ok_or_else(|| "No pending proposals".to_string())?;
+
+    let mut mem = memory::AgentMemory::load(&root);
+
+    for proposal in &batch.proposals {
+        if accepted_ids.contains(&proposal.id) {
+            memory::apply_single_proposal(&mut mem, proposal)?;
+        }
+    }
+
+    mem.save(&root)?;
+    memory::delete_pending_proposals(&root);
+    memory::delete_snapshot(&root);
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_pending_memory_proposals(
+    workspace: State<'_, crate::WorkspaceState>,
+) -> Result<Option<memory::MemoryProposalBatch>, String> {
+    let root = lock_workspace_root(&workspace)?;
+    Ok(memory::load_pending_proposals(&root))
+}
+
+#[tauri::command]
+pub fn dismiss_memory_proposals(
+    workspace: State<'_, crate::WorkspaceState>,
+) -> Result<(), String> {
+    let root = lock_workspace_root(&workspace)?;
+    memory::delete_pending_proposals(&root);
+    memory::delete_snapshot(&root);
     Ok(())
 }
 

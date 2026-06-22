@@ -16,9 +16,6 @@ dist/
 
 target/
 
-# Python
-__pycache__/
-*.pyc
 
 # Benchmark results (local runs, not committed)
 bench-results/
@@ -41,7 +38,6 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-/docs/
 
 # 嵌入模型权重大，不入库；仅占位目录满足 tauri-build（见该目录下 .gitkeep）
 /src-tauri/resources/models/bge-small-zh-v1.5/*
@@ -52,3 +48,4 @@ __pycache__/
 .qoder/
 
 /plan/
+/worklog/

@@ -40,6 +40,22 @@ import { stripMarkedPassiveHighlightWithCount } from "../utils/passiveHighlightL
 import { trackKnowforgeEvent } from "../utils/knowforgeAnalytics";
 import { getAppLocale } from "../i18n";
 import "./AiConversationPanel.css";
+import "./MemoryProposals.css";
+
+type MemoryProposal = {
+  id: string;
+  action: string;
+  category: string;
+  target: string | null;
+  content: unknown;
+  reason: string;
+};
+
+type MemoryProposalBatch = {
+  session_id: string;
+  proposals: MemoryProposal[];
+  created_at: string;
+};
 
 /** 用户中止且输入框无新草稿：去掉末尾 streaming 助手及其前一条用户消息 */
 function retractInterruptedTurn(prev: ChatMessage[]): ChatMessage[] {
@@ -404,6 +420,8 @@ export function AiConversationPanel() {
   /** invite-after-answer 状态 */
   const [inviteData, setInviteData] = useState<InviteData | null>(null);
   const [challengeInlineData, setChallengeInlineData] = useState<ChallengeInlineData | null>(null);
+  const [memoryProposals, setMemoryProposals] = useState<MemoryProposalBatch | null>(null);
+  const [proposalDecisions, setProposalDecisions] = useState<Record<string, boolean>>({});
   const inviteSearchEpochRef = useRef(0);
   /** 缓存最近一次发送的用户查询，供 stream-done 回调读取 */
   const lastSentQueryRef = useRef("");
@@ -989,6 +1007,12 @@ export function AiConversationPanel() {
           return cur;
         });
       }),
+      listen<MemoryProposalBatch>("llm:memory-proposals", (e) => {
+        if (e.payload.session_id === activeSessionRef.current) {
+          setMemoryProposals(e.payload);
+          setProposalDecisions({});
+        }
+      }),
       // Iter 5 #4: 主对话自动调用 `skill.<id>` 时，后端发出 skill-spawn,
       // 携带新 sessionId — 这里保存父 session、切换 active、更新父气泡中对应工具调用项的 skill 字段。
       // 不再创建新气泡，Skill 内容内嵌到父气泡的工具调用项中。
@@ -1048,6 +1072,27 @@ export function AiConversationPanel() {
         if (e.payload.sessionId !== activeSessionRef.current) return;
         setIsPlanning(false);
       }),
+      // Budget warning: tool call budget reaching 80%
+      listen<{ sessionId: string; used: number; limit: number; type: string }>(
+        "llm:budget-warning",
+        (e) => {
+          if (e.payload.sessionId !== activeSessionRef.current) return;
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant") {
+              next[next.length - 1] = {
+                ...last,
+                meta: {
+                  ...last.meta,
+                  budgetWarning: { used: e.payload.used, limit: e.payload.limit },
+                },
+              };
+            }
+            return next;
+          });
+        },
+      ),
       // P2 Tool Calling Loop：Agent 轮次结束 → 最终化助手消息、清理 streaming 状态
       listen<{ sessionId: string }>("llm:agent-done", (e) => {
         const sid = e.payload.sessionId;
@@ -1135,6 +1180,47 @@ export function AiConversationPanel() {
     attachCitationToLastAssistant,
     conversationId,
   ]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    invoke<MemoryProposalBatch | null>("get_pending_memory_proposals")
+      .then((batch) => {
+        if (batch && batch.proposals.length > 0) {
+          setMemoryProposals(batch);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleAcceptAllProposals = useCallback(async () => {
+    if (!memoryProposals) return;
+    const ids = memoryProposals.proposals.map((p) => p.id);
+    await invoke("apply_memory_proposals", { acceptedIds: ids });
+    setMemoryProposals(null);
+  }, [memoryProposals]);
+
+  const handleDismissAllProposals = useCallback(async () => {
+    await invoke("dismiss_memory_proposals");
+    setMemoryProposals(null);
+  }, []);
+
+  const handleSubmitProposalDecisions = useCallback(async () => {
+    const acceptedIds = Object.entries(proposalDecisions)
+      .filter(([, v]) => v === true)
+      .map(([k]) => k);
+    await invoke("apply_memory_proposals", { acceptedIds });
+    setMemoryProposals(null);
+  }, [proposalDecisions]);
+
+  const toggleProposalDecision = useCallback((id: string, accept: boolean) => {
+    setProposalDecisions((prev) => {
+      if (prev[id] === accept) {
+        const { [id]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [id]: accept };
+    });
+  }, []);
 
   const handleStop = useCallback(async () => {
     if (isVaultSearching) {
@@ -2145,6 +2231,11 @@ export function AiConversationPanel() {
                         ))}
                       </div>
                     ) : null}
+                    {m.meta?.budgetWarning && (
+                      <div className="ai-chat__budget-warning">
+                        Agent {m.meta.budgetWarning.used}/{m.meta.budgetWarning.limit} tool calls used
+                      </div>
+                    )}
                     <AiAssistantMarkdown content={m.content} />
                     {!m.streaming && m.meta?.thoughtCitation && !m.meta.thoughtCitation.privateOmitted ? (
                       <button
@@ -2294,6 +2385,85 @@ export function AiConversationPanel() {
             onDismiss={handleChallengeInlineDismiss}
           />
         ) : null}
+
+        {memoryProposals && memoryProposals.proposals.length > 0 && (
+          <div className="memory-proposals">
+            <div className="memory-proposals__header">
+              <span>
+                {t("memory.proposalsTitle")} ({memoryProposals.proposals.length})
+              </span>
+            </div>
+            <div className="memory-proposals__list">
+              {memoryProposals.proposals.map((p) => (
+                <div
+                  key={p.id}
+                  className={`memory-proposals__item${
+                    proposalDecisions[p.id] === true
+                      ? " memory-proposals__item--accepted"
+                      : proposalDecisions[p.id] === false
+                        ? " memory-proposals__item--rejected"
+                        : ""
+                  }`}
+                >
+                  <div className="memory-proposals__meta">
+                    <span className="memory-proposals__action">
+                      {t(`memory.action.${p.action.toLowerCase()}`)}
+                    </span>
+                    {p.target && (
+                      <span className="memory-proposals__target">{p.target}</span>
+                    )}
+                  </div>
+                  <p className="memory-proposals__reason">{p.reason}</p>
+                  <div className="memory-proposals__buttons">
+                    <button
+                      type="button"
+                      className={`memory-proposals__btn memory-proposals__btn--accept${
+                        proposalDecisions[p.id] === true ? " memory-proposals__btn--active" : ""
+                      }`}
+                      onClick={() => toggleProposalDecision(p.id, true)}
+                    >
+                      {t("memory.accept")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`memory-proposals__btn memory-proposals__btn--reject${
+                        proposalDecisions[p.id] === false ? " memory-proposals__btn--active" : ""
+                      }`}
+                      onClick={() => toggleProposalDecision(p.id, false)}
+                    >
+                      {t("memory.reject")}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="memory-proposals__footer">
+              <button
+                type="button"
+                className="memory-proposals__btn memory-proposals__btn--accept"
+                onClick={handleAcceptAllProposals}
+              >
+                {t("memory.acceptAll")}
+              </button>
+              {Object.keys(proposalDecisions).length > 0 && (
+                <button
+                  type="button"
+                  className="memory-proposals__btn memory-proposals__btn--submit"
+                  onClick={handleSubmitProposalDecisions}
+                >
+                  {t("memory.submitDecisions")}
+                </button>
+              )}
+              <button
+                type="button"
+                className="memory-proposals__btn memory-proposals__btn--dismiss"
+                onClick={handleDismissAllProposals}
+              >
+                {t("memory.dismissAll")}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div ref={listEndRef} />
       </div>

@@ -20,11 +20,15 @@ use tokio_util::sync::CancellationToken;
 
 use super::approval::ToolApprovalState;
 use super::context_guard::ContextGuard;
+use super::memory;
 use super::provider::{LlmProvider, NormalizedToolCall};
 use super::{LlmChatMessage, LlmToolCall, LlmToolCallFunction};
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::types::{ApprovalPolicy, ToolError, ToolManifest};
+
+pub(crate) type SharedMemoryManager =
+    Option<Arc<tokio::sync::Mutex<memory::MemoryManager>>>;
 
 /// Shared discovery hint injected at the top of any tool-using turn (Iter 3.5 P0-2).
 ///
@@ -46,7 +50,7 @@ RESULT MATCHING: Each tool result is prefixed with [call:ID] to help you match r
 #[allow(dead_code)]
 pub struct AgentLoopConfig {
     /// 整轮 agent 中允许执行的 tool_call 总次数上限。
-    pub max_tool_calls: u8,
+    pub max_tool_calls: u16,
     /// 每轮模型流式请求的默认超时（毫秒）；现代码从调用点的 ai.request.timeout_ms 传入。
     pub timeout_ms: u64,
     /// 整轮中累计追加给模型的 tool 结果总字符数上限（防止上下文爆炸）。
@@ -61,9 +65,9 @@ pub struct AgentLoopConfig {
 impl Default for AgentLoopConfig {
     fn default() -> Self {
         Self {
-            max_tool_calls: 8,
+            max_tool_calls: 25,
             timeout_ms: 60_000,
-            max_tool_result_chars: 8000,
+            max_tool_result_chars: 24_000,
             nesting_depth: 0,
             max_context_tokens: None,
         }
@@ -99,6 +103,12 @@ impl LoopDetector {
     }
 }
 
+pub(crate) async fn store_extraction_msgs(mm: &SharedMemoryManager, msgs: &[LlmChatMessage]) {
+    if let Some(mm) = mm {
+        mm.lock().await.set_extraction_messages(msgs.to_vec());
+    }
+}
+
 /// 启动 Tool Calling Loop。当 LLM 不再返回 tool_calls 时正常结束并 emit `llm:agent-done`。
 ///
 /// Returns the **final assistant text** — the content from the iteration that ended without
@@ -120,16 +130,28 @@ pub async fn run_agent_stream(
     config: AgentLoopConfig,
     conversation_id: String,
     approval_state: Arc<ToolApprovalState>,
+    memory_manager: SharedMemoryManager,
 ) -> String {
     let mut messages = initial_messages;
     let mut total_tool_result_chars: usize = 0;
-    let mut tool_call_count: u8 = 0;
+    let mut tool_call_count: u16 = 0;
     let context_guard = ContextGuard::with_provider(config.max_context_tokens, provider.clone());
     let mut loop_detector = LoopDetector::new();
 
     loop {
         if cancel.is_cancelled() {
+            store_extraction_msgs(&memory_manager, &messages).await;
             return String::new();
+        }
+
+        if let Some(ref mm) = memory_manager {
+            let mut mgr = mm.lock().await;
+            if mgr.is_dirty() {
+                if let Some(mem_msg) = mgr.format_for_injection() {
+                    replace_or_insert_memory_message(&mut messages, &mem_msg);
+                }
+                mgr.reset_dirty();
+            }
         }
 
         context_guard.trim_with_summary(&mut messages).await;
@@ -147,6 +169,7 @@ pub async fn run_agent_stream(
         {
             Ok(r) => r,
             Err(_) => {
+                store_extraction_msgs(&memory_manager, &messages).await;
                 emit_agent_done(&app, &session_id);
                 return String::new();
             }
@@ -156,6 +179,12 @@ pub async fn run_agent_stream(
         let normalized_calls = match stream_result.tool_calls {
             Some(calls) if !calls.is_empty() => calls,
             _ => {
+                messages.push(LlmChatMessage {
+                    role: "assistant".to_string(),
+                    content: stream_result.content.clone(),
+                    ..Default::default()
+                });
+                store_extraction_msgs(&memory_manager, &messages).await;
                 emit_agent_done(&app, &session_id);
                 return stream_result.content;
             }
@@ -193,6 +222,7 @@ pub async fn run_agent_stream(
             let app = app.clone();
             let session_id = session_id.clone();
             let tc = tc.clone();
+            let provider = provider.clone();
             async move {
                 if skip {
                     return (Err(format!("loop detected: '{}' called too many times with same arguments", tc.name)), 0u64);
@@ -213,6 +243,7 @@ pub async fn run_agent_stream(
                         &approval_state,
                         &cancel,
                         nesting_depth,
+                        Some(provider),
                     )) => {
                         match res {
                             Ok(tool_result) => tool_result,
@@ -301,16 +332,56 @@ pub async fn run_agent_stream(
             });
         }
 
+        // 6b. Reload memory if any memory.* tool was called
+        if normalized_calls.iter().any(|tc| tc.name.starts_with("memory.")) {
+            if let Some(ref mm) = memory_manager {
+                let mut mgr = mm.lock().await;
+                mgr.memory = memory::AgentMemory::load(mgr.workspace_root());
+                mgr.mark_dirty();
+            }
+        }
+
         // 7. 上限检查
-        tool_call_count = tool_call_count.saturating_add(normalized_calls.len() as u8);
+        tool_call_count = tool_call_count.saturating_add(normalized_calls.len() as u16);
+
+        // 7a. Budget warning at 80% threshold
+        let threshold = (config.max_tool_calls as f32 * 0.8) as u16;
+        if threshold > 0 && tool_call_count >= threshold && tool_call_count.saturating_sub(normalized_calls.len() as u16) < threshold {
+            let _ = app.emit(
+                "llm:budget-warning",
+                json!({
+                    "sessionId": session_id,
+                    "used": tool_call_count,
+                    "limit": config.max_tool_calls,
+                    "type": "tool_calls",
+                }),
+            );
+        }
+
+        // 7b. Budget exhausted → graceful summary instead of silent truncation
         if tool_call_count >= config.max_tool_calls
             || total_tool_result_chars >= config.max_tool_result_chars
         {
+            messages.push(LlmChatMessage {
+                role: "system".to_string(),
+                content: "IMPORTANT: Tool call budget exhausted. You MUST now provide \
+                          your final answer using ONLY the information gathered so far. \
+                          Do NOT attempt any more tool calls.".to_string(),
+                ..Default::default()
+            });
+            // No context trimming here: this is the final iteration, so all
+            // gathered tool results should remain visible to the model.
+            // ContextGuard trimming is for future iterations that won't happen.
+            store_extraction_msgs(&memory_manager, &messages).await;
+            let final_result = provider
+                .chat_stream(&app, &session_id, messages, None, cancel.clone())
+                .await;
             emit_agent_done(&app, &session_id);
-            return String::new();
+            return final_result.map(|r| r.content).unwrap_or_default();
         }
 
         if cancel.is_cancelled() {
+            store_extraction_msgs(&memory_manager, &messages).await;
             return String::new();
         }
         // 继续 loop：下一轮流式请求会带上完整的 messages 历史
@@ -331,6 +402,7 @@ pub(crate) async fn execute_tool(
     approval_state: &Arc<ToolApprovalState>,
     cancel: &CancellationToken,
     nesting_depth: u8,
+    provider: Option<Arc<dyn LlmProvider>>,
 ) -> Result<Value, String> {
     let tool = registry
         .get(&tc.name)
@@ -411,6 +483,7 @@ pub(crate) async fn execute_tool(
         nesting_depth,
     );
     ctx.call_id = Some(tc.id.clone());
+    ctx.provider = provider;
 
     let manifest = tool.manifest().clone();
     let start = std::time::Instant::now();
@@ -604,6 +677,27 @@ fn summarize_tool_input(args: &Value) -> String {
         s.push_str("...");
     }
     s
+}
+
+const MEMORY_HEADER: &str = "# User Model";
+
+fn replace_or_insert_memory_message(messages: &mut Vec<LlmChatMessage>, content: &str) {
+    if let Some(msg) = messages
+        .iter_mut()
+        .find(|m| m.role == "system" && m.content.starts_with(MEMORY_HEADER))
+    {
+        msg.content = content.to_string();
+    } else {
+        let pos = if messages.is_empty() { 0 } else { 1 };
+        messages.insert(
+            pos,
+            LlmChatMessage {
+                role: "system".to_string(),
+                content: content.to_string(),
+                ..Default::default()
+            },
+        );
+    }
 }
 
 #[cfg(test)]

@@ -52,6 +52,8 @@ export type ChatMessage = {
     replyContextSources?: ReplyContextSources;
     /** P2 Tool Calling Loop：本轮发生的工具调用（运行时） */
     toolCalls?: ToolCallDisplayInfo[];
+    /** Budget warning when tool calls reach 80% of limit */
+    budgetWarning?: { used: number; limit: number };
     /** Iter 5 #3：本轮属于 Skill 子轮次。已持久化到 PersistedChatMessage（followups #2）；
      *  作用：(a) UI 渲染 🧠 badge；(b) 下一次主对话发送前从 chatTurns 过滤掉，兑现"独立子轮次,不污染主对话历史"。
      *  即使关闭并重新打开 vault，徽章和过滤行为均保持一致。 */

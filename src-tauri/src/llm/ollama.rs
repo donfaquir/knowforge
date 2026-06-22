@@ -329,6 +329,7 @@ pub async fn run_chat_completion(
     temperature: f64,
     top_p: Option<f64>,
     timeout_ms: u64,
+    json_mode: bool,
 ) -> Result<String, String> {
     let timeout_ms = timeout_ms.max(3000).min(45_000);
     let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
@@ -345,12 +346,15 @@ pub async fn run_chat_completion(
         }
     }
 
-    let body = json!({
+    let mut body = json!({
         "model": model,
         "messages": messages_json,
         "stream": false,
         "options": options,
     });
+    if json_mode {
+        body["format"] = json!("json");
+    }
 
     let resp = client
         .post(&url)

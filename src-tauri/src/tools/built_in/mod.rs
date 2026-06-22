@@ -6,5 +6,6 @@ pub mod graph_ops;
 pub mod pdfium_manager;
 pub mod web_download;
 pub mod web_ops;
+pub mod memory_ops;
 pub mod web_search;
 pub mod webview_renderer;

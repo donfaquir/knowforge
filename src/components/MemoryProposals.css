@@ -1,0 +1,150 @@
+.memory-proposals {
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--crepe-color-primary, #2563eb), transparent 92%);
+  border: 1px solid color-mix(in srgb, var(--crepe-color-primary, #2563eb), transparent 80%);
+  animation: memory-proposals-fade-in 0.3s ease-out;
+}
+
+@keyframes memory-proposals-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.memory-proposals__header {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--crepe-color-on-surface, #374151);
+  margin-bottom: 8px;
+}
+
+.memory-proposals__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.memory-proposals__item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--crepe-color-surface, #fff), transparent 40%);
+  border-left: 3px solid transparent;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.memory-proposals__item--accepted {
+  border-left-color: var(--crepe-color-primary, #2563eb);
+  background: color-mix(in srgb, var(--crepe-color-primary, #2563eb), transparent 95%);
+}
+
+.memory-proposals__item--rejected {
+  border-left-color: var(--crepe-color-outline, #9ca3af);
+  opacity: 0.6;
+}
+
+.memory-proposals__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.memory-proposals__action {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--crepe-color-primary, #2563eb);
+}
+
+.memory-proposals__target {
+  font-size: 0.82rem;
+  color: var(--crepe-color-on-surface-variant, #6b7280);
+}
+
+.memory-proposals__reason {
+  font-size: 0.82rem;
+  color: var(--crepe-color-on-surface, #374151);
+  margin: 0 0 6px;
+  line-height: 1.4;
+}
+
+.memory-proposals__buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.memory-proposals__btn {
+  font-size: 0.78rem;
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  background: transparent;
+  color: var(--crepe-color-on-surface-variant, #6b7280);
+  border-color: color-mix(in srgb, var(--crepe-color-outline, #9ca3af), transparent 50%);
+}
+
+.memory-proposals__btn:hover {
+  background: color-mix(in srgb, var(--crepe-color-outline, #9ca3af), transparent 85%);
+}
+
+.memory-proposals__btn--accept.memory-proposals__btn--active {
+  background: var(--crepe-color-primary, #2563eb);
+  color: #fff;
+  border-color: transparent;
+}
+
+.memory-proposals__btn--reject.memory-proposals__btn--active {
+  background: color-mix(in srgb, var(--crepe-color-outline, #9ca3af), transparent 30%);
+  color: #fff;
+  border-color: transparent;
+}
+
+.memory-proposals__footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--crepe-color-outline, #9ca3af), transparent 70%);
+}
+
+.memory-proposals__btn--submit {
+  background: var(--crepe-color-primary, #2563eb);
+  color: #fff;
+  border-color: transparent;
+}
+
+.memory-proposals__btn--submit:hover {
+  opacity: 0.85;
+}
+
+.memory-proposals__btn--dismiss {
+  margin-left: auto;
+}
+
+@media (prefers-color-scheme: dark) {
+  .memory-proposals {
+    background: color-mix(in srgb, var(--crepe-color-primary, #93c5fd), transparent 90%);
+    border-color: color-mix(in srgb, var(--crepe-color-primary, #93c5fd), transparent 75%);
+  }
+
+  .memory-proposals__header {
+    color: var(--crepe-color-on-surface, #e4e4e7);
+  }
+
+  .memory-proposals__item {
+    background: color-mix(in srgb, var(--crepe-color-surface, #1f1f23), transparent 40%);
+  }
+
+  .memory-proposals__reason {
+    color: var(--crepe-color-on-surface, #e4e4e7);
+  }
+}

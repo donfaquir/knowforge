@@ -17,7 +17,7 @@ pub struct SkillManifest {
     pub description: String,
     pub system_prompt_template: String,
     pub allowed_tools: Vec<String>,
-    pub max_tool_calls: u8,
+    pub max_tool_calls: u16,
     pub timeout_secs: u64,
     pub ui_entry: SkillUiEntry,
     #[serde(default)]
