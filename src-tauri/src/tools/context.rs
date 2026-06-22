@@ -4,6 +4,8 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::llm::provider::LlmProvider;
+
 // ─── ToolContext ───────────────────────────────────────────────────────────────
 
 pub struct ToolContext {
@@ -21,6 +23,7 @@ pub struct ToolContext {
     /// 0 = called from main agent loop. 1 = called from inside a skill sub-turn
     /// (or another tool that recursed into agent_loop). Stage 1 caps this at 1.
     pub nesting_depth: u8,
+    pub provider: Option<Arc<dyn LlmProvider>>,
 }
 
 // ─── AuditSink trait ───────────────────────────────────────────────────────────
@@ -103,6 +106,7 @@ impl ToolContextFactory {
             app_cache_dir,
             app_bundle_resource_dir,
             nesting_depth,
+            provider: None,
         }
     }
 }

@@ -222,6 +222,7 @@ pub async fn run_agent_stream(
             let app = app.clone();
             let session_id = session_id.clone();
             let tc = tc.clone();
+            let provider = provider.clone();
             async move {
                 if skip {
                     return (Err(format!("loop detected: '{}' called too many times with same arguments", tc.name)), 0u64);
@@ -242,6 +243,7 @@ pub async fn run_agent_stream(
                         &approval_state,
                         &cancel,
                         nesting_depth,
+                        Some(provider),
                     )) => {
                         match res {
                             Ok(tool_result) => tool_result,
@@ -400,6 +402,7 @@ pub(crate) async fn execute_tool(
     approval_state: &Arc<ToolApprovalState>,
     cancel: &CancellationToken,
     nesting_depth: u8,
+    provider: Option<Arc<dyn LlmProvider>>,
 ) -> Result<Value, String> {
     let tool = registry
         .get(&tc.name)
@@ -480,6 +483,7 @@ pub(crate) async fn execute_tool(
         nesting_depth,
     );
     ctx.call_id = Some(tc.id.clone());
+    ctx.provider = provider;
 
     let manifest = tool.manifest().clone();
     let start = std::time::Instant::now();

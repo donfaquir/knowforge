@@ -333,6 +333,7 @@ pub async fn run_tiered_agent(
             &approval_state,
             &cancel,
             &config,
+            &cloud_provider,
         )
         .await;
         all_tool_results.extend(results);
@@ -400,6 +401,7 @@ pub async fn run_tiered_agent(
                         &approval_state,
                         &cancel,
                         &config,
+                        &cloud_provider,
                     )
                     .await;
                     all_tool_results.extend(extra_results);
@@ -463,6 +465,7 @@ async fn execute_tool_calls(
     approval_state: &Arc<ToolApprovalState>,
     cancel: &CancellationToken,
     config: &AgentLoopConfig,
+    provider: &Arc<dyn LlmProvider>,
 ) -> Vec<(String, String, bool)> {
     // Emit tool-call-start for each
     for tc in calls {
@@ -492,6 +495,7 @@ async fn execute_tool_calls(
         let app = app.clone();
         let session_id = session_id.to_string();
         let tc = tc.clone();
+        let provider = provider.clone();
         async move {
             let nesting_depth = config.nesting_depth;
             let exec_start = std::time::Instant::now();
@@ -500,6 +504,7 @@ async fn execute_tool_calls(
                     &app, &session_id, &registry, &ctx_factory,
                     &workspace_root, app_cache_dir, app_bundle_resource_dir,
                     &conversation_id, &tc, &approval_state, &cancel, nesting_depth,
+                    Some(provider),
                 )) => {
                     match res {
                         Ok(r) => r,
