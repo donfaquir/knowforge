@@ -1093,12 +1093,12 @@ pub async fn start_ollama_chat_stream(
                                     eprintln!("[memory] Save failed: {e}");
                                 }
                             } else {
+                                if let Err(e) = mgr.create_snapshot() {
+                                    eprintln!("[memory] Snapshot failed: {e}");
+                                }
                                 mgr.memory.merge_user_model(update);
                                 if let Err(e) = mgr.memory.save(mgr.workspace_root()) {
                                     eprintln!("[memory] Save failed: {e}");
-                                }
-                                if let Err(e) = mgr.create_snapshot() {
-                                    eprintln!("[memory] Snapshot failed: {e}");
                                 }
                                 let batch = memory::MemoryProposalBatch {
                                     session_id: sid_for_reflect.clone(),
