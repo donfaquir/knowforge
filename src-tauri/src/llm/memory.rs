@@ -108,8 +108,97 @@ pub struct InteractionStyle {
     pub language: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
-    #[serde(default)]
-    pub pending: HashMap<String, String>,
+    #[serde(default, deserialize_with = "deserialize_pending_map")]
+    pub pending: HashMap<String, PendingStyleEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct PendingStyleEntry {
+    pub value: String,
+    pub observed_at: String,
+}
+
+impl PendingStyleEntry {
+    pub fn new(value: String) -> Self {
+        Self {
+            value,
+            observed_at: Utc::now().to_rfc3339(),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PendingStyleEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+
+        struct EntryVisitor;
+
+        impl<'de> Visitor<'de> for EntryVisitor {
+            type Value = PendingStyleEntry;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a string or {value, observed_at} object")
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<PendingStyleEntry, E> {
+                Ok(PendingStyleEntry {
+                    value: v.to_string(),
+                    observed_at: Utc::now().to_rfc3339(),
+                })
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<PendingStyleEntry, M::Error> {
+                let mut value = None;
+                let mut observed_at = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "value" => value = Some(map.next_value()?),
+                        "observed_at" => observed_at = Some(map.next_value()?),
+                        _ => { let _ = map.next_value::<serde::de::IgnoredAny>()?; }
+                    }
+                }
+                Ok(PendingStyleEntry {
+                    value: value.ok_or_else(|| de::Error::missing_field("value"))?,
+                    observed_at: observed_at.unwrap_or_else(|| Utc::now().to_rfc3339()),
+                })
+            }
+        }
+
+        deserializer.deserialize_any(EntryVisitor)
+    }
+}
+
+fn deserialize_pending_map<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, PendingStyleEntry>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{MapAccess, Visitor};
+
+    struct PendingMapVisitor;
+
+    impl<'de> Visitor<'de> for PendingMapVisitor {
+        type Value = HashMap<String, PendingStyleEntry>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a map of pending style entries")
+        }
+
+        fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+            let mut result = HashMap::new();
+            while let Some(key) = map.next_key::<String>()? {
+                let entry: PendingStyleEntry = map.next_value()?;
+                result.insert(key, entry);
+            }
+            Ok(result)
+        }
+    }
+
+    deserializer.deserialize_map(PendingMapVisitor)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -615,6 +704,22 @@ impl AgentMemory {
             }
         }
     }
+
+    pub fn expire_pending_styles(&mut self) {
+        const PENDING_TTL_DAYS: i64 = 30;
+        let cutoff = Utc::now() - chrono::Duration::days(PENDING_TTL_DAYS);
+        self.interaction_style.pending.retain(|_, entry| {
+            chrono::DateTime::parse_from_rfc3339(&entry.observed_at)
+                .map(|dt| dt > cutoff)
+                .unwrap_or(true)
+        });
+    }
+}
+
+fn pending_values_match(pending: &str, new: &str) -> bool {
+    let a = pending.to_lowercase();
+    let b = new.to_lowercase();
+    a == b || a.contains(&b) || b.contains(&a)
 }
 
 // ── Injection formatting ──
@@ -875,7 +980,14 @@ impl AgentMemory {
                 continue;
             }
 
-            if self.interaction_style.pending.get(&key) == Some(&value) {
+            let matches_pending = self
+                .interaction_style
+                .pending
+                .get(&key)
+                .map(|p| pending_values_match(&p.value, &value))
+                .unwrap_or(false);
+
+            if matches_pending {
                 match key.as_str() {
                     "detail_preference" => {
                         self.interaction_style.detail_preference = Some(value.clone())
@@ -891,7 +1003,9 @@ impl AgentMemory {
                 }
                 self.interaction_style.pending.remove(&key);
             } else {
-                self.interaction_style.pending.insert(key, value);
+                self.interaction_style
+                    .pending
+                    .insert(key, PendingStyleEntry::new(value));
             }
         }
     }
@@ -1059,6 +1173,7 @@ impl MemoryManager {
     pub fn new(workspace_root: PathBuf, cloud: Option<Arc<dyn LlmProvider>>) -> Self {
         let mut memory = AgentMemory::load(&workspace_root);
         memory.apply_confidence_decay();
+        memory.expire_pending_styles();
 
         if is_workspace_stale(&memory.workspace.updated_at) {
             let note_paths = scan_md_paths(&workspace_root);
@@ -2117,18 +2232,18 @@ mod tests {
         };
         m.merge_user_model(update);
         assert!(m.interaction_style.detail_preference.is_none());
-        assert_eq!(
-            m.interaction_style.pending.get("detail_preference"),
-            Some(&"concise".to_string())
-        );
+        let entry = m.interaction_style.pending.get("detail_preference").unwrap();
+        assert_eq!(entry.value, "concise");
+        assert!(!entry.observed_at.is_empty());
     }
 
     #[test]
     fn merge_style_second_consistent_promotes() {
         let mut m = AgentMemory::default();
-        m.interaction_style
-            .pending
-            .insert("detail_preference".to_string(), "concise".to_string());
+        m.interaction_style.pending.insert(
+            "detail_preference".to_string(),
+            PendingStyleEntry::new("concise".to_string()),
+        );
         let mut updates = HashMap::new();
         updates.insert(
             "detail_preference".to_string(),
@@ -2149,9 +2264,10 @@ mod tests {
     #[test]
     fn merge_style_different_value_replaces_pending() {
         let mut m = AgentMemory::default();
-        m.interaction_style
-            .pending
-            .insert("detail_preference".to_string(), "concise".to_string());
+        m.interaction_style.pending.insert(
+            "detail_preference".to_string(),
+            PendingStyleEntry::new("concise".to_string()),
+        );
         let mut updates = HashMap::new();
         updates.insert(
             "detail_preference".to_string(),
@@ -2164,7 +2280,7 @@ mod tests {
         m.merge_user_model(update);
         assert!(m.interaction_style.detail_preference.is_none());
         assert_eq!(
-            m.interaction_style.pending.get("detail_preference"),
+            m.interaction_style.pending.get("detail_preference").map(|e| &e.value),
             Some(&"detailed".to_string())
         );
     }
@@ -2184,6 +2300,50 @@ mod tests {
         };
         m.merge_user_model(update);
         assert!(m.interaction_style.pending.is_empty());
+    }
+
+    #[test]
+    fn merge_style_substring_promotes() {
+        let mut m = AgentMemory::default();
+        m.interaction_style.pending.insert(
+            "detail_preference".to_string(),
+            PendingStyleEntry::new("concise".to_string()),
+        );
+        let mut updates = HashMap::new();
+        updates.insert(
+            "detail_preference".to_string(),
+            Some("concise replies".to_string()),
+        );
+        let update = UserModelUpdate {
+            interaction_style_updates: updates,
+            ..Default::default()
+        };
+        m.merge_user_model(update);
+        assert_eq!(
+            m.interaction_style.detail_preference.as_deref(),
+            Some("concise replies")
+        );
+        assert!(!m.interaction_style.pending.contains_key("detail_preference"));
+    }
+
+    #[test]
+    fn pending_ttl_expires_old_entries() {
+        let mut m = AgentMemory::default();
+        let old_time = (Utc::now() - chrono::Duration::days(31)).to_rfc3339();
+        m.interaction_style.pending.insert(
+            "detail_preference".to_string(),
+            PendingStyleEntry {
+                value: "concise".to_string(),
+                observed_at: old_time,
+            },
+        );
+        m.interaction_style.pending.insert(
+            "format".to_string(),
+            PendingStyleEntry::new("markdown".to_string()),
+        );
+        m.expire_pending_styles();
+        assert!(!m.interaction_style.pending.contains_key("detail_preference"));
+        assert!(m.interaction_style.pending.contains_key("format"));
     }
 
     // -- Merge: corrections --
