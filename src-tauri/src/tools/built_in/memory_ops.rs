@@ -265,7 +265,14 @@ impl Tool for MemoryForgetTool {
         .await
         .unwrap_or_default();
 
-        if memory.corrections.is_empty() {
+        let active_corrections: Vec<(usize, &crate::llm::memory::MemoryCorrection)> = memory
+            .corrections
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.is_active())
+            .collect();
+
+        if active_corrections.is_empty() {
             return ToolResult::Ok {
                 data: serde_json::json!({ "removed_count": 0, "removed_rules": [] }),
                 redacted_count: 0,
@@ -277,23 +284,31 @@ impl Tool for MemoryForgetTool {
             };
         }
 
-        let indices_to_remove = if let Some(ref provider) = ctx.provider {
-            match llm_semantic_match(provider.as_ref(), &instruction, &memory.corrections).await {
+        let active_only: Vec<crate::llm::memory::MemoryCorrection> =
+            active_corrections.iter().map(|(_, c)| (*c).clone()).collect();
+
+        let filtered_indices = if let Some(ref provider) = ctx.provider {
+            match llm_semantic_match(provider.as_ref(), &instruction, &active_only).await {
                 Ok(indices) => indices,
                 Err(e) => {
                     eprintln!("[memory.forget] LLM matching failed, falling back to substring: {e}");
-                    match substring_match(&instruction, &memory.corrections) {
+                    match substring_match(&instruction, &active_only) {
                         Ok(indices) => indices,
                         Err(err_result) => return err_result,
                     }
                 }
             }
         } else {
-            match substring_match(&instruction, &memory.corrections) {
+            match substring_match(&instruction, &active_only) {
                 Ok(indices) => indices,
                 Err(err_result) => return err_result,
             }
         };
+
+        let indices_to_remove: Vec<usize> = filtered_indices
+            .iter()
+            .filter_map(|&fi| active_corrections.get(fi).map(|(orig, _)| *orig))
+            .collect();
 
         let removed: Vec<String> = indices_to_remove
             .iter()
@@ -303,12 +318,13 @@ impl Tool for MemoryForgetTool {
         let remove_set: std::collections::HashSet<usize> = indices_to_remove.into_iter().collect();
         let result = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<String>, String> {
             let mut memory = AgentMemory::load(&root);
-            let mut idx = 0;
-            memory.corrections.retain(|_| {
-                let keep = !remove_set.contains(&idx);
-                idx += 1;
-                keep
-            });
+            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            for (idx, c) in memory.corrections.iter_mut().enumerate() {
+                if remove_set.contains(&idx) {
+                    c.superseded_by = Some("user_forget".to_string());
+                    c.superseded_at = Some(today.clone());
+                }
+            }
             memory.save(&root)?;
             Ok(removed)
         })

@@ -18,6 +18,7 @@ const MAX_FREQUENT_PATHS: usize = 15;
 const MAX_TOPICS: usize = 20;
 const INJECTION_RECENT_SESSIONS: usize = 3;
 const MAX_INJECTION_TOKENS: usize = 800;
+const SUPERSEDED_RETENTION_DAYS: i64 = 90;
 
 const MEMORY_FILE: &str = "agent_memory.json";
 const SNAPSHOT_FILE: &str = "agent_memory.snapshot.json";
@@ -209,6 +210,16 @@ pub struct MemoryCorrection {
     pub date: String,
     #[serde(default = "default_explicit")]
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_at: Option<String>,
+}
+
+impl MemoryCorrection {
+    pub fn is_active(&self) -> bool {
+        self.superseded_by.is_none()
+    }
 }
 
 fn default_explicit() -> String {
@@ -706,6 +717,19 @@ impl AgentMemory {
         }
     }
 
+    pub fn expire_superseded_corrections(&mut self) {
+        let cutoff = (Utc::now() - chrono::Duration::days(SUPERSEDED_RETENTION_DAYS))
+            .format("%Y-%m-%d")
+            .to_string();
+        self.corrections.retain(|c| {
+            c.is_active()
+                || c.superseded_at
+                    .as_ref()
+                    .map(|d| d.as_str() > cutoff.as_str())
+                    .unwrap_or(true)
+        });
+    }
+
     pub fn expire_pending_styles(&mut self) {
         const PENDING_TTL_DAYS: i64 = 30;
         let cutoff = Utc::now() - chrono::Duration::days(PENDING_TTL_DAYS);
@@ -742,10 +766,11 @@ impl AgentMemory {
             || self.interaction_style.challenge_tolerance.is_some()
             || self.interaction_style.format.is_some()
             || !self.interaction_style.language.is_empty();
+        let has_active_corrections = self.corrections.iter().any(|c| c.is_active());
         let has_content = !high_domains.is_empty()
             || !low_domains.is_empty()
             || has_style
-            || !self.corrections.is_empty()
+            || has_active_corrections
             || !self.workspace.frequent_paths.is_empty()
             || !self.sessions.is_empty();
 
@@ -896,10 +921,10 @@ impl AgentMemory {
             None
         };
 
-        // ## Rules (never trimmed)
-        let rules_section = if !self.corrections.is_empty() {
+        // ## Rules (never trimmed, only active corrections)
+        let rules_section = if has_active_corrections {
             let mut rules = String::from("## Rules");
-            for c in &self.corrections {
+            for c in self.corrections.iter().filter(|c| c.is_active()) {
                 rules.push_str(&format!("\n- {} — {}", c.rule, c.reason));
             }
             Some(rules)
@@ -1132,14 +1157,23 @@ impl AgentMemory {
         new_corrections: Vec<NewCorrection>,
         remove_corrections: Vec<String>,
     ) {
-        for rule_text in &remove_corrections {
-            self.corrections.retain(|c| c.rule != *rule_text);
-        }
-
         let today = Utc::now().format("%Y-%m-%d").to_string();
 
+        for rule_text in &remove_corrections {
+            for c in self.corrections.iter_mut() {
+                if c.is_active() && c.rule == *rule_text {
+                    c.superseded_by = Some("user_forget".to_string());
+                    c.superseded_at = Some(today.clone());
+                }
+            }
+        }
+
         for nc in new_corrections {
-            if let Some(existing) = self.corrections.iter_mut().find(|c| c.rule == nc.rule) {
+            if let Some(existing) = self
+                .corrections
+                .iter_mut()
+                .find(|c| c.is_active() && c.rule == nc.rule)
+            {
                 existing.date = today.clone();
                 existing.reason = nc.reason;
             } else {
@@ -1148,14 +1182,27 @@ impl AgentMemory {
                     reason: nc.reason,
                     date: today.clone(),
                     source: "explicit".to_string(),
+                    superseded_by: None,
+                    superseded_at: None,
                 });
             }
         }
 
-        if self.corrections.len() > MAX_CORRECTIONS {
-            self.corrections.sort_by(|a, b| a.date.cmp(&b.date));
-            let excess = self.corrections.len() - MAX_CORRECTIONS;
-            self.corrections.drain(0..excess);
+        let active_count = self.corrections.iter().filter(|c| c.is_active()).count();
+        if active_count > MAX_CORRECTIONS {
+            self.corrections
+                .sort_by(|a, b| a.date.cmp(&b.date));
+            let mut to_remove = active_count - MAX_CORRECTIONS;
+            for c in self.corrections.iter_mut() {
+                if to_remove == 0 {
+                    break;
+                }
+                if c.is_active() {
+                    c.superseded_by = Some("capacity".to_string());
+                    c.superseded_at = Some(today.clone());
+                    to_remove -= 1;
+                }
+            }
         }
     }
 
@@ -1291,6 +1338,7 @@ impl MemoryManager {
         let mut memory = AgentMemory::load(&workspace_root);
         memory.apply_confidence_decay();
         memory.expire_pending_styles();
+        memory.expire_superseded_corrections();
 
         if is_workspace_stale(&memory.workspace.updated_at) {
             let note_paths = scan_md_paths(&workspace_root);
@@ -1565,9 +1613,14 @@ fn build_memory_summary_for_extraction(memory: &AgentMemory) -> String {
         parts.push(format!("Known domains:\n{}", domains.join("\n")));
     }
 
-    if !memory.corrections.is_empty() {
-        let rules: Vec<String> = memory.corrections.iter().map(|c| format!("- {}", c.rule)).collect();
-        parts.push(format!("Existing rules:\n{}", rules.join("\n")));
+    let active_rules: Vec<String> = memory
+        .corrections
+        .iter()
+        .filter(|c| c.is_active())
+        .map(|c| format!("- {}", c.rule))
+        .collect();
+    if !active_rules.is_empty() {
+        parts.push(format!("Existing rules:\n{}", active_rules.join("\n")));
     }
 
     let style = &memory.interaction_style;
@@ -1660,6 +1713,8 @@ mod tests {
             reason: "user preference".to_string(),
             date: "2026-06-15".to_string(),
             source: "explicit".to_string(),
+            superseded_by: None,
+            superseded_at: None,
         });
         m.knowledge_domains.push(KnowledgeDomain {
             domain: "Rust".to_string(),
@@ -2055,6 +2110,8 @@ mod tests {
             reason: "user prefers zh".to_string(),
             date: "2026-06-15".to_string(),
             source: "explicit".to_string(),
+            superseded_by: None,
+            superseded_at: None,
         });
         let text = m.format_for_injection().unwrap();
         assert!(text.contains("use Chinese titles"));
@@ -2101,6 +2158,8 @@ mod tests {
                 reason: format!("reason {i} is important for testing purposes"),
                 date: "2026-06-15".to_string(),
                 source: "explicit".to_string(),
+                superseded_by: None,
+                superseded_at: None,
             });
         }
         for i in 0..5 {
@@ -2135,6 +2194,8 @@ mod tests {
                 reason: format!("reason {i}"),
                 date: "2026-06-15".to_string(),
                 source: "explicit".to_string(),
+                superseded_by: None,
+                superseded_at: None,
             });
         }
         let text = m.format_for_injection().unwrap();
@@ -2544,6 +2605,8 @@ mod tests {
             reason: "old".to_string(),
             date: "2026-06-14".to_string(),
             source: "explicit".to_string(),
+            superseded_by: None,
+            superseded_at: None,
         });
         let update = UserModelUpdate {
             remove_corrections: vec!["old rule".to_string()],
@@ -2554,8 +2617,11 @@ mod tests {
             ..Default::default()
         };
         m.merge_user_model(update);
-        assert_eq!(m.corrections.len(), 1);
-        assert_eq!(m.corrections[0].rule, "new rule");
+        assert_eq!(m.corrections.len(), 2);
+        assert!(m.corrections[0].superseded_by.is_some());
+        let active: Vec<_> = m.corrections.iter().filter(|c| c.is_active()).collect();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].rule, "new rule");
     }
 
     #[test]
@@ -2566,6 +2632,8 @@ mod tests {
             reason: "old reason".to_string(),
             date: "2026-06-14".to_string(),
             source: "explicit".to_string(),
+            superseded_by: None,
+            superseded_at: None,
         });
         let update = UserModelUpdate {
             new_corrections: vec![NewCorrection {
@@ -2588,6 +2656,8 @@ mod tests {
                 reason: "reason".to_string(),
                 date: format!("2026-06-{:02}", (i % 28) + 1),
                 source: "explicit".to_string(),
+                superseded_by: None,
+                superseded_at: None,
             });
         }
         let update = UserModelUpdate {
@@ -2598,7 +2668,123 @@ mod tests {
             ..Default::default()
         };
         m.merge_user_model(update);
-        assert!(m.corrections.len() <= MAX_CORRECTIONS);
+        let active = m.corrections.iter().filter(|c| c.is_active()).count();
+        assert!(active <= MAX_CORRECTIONS);
+    }
+
+    #[test]
+    fn forget_soft_deletes_correction() {
+        let mut m = AgentMemory::default();
+        m.corrections.push(MemoryCorrection {
+            rule: "old preference".to_string(),
+            reason: "user said so".to_string(),
+            date: "2026-06-14".to_string(),
+            source: "explicit".to_string(),
+            superseded_by: None,
+            superseded_at: None,
+        });
+        let update = UserModelUpdate {
+            remove_corrections: vec!["old preference".to_string()],
+            ..Default::default()
+        };
+        m.merge_user_model(update);
+        assert_eq!(m.corrections.len(), 1);
+        assert_eq!(m.corrections[0].superseded_by.as_deref(), Some("user_forget"));
+        assert!(m.corrections[0].superseded_at.is_some());
+    }
+
+    #[test]
+    fn injection_skips_superseded_corrections() {
+        let mut m = AgentMemory::default();
+        m.corrections.push(MemoryCorrection {
+            rule: "active rule".to_string(),
+            reason: "keep".to_string(),
+            date: "2026-06-15".to_string(),
+            source: "explicit".to_string(),
+            superseded_by: None,
+            superseded_at: None,
+        });
+        m.corrections.push(MemoryCorrection {
+            rule: "dead rule".to_string(),
+            reason: "should not appear".to_string(),
+            date: "2026-06-14".to_string(),
+            source: "explicit".to_string(),
+            superseded_by: Some("user_forget".to_string()),
+            superseded_at: Some("2026-06-15".to_string()),
+        });
+        let text = m.format_for_injection().unwrap();
+        assert!(text.contains("active rule"));
+        assert!(!text.contains("dead rule"));
+    }
+
+    #[test]
+    fn capacity_counts_active_only() {
+        let mut m = AgentMemory::default();
+        for i in 0..19 {
+            m.corrections.push(MemoryCorrection {
+                rule: format!("active-{i}"),
+                reason: "r".to_string(),
+                date: "2026-06-15".to_string(),
+                source: "explicit".to_string(),
+                superseded_by: None,
+                superseded_at: None,
+            });
+        }
+        m.corrections.push(MemoryCorrection {
+            rule: "superseded".to_string(),
+            reason: "r".to_string(),
+            date: "2026-06-14".to_string(),
+            source: "explicit".to_string(),
+            superseded_by: Some("capacity".to_string()),
+            superseded_at: Some("2026-06-15".to_string()),
+        });
+        let update = UserModelUpdate {
+            new_corrections: vec![
+                NewCorrection { rule: "new-a".to_string(), reason: "r".to_string() },
+                NewCorrection { rule: "new-b".to_string(), reason: "r".to_string() },
+            ],
+            ..Default::default()
+        };
+        m.merge_user_model(update);
+        let active = m.corrections.iter().filter(|c| c.is_active()).count();
+        assert!(active <= MAX_CORRECTIONS);
+    }
+
+    #[test]
+    fn superseded_cleanup_after_90_days() {
+        let mut m = AgentMemory::default();
+        let old_date = (Utc::now() - chrono::Duration::days(91))
+            .format("%Y-%m-%d")
+            .to_string();
+        m.corrections.push(MemoryCorrection {
+            rule: "expired".to_string(),
+            reason: "r".to_string(),
+            date: "2026-01-01".to_string(),
+            source: "explicit".to_string(),
+            superseded_by: Some("user_forget".to_string()),
+            superseded_at: Some(old_date),
+        });
+        m.corrections.push(MemoryCorrection {
+            rule: "recent superseded".to_string(),
+            reason: "r".to_string(),
+            date: "2026-06-10".to_string(),
+            source: "explicit".to_string(),
+            superseded_by: Some("user_forget".to_string()),
+            superseded_at: Some(Utc::now().format("%Y-%m-%d").to_string()),
+        });
+        m.corrections.push(MemoryCorrection {
+            rule: "active".to_string(),
+            reason: "r".to_string(),
+            date: "2026-06-15".to_string(),
+            source: "explicit".to_string(),
+            superseded_by: None,
+            superseded_at: None,
+        });
+        m.expire_superseded_corrections();
+        assert_eq!(m.corrections.len(), 2);
+        assert!(m.corrections.iter().any(|c| c.rule == "recent superseded"));
+        assert!(m.corrections.iter().any(|c| c.rule == "active"));
+        assert!(!m.corrections.iter().any(|c| c.rule == "expired"));
     }
 
     // -- Merge: sessions --
@@ -2669,6 +2855,8 @@ mod tests {
             reason: "test".to_string(),
             date: "2026-06-15".to_string(),
             source: "explicit".to_string(),
+            superseded_by: None,
+            superseded_at: None,
         });
         let messages = vec![
             LlmChatMessage { role: "user".to_string(), content: "hi".to_string(), ..Default::default() },
@@ -3194,6 +3382,8 @@ mod tests {
                 reason: "user preference".to_string(),
                 date: "2026-06-01".to_string(),
                 source: "explicit".to_string(),
+                superseded_by: None,
+                superseded_at: None,
             }],
             interaction_style: InteractionStyle {
                 detail_preference: Some("concise".to_string()),
