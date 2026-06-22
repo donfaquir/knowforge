@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::llm::memory::{AgentMemory, NewCorrection};
+use crate::llm::memory::{AgentMemory, DomainUpdate, NewCorrection};
 use crate::llm::provider::CompletionOverrides;
 use crate::tools::context::ToolContext;
 use crate::tools::types::{
@@ -22,11 +22,13 @@ impl MemorySaveTool {
                 name: "memory.save".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
-                description: "Save a user preference or behavioral instruction to persistent \
-                              memory that survives across sessions. Use when the user says \
-                              '记住/remember/以后都/always/never' or gives explicit instructions \
-                              about how they want to be assisted. Do NOT use for the user's \
-                              intellectual ideas or topic insights — those belong in thought.create."
+                description: "Save a user preference, knowledge, or style to persistent memory. \
+                              Use category=\"correction\" (default) for behavioral rules \
+                              (remember/always/never). Use category=\"knowledge\" when the user \
+                              states their expertise or background. Use category=\"style\" when \
+                              the user specifies communication preferences. Do NOT use for the \
+                              user's intellectual ideas or topic insights — those belong in \
+                              thought.create."
                     .to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -39,6 +41,11 @@ impl MemorySaveTool {
                         "reason": {
                             "type": "string",
                             "description": "Why the user wants this (optional)"
+                        },
+                        "category": {
+                            "type": "string",
+                            "enum": ["correction", "knowledge", "style"],
+                            "description": "Type of memory to save. Default: correction"
                         }
                     },
                     "additionalProperties": false
@@ -97,17 +104,43 @@ impl Tool for MemorySaveTool {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "user preference".to_string());
 
+        let category = input
+            .get("category")
+            .and_then(|v| v.as_str())
+            .unwrap_or("correction")
+            .to_string();
+
         let root = ctx.workspace_root.clone();
         let instr_clone = instruction.clone();
 
         let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
             let mut memory = AgentMemory::load(&root);
-            let update = crate::llm::memory::UserModelUpdate {
-                new_corrections: vec![NewCorrection {
-                    rule: instr_clone,
-                    reason,
-                }],
-                ..Default::default()
+            let update = match category.as_str() {
+                "knowledge" => crate::llm::memory::UserModelUpdate {
+                    knowledge_domains: vec![DomainUpdate {
+                        domain: instr_clone,
+                        depth: "learning".to_string(),
+                        current_focus: None,
+                        motivation: Some(reason),
+                        confidence: 0.5,
+                    }],
+                    ..Default::default()
+                },
+                "style" => {
+                    let mut style_updates = std::collections::HashMap::new();
+                    style_updates.insert("detail_preference".to_string(), Some(instr_clone));
+                    crate::llm::memory::UserModelUpdate {
+                        interaction_style_updates: style_updates,
+                        ..Default::default()
+                    }
+                }
+                _ => crate::llm::memory::UserModelUpdate {
+                    new_corrections: vec![NewCorrection {
+                        rule: instr_clone,
+                        reason,
+                    }],
+                    ..Default::default()
+                },
             };
             memory.merge_user_model(update);
             memory.save(&root)
