@@ -1312,8 +1312,57 @@ fn trim_messages_for_extraction(messages: &[LlmChatMessage]) -> Vec<LlmChatMessa
     result
 }
 
+fn build_memory_summary_for_extraction(memory: &AgentMemory) -> String {
+    let mut parts = Vec::new();
+
+    let domains: Vec<String> = memory
+        .knowledge_domains
+        .iter()
+        .filter(|d| !d.archived)
+        .map(|d| {
+            let mut line = format!("- {} ({})", d.domain, d.depth);
+            if let Some(ref focus) = d.current_focus {
+                line.push_str(&format!(", focus: {focus}"));
+            }
+            line
+        })
+        .collect();
+    if !domains.is_empty() {
+        parts.push(format!("Known domains:\n{}", domains.join("\n")));
+    }
+
+    if !memory.corrections.is_empty() {
+        let rules: Vec<String> = memory.corrections.iter().map(|c| format!("- {}", c.rule)).collect();
+        parts.push(format!("Existing rules:\n{}", rules.join("\n")));
+    }
+
+    let style = &memory.interaction_style;
+    let mut style_items = Vec::new();
+    if let Some(ref v) = style.detail_preference {
+        style_items.push(format!("detail_preference={v}"));
+    }
+    if let Some(ref v) = style.explanation_style {
+        style_items.push(format!("explanation_style={v}"));
+    }
+    if let Some(ref v) = style.challenge_tolerance {
+        style_items.push(format!("challenge_tolerance={v}"));
+    }
+    if let Some(ref v) = style.format {
+        style_items.push(format!("format={v}"));
+    }
+    if !style_items.is_empty() {
+        parts.push(format!("Interaction style: {}", style_items.join(", ")));
+    }
+
+    if parts.is_empty() {
+        "No existing memory.".to_string()
+    } else {
+        parts.join("\n\n")
+    }
+}
+
 fn build_session_extraction_prompt(memory: &AgentMemory, messages: &[LlmChatMessage]) -> String {
-    let memory_json = serde_json::to_string_pretty(memory).unwrap_or_default();
+    let memory_json = build_memory_summary_for_extraction(memory);
     let conversation = messages
         .iter()
         .filter(|m| m.role == "user" || m.role == "assistant")
@@ -1326,7 +1375,7 @@ fn build_session_extraction_prompt(memory: &AgentMemory, messages: &[LlmChatMess
 }
 
 fn build_reflection_prompt(memory: &AgentMemory, update: &UserModelUpdate) -> String {
-    let memory_json = serde_json::to_string_pretty(memory).unwrap_or_default();
+    let memory_json = build_memory_summary_for_extraction(memory);
     let update_json = serde_json::to_string_pretty(update).unwrap_or_default();
     REFLECTION_PROMPT
         .replace("{current_memory_json}", &memory_json)
@@ -2724,10 +2773,57 @@ mod tests {
             },
         ];
         let prompt = build_session_extraction_prompt(&m, &msgs);
-        assert!(prompt.contains("\"version\": 2"));
+        assert!(prompt.contains("No existing memory."));
         assert!(prompt.contains("[user]: tell me about Rust"));
         assert!(prompt.contains("[assistant]: Rust is a systems language"));
         assert!(prompt.contains("knowledge_domains"));
+    }
+
+    #[test]
+    fn memory_summary_includes_domains_and_corrections() {
+        let m = AgentMemory {
+            knowledge_domains: vec![
+                KnowledgeDomain {
+                    domain: "Rust".to_string(),
+                    depth: "practitioner".to_string(),
+                    current_focus: Some("async".to_string()),
+                    motivation: None,
+                    confidence: 0.8,
+                    last_evidence: "2026-06-01".to_string(),
+                    evidence_count: 3,
+                    archived: false,
+                },
+                KnowledgeDomain {
+                    domain: "Python".to_string(),
+                    depth: "expert".to_string(),
+                    current_focus: None,
+                    motivation: None,
+                    confidence: 0.5,
+                    last_evidence: "2026-05-01".to_string(),
+                    evidence_count: 1,
+                    archived: true,
+                },
+            ],
+            corrections: vec![MemoryCorrection {
+                rule: "Use concise style".to_string(),
+                reason: "user preference".to_string(),
+                date: "2026-06-01".to_string(),
+                source: "explicit".to_string(),
+            }],
+            interaction_style: InteractionStyle {
+                detail_preference: Some("concise".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let summary = build_memory_summary_for_extraction(&m);
+        assert!(summary.contains("Rust (practitioner)"));
+        assert!(summary.contains("focus: async"));
+        assert!(!summary.contains("Python"), "archived domain must be excluded");
+        assert!(summary.contains("Use concise style"));
+        assert!(summary.contains("detail_preference=concise"));
+        assert!(!summary.contains("confidence"));
+        assert!(!summary.contains("evidence_count"));
     }
 
     #[test]
