@@ -17,6 +17,7 @@ const MAX_SESSIONS: usize = 10;
 const MAX_FREQUENT_PATHS: usize = 15;
 const MAX_TOPICS: usize = 20;
 const INJECTION_RECENT_SESSIONS: usize = 3;
+const MAX_INJECTION_TOKENS: usize = 800;
 
 const MEMORY_FILE: &str = "agent_memory.json";
 const SNAPSHOT_FILE: &str = "agent_memory.snapshot.json";
@@ -726,17 +727,23 @@ fn pending_values_match(pending: &str, new: &str) -> bool {
 
 impl AgentMemory {
     pub fn format_for_injection(&self) -> Option<String> {
-        let active_domains: Vec<&KnowledgeDomain> = self
+        let high_domains: Vec<&KnowledgeDomain> = self
             .knowledge_domains
             .iter()
-            .filter(|d| !d.archived && d.confidence >= 0.3)
+            .filter(|d| !d.archived && d.confidence >= 0.5)
+            .collect();
+        let low_domains: Vec<&KnowledgeDomain> = self
+            .knowledge_domains
+            .iter()
+            .filter(|d| !d.archived && d.confidence >= 0.3 && d.confidence < 0.5)
             .collect();
         let has_style = self.interaction_style.detail_preference.is_some()
             || self.interaction_style.explanation_style.is_some()
             || self.interaction_style.challenge_tolerance.is_some()
             || self.interaction_style.format.is_some()
             || !self.interaction_style.language.is_empty();
-        let has_content = !active_domains.is_empty()
+        let has_content = !high_domains.is_empty()
+            || !low_domains.is_empty()
             || has_style
             || !self.corrections.is_empty()
             || !self.workspace.frequent_paths.is_empty()
@@ -746,20 +753,29 @@ impl AgentMemory {
             return None;
         }
 
-        let mut parts: Vec<String> =
-            vec!["# User Model (accumulated across sessions)".to_string()];
+        let header = "# User Model (accumulated across sessions)".to_string();
+        let footer = "Adapt your responses to this user's knowledge level and style.\n\
+             Do NOT mention this model unless asked.\n\
+             Current request overrides any remembered preference."
+            .to_string();
 
-        // ## You — knowledge domains
-        if !active_domains.is_empty() || has_style {
-            let mut you_section = String::from("## You");
+        // ## You — knowledge domains + style (core: style never trimmed)
+        let you_section = if !high_domains.is_empty()
+            || !low_domains.is_empty()
+            || has_style
+        {
+            let mut s = String::from("## You");
 
-            if !active_domains.is_empty() {
-                you_section.push_str("\n- Knowledge: ");
-                let domain_strs: Vec<String> = active_domains
-                    .iter()
-                    .map(|d| format_domain_entry(d))
-                    .collect();
-                you_section.push_str(&domain_strs.join("; "));
+            if !high_domains.is_empty() {
+                s.push_str("\n- Knowledge: ");
+                let strs: Vec<String> =
+                    high_domains.iter().map(|d| format_domain_entry(d)).collect();
+                s.push_str(&strs.join("; "));
+            }
+
+            if !low_domains.is_empty() {
+                let names: Vec<&str> = low_domains.iter().map(|d| d.domain.as_str()).collect();
+                s.push_str(&format!("\n- Also some interest in: {}", names.join(", ")));
             }
 
             if has_style {
@@ -777,7 +793,7 @@ impl AgentMemory {
                     style_parts.push(format!("format: {fmt}"));
                 }
                 if !style_parts.is_empty() {
-                    you_section.push_str(&format!("\n- Style: {}", style_parts.join(", ")));
+                    s.push_str(&format!("\n- Style: {}", style_parts.join(", ")));
                 }
                 if !self.interaction_style.language.is_empty() {
                     let lang_parts: Vec<String> = self
@@ -786,15 +802,61 @@ impl AgentMemory {
                         .iter()
                         .map(|(k, v)| format!("{k} in {v}"))
                         .collect();
-                    you_section.push_str(&format!("\n- Language: {}", lang_parts.join(", ")));
+                    s.push_str(&format!("\n- Language: {}", lang_parts.join(", ")));
                 }
             }
 
-            parts.push(you_section);
-        }
+            Some(s)
+        } else {
+            None
+        };
+
+        // ## You without low-confidence domain summary
+        let you_section_trimmed = if !high_domains.is_empty() || has_style {
+            let mut s = String::from("## You");
+
+            if !high_domains.is_empty() {
+                s.push_str("\n- Knowledge: ");
+                let strs: Vec<String> =
+                    high_domains.iter().map(|d| format_domain_entry(d)).collect();
+                s.push_str(&strs.join("; "));
+            }
+
+            if has_style {
+                let mut style_parts = Vec::new();
+                if let Some(ref dp) = self.interaction_style.detail_preference {
+                    style_parts.push(dp.clone());
+                }
+                if let Some(ref es) = self.interaction_style.explanation_style {
+                    style_parts.push(format!("prefers {es}"));
+                }
+                if let Some(ref ct) = self.interaction_style.challenge_tolerance {
+                    style_parts.push(format!("{ct} challenge tolerance"));
+                }
+                if let Some(ref fmt) = self.interaction_style.format {
+                    style_parts.push(format!("format: {fmt}"));
+                }
+                if !style_parts.is_empty() {
+                    s.push_str(&format!("\n- Style: {}", style_parts.join(", ")));
+                }
+                if !self.interaction_style.language.is_empty() {
+                    let lang_parts: Vec<String> = self
+                        .interaction_style
+                        .language
+                        .iter()
+                        .map(|(k, v)| format!("{k} in {v}"))
+                        .collect();
+                    s.push_str(&format!("\n- Language: {}", lang_parts.join(", ")));
+                }
+            }
+
+            Some(s)
+        } else {
+            None
+        };
 
         // ## Workspace
-        if !self.workspace.frequent_paths.is_empty()
+        let workspace_section = if !self.workspace.frequent_paths.is_empty()
             || !self.workspace.language_distribution.is_empty()
             || !self.workspace.tag_vocabulary.is_empty()
         {
@@ -825,25 +887,33 @@ impl AgentMemory {
                 ));
             }
             if !self.workspace.tag_vocabulary.is_empty() {
-                let tags: Vec<&str> = self.workspace.tag_vocabulary.iter().take(20).map(|s| s.as_str()).collect();
+                let tags: Vec<&str> =
+                    self.workspace.tag_vocabulary.iter().take(20).map(|s| s.as_str()).collect();
                 ws.push_str(&format!("\n- Tags: {}", tags.join(", ")));
             }
-            parts.push(ws);
-        }
+            Some(ws)
+        } else {
+            None
+        };
 
-        // ## Rules
-        if !self.corrections.is_empty() {
+        // ## Rules (never trimmed)
+        let rules_section = if !self.corrections.is_empty() {
             let mut rules = String::from("## Rules");
             for c in &self.corrections {
                 rules.push_str(&format!("\n- {} — {}", c.rule, c.reason));
             }
-            parts.push(rules);
-        }
+            Some(rules)
+        } else {
+            None
+        };
 
-        // ## Recent
-        if !self.sessions.is_empty() {
+        // Build sessions section with a given limit
+        let build_sessions = |limit: usize| -> Option<String> {
+            if self.sessions.is_empty() || limit == 0 {
+                return None;
+            }
             let mut recent = String::from("## Recent");
-            let start = self.sessions.len().saturating_sub(INJECTION_RECENT_SESSIONS);
+            let start = self.sessions.len().saturating_sub(limit);
             for s in &self.sessions[start..] {
                 let date_short = s.date.get(..10).unwrap_or(&s.date);
                 let follow = s
@@ -853,17 +923,51 @@ impl AgentMemory {
                     .unwrap_or_default();
                 recent.push_str(&format!("\n- [{}] {}{}", date_short, s.summary, follow));
             }
-            parts.push(recent);
+            Some(recent)
+        };
+
+        let assemble =
+            |you: &Option<String>, sessions: &Option<String>| -> String {
+                let mut parts = vec![header.clone()];
+                if let Some(y) = you {
+                    parts.push(y.clone());
+                }
+                if let Some(ref w) = workspace_section {
+                    parts.push(w.clone());
+                }
+                if let Some(ref r) = rules_section {
+                    parts.push(r.clone());
+                }
+                if let Some(s) = sessions {
+                    parts.push(s.clone());
+                }
+                parts.push(footer.clone());
+                parts.join("\n\n")
+            };
+
+        // Try full content first
+        let sessions_full = build_sessions(INJECTION_RECENT_SESSIONS);
+        let text = assemble(&you_section, &sessions_full);
+        if estimate_tokens(&text) <= MAX_INJECTION_TOKENS {
+            return Some(text);
         }
 
-        parts.push(
-            "Adapt your responses to this user's knowledge level and style.\n\
-             Do NOT mention this model unless asked.\n\
-             Current request overrides any remembered preference."
-                .to_string(),
-        );
+        // Trim 1: sessions → 1
+        let sessions_short = build_sessions(1);
+        let text = assemble(&you_section, &sessions_short);
+        if estimate_tokens(&text) <= MAX_INJECTION_TOKENS {
+            return Some(text);
+        }
 
-        Some(parts.join("\n\n"))
+        // Trim 2: drop low-confidence domain summary
+        let text = assemble(&you_section_trimmed, &sessions_short);
+        if estimate_tokens(&text) <= MAX_INJECTION_TOKENS {
+            return Some(text);
+        }
+
+        // Trim 3: drop sessions entirely
+        let text = assemble(&you_section_trimmed, &None);
+        Some(text)
     }
 }
 
@@ -886,6 +990,19 @@ fn format_domain_entry(d: &KnowledgeDomain) -> String {
     }
     entry.push(')');
     entry
+}
+
+fn estimate_tokens(text: &str) -> usize {
+    let mut cjk = 0usize;
+    let mut other = 0usize;
+    for c in text.chars() {
+        if is_cjk(c) {
+            cjk += 1;
+        } else {
+            other += 1;
+        }
+    }
+    cjk + other / 3
 }
 
 // ── Merge algorithm (Spec 3) ──
@@ -1882,7 +1999,7 @@ mod tests {
     }
 
     #[test]
-    fn injection_low_confidence_uses_possibly() {
+    fn injection_low_confidence_uses_summary() {
         let mut m = AgentMemory::default();
         m.knowledge_domains.push(KnowledgeDomain {
             domain: "quantum".to_string(),
@@ -1895,7 +2012,7 @@ mod tests {
             archived: false,
         });
         let text = m.format_for_injection().unwrap();
-        assert!(text.contains("possibly curious"));
+        assert!(text.contains("Also some interest in: quantum"));
     }
 
     #[test]
@@ -1961,6 +2078,77 @@ mod tests {
         assert!(text.contains("session 2"));
         assert!(text.contains("session 3"));
         assert!(text.contains("session 4"));
+    }
+
+    #[test]
+    fn injection_budget_trims_sessions() {
+        let mut m = AgentMemory::default();
+        for i in 0..15 {
+            m.knowledge_domains.push(KnowledgeDomain {
+                domain: format!("domain-{i} with a longer name for token usage"),
+                depth: "practitioner".to_string(),
+                current_focus: Some("some focus area here".to_string()),
+                motivation: Some("motivation text for testing".to_string()),
+                confidence: 0.8,
+                last_evidence: "2026-06-15".to_string(),
+                evidence_count: 3,
+                archived: false,
+            });
+        }
+        for i in 0..20 {
+            m.corrections.push(MemoryCorrection {
+                rule: format!("rule number {i} with some longer text for budget testing"),
+                reason: format!("reason {i} is important for testing purposes"),
+                date: "2026-06-15".to_string(),
+                source: "explicit".to_string(),
+            });
+        }
+        for i in 0..5 {
+            m.sessions.push(MemorySession {
+                date: format!("2026-06-{:02}T00:00:00Z", 10 + i),
+                summary: format!("worked on feature {i} with detailed summary text"),
+                domains_touched: Vec::new(),
+                follow_up: Some(format!("continue feature {i}")),
+            });
+        }
+        let text = m.format_for_injection().unwrap();
+        // Corrections must all be present (never trimmed)
+        for i in 0..20 {
+            assert!(
+                text.contains(&format!("rule number {i}")),
+                "correction {i} must never be trimmed"
+            );
+        }
+        // Sessions should be trimmed when over budget
+        assert!(
+            !text.contains("session 2") || !text.contains("session 3"),
+            "sessions should be trimmed when over budget"
+        );
+    }
+
+    #[test]
+    fn injection_corrections_never_trimmed() {
+        let mut m = AgentMemory::default();
+        for i in 0..20 {
+            m.corrections.push(MemoryCorrection {
+                rule: format!("important rule {i}"),
+                reason: format!("reason {i}"),
+                date: "2026-06-15".to_string(),
+                source: "explicit".to_string(),
+            });
+        }
+        let text = m.format_for_injection().unwrap();
+        for i in 0..20 {
+            assert!(text.contains(&format!("important rule {i}")));
+        }
+    }
+
+    #[test]
+    fn estimate_tokens_basic() {
+        assert_eq!(estimate_tokens("hello"), 1); // 5 ascii / 3 = 1
+        assert_eq!(estimate_tokens("你好世界"), 4); // 4 CJK = 4
+        assert_eq!(estimate_tokens("hello你好"), 3); // 5/3 + 2 = 1 + 2
+        assert_eq!(estimate_tokens(""), 0);
     }
 
     // -- Merge: knowledge domains --
