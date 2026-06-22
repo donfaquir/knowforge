@@ -604,7 +604,9 @@ impl AgentMemory {
                 let days = (today - last).num_days();
                 if days > 30 {
                     let periods = (days / 30) as f64;
-                    domain.confidence -= 0.1 * periods;
+                    let decay_rate =
+                        0.1 / (domain.evidence_count as f64 + 1.0).ln().max(1.0);
+                    domain.confidence -= decay_rate * periods;
                     domain.confidence = domain.confidence.max(0.0);
                     if domain.confidence < 0.3 {
                         domain.archived = true;
@@ -826,7 +828,7 @@ impl AgentMemory {
                 }
 
                 existing.confidence =
-                    (existing.confidence + (1.0 - existing.confidence) * 0.2).min(0.95);
+                    (existing.confidence + (1.0 - existing.confidence) * 0.15).min(0.95);
 
                 if new.current_focus.is_some() {
                     existing.current_focus = new.current_focus;
@@ -1669,6 +1671,41 @@ mod tests {
     }
 
     #[test]
+    fn decay_high_evidence_slower() {
+        let mut m = AgentMemory::default();
+        let old_date = (Utc::now().date_naive() - chrono::Duration::days(61))
+            .format("%Y-%m-%d")
+            .to_string();
+        m.knowledge_domains.push(KnowledgeDomain {
+            domain: "Rust".to_string(),
+            depth: "practitioner".to_string(),
+            current_focus: None,
+            motivation: None,
+            confidence: 0.7,
+            last_evidence: old_date.clone(),
+            evidence_count: 10,
+            archived: false,
+        });
+        m.knowledge_domains.push(KnowledgeDomain {
+            domain: "Go".to_string(),
+            depth: "learning".to_string(),
+            current_focus: None,
+            motivation: None,
+            confidence: 0.7,
+            last_evidence: old_date,
+            evidence_count: 1,
+            archived: false,
+        });
+        m.apply_confidence_decay();
+        let rust_conf = m.knowledge_domains[0].confidence;
+        let go_conf = m.knowledge_domains[1].confidence;
+        assert!(
+            rust_conf > go_conf,
+            "high evidence domain ({rust_conf}) should decay slower than low evidence ({go_conf})"
+        );
+    }
+
+    #[test]
     fn decay_skips_archived() {
         let mut m = AgentMemory::default();
         m.knowledge_domains.push(KnowledgeDomain {
@@ -1858,8 +1895,8 @@ mod tests {
         m.merge_user_model(update);
         assert_eq!(m.knowledge_domains.len(), 1);
         assert_eq!(m.knowledge_domains[0].evidence_count, 2);
-        // confidence: 0.5 + (1.0 - 0.5) * 0.2 = 0.6
-        assert!((m.knowledge_domains[0].confidence - 0.6).abs() < f64::EPSILON);
+        // confidence: 0.5 + (1.0 - 0.5) * 0.15 = 0.575
+        assert!((m.knowledge_domains[0].confidence - 0.575).abs() < f64::EPSILON);
         assert_eq!(m.knowledge_domains[0].depth, "learning");
         assert_eq!(
             m.knowledge_domains[0].current_focus.as_deref(),
@@ -1894,9 +1931,9 @@ mod tests {
             };
             m.merge_user_model(update);
         }
-        // 0.5 → 0.6 → 0.68 → 0.744 → 0.7952
-        assert!(m.knowledge_domains[0].confidence > 0.79);
-        assert!(m.knowledge_domains[0].confidence <= 0.95);
+        // 0.5 → 0.575 → 0.639 → 0.693 → 0.739
+        assert!(m.knowledge_domains[0].confidence > 0.73);
+        assert!(m.knowledge_domains[0].confidence < 0.75);
     }
 
     #[test]
