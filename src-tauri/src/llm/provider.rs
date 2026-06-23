@@ -59,6 +59,8 @@ pub trait LlmProvider: Send + Sync {
 
     #[allow(dead_code)]
     fn provider_name(&self) -> &'static str;
+
+    fn is_remote(&self) -> bool;
 }
 
 pub fn resolve_model_name(last_used: Option<&str>, default_model: &str) -> Option<String> {
@@ -121,7 +123,7 @@ fn create_provider_from_profile(
     }
 
     Ok(Arc::new(
-        super::provider_openai::OpenAiCompatibleProvider::new(
+        super::provider_impl::UnifiedProvider::new(
             profile.base_url.clone(),
             profile.api_key.clone(),
             model,
@@ -129,6 +131,7 @@ fn create_provider_from_profile(
             config.parameters.top_p,
             config.request.timeout_ms,
             profile.organization_id.clone(),
+            profile.is_remote,
         ),
     ))
 }

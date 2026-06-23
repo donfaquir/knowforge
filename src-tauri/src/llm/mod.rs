@@ -1,18 +1,14 @@
-//! Rust 侧 Ollama 代理：模型列表、流式 chat、会话中止（任务 04）。
+//! LLM integration: model listing, streaming chat, agent loop, session abort.
 
-pub(crate) mod ollama;
 pub(crate) mod agent_loop;
 pub mod approval;
 pub(crate) mod context_guard;
 pub(crate) mod planning;
 pub(crate) mod provider;
-pub(crate) mod provider_ollama;
-pub(crate) mod provider_openai;
+pub(crate) mod provider_impl;
 pub mod memory;
 
-pub use provider::{
-    create_provider, create_provider_by_id, resolve_model_name, CompletionOverrides, LlmProvider,
-};
+pub use provider::{create_provider, create_provider_by_id, CompletionOverrides, LlmProvider};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentMode {
@@ -686,7 +682,6 @@ pub struct ListOllamaModelsArgs {
     pub base_url: Option<String>,
 }
 
-/// 列出 Ollama 模型；默认用配置中的 `ollama.baseUrl`，`args.baseUrl` 非空时覆盖（便于设置页探测）。
 #[tauri::command]
 pub async fn list_ollama_models(
     state: State<'_, crate::WorkspaceState>,
@@ -696,12 +691,22 @@ pub async fn list_ollama_models(
     let ai = tauri::async_runtime::spawn_blocking(move || vault_config::load_ai_config_internal(&root))
         .await
         .map_err(|e| e.to_string())??;
+    let profile = ai.active_profile();
     let base = match args.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => vault_config::normalize_openai_base_url(raw),
-        None => ai.active_profile().map(|p| p.base_url.clone()).unwrap_or_default(),
+        None => profile.map(|p| p.base_url.clone()).unwrap_or_default(),
     };
-    let timeout_ms = ai.request.timeout_ms;
-    ollama::list_models(&base, timeout_ms).await
+    let provider = provider_impl::UnifiedProvider::new(
+        base,
+        profile.map(|p| p.api_key.clone()).unwrap_or_default(),
+        String::new(),
+        ai.parameters.temperature,
+        ai.parameters.top_p,
+        ai.request.timeout_ms,
+        profile.and_then(|p| p.organization_id.clone()),
+        profile.map(|p| p.is_remote).unwrap_or(false),
+    );
+    provider.list_models().await
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -736,7 +741,7 @@ pub async fn list_openai_models(
         return Err("API key is required".to_string());
     }
 
-    let provider = provider_openai::OpenAiCompatibleProvider::new(
+    let provider = provider_impl::UnifiedProvider::new(
         base,
         key,
         String::new(),
@@ -744,6 +749,7 @@ pub async fn list_openai_models(
         ai.parameters.top_p,
         ai.request.timeout_ms,
         profile.and_then(|p| p.organization_id.clone()),
+        profile.map(|p| p.is_remote).unwrap_or(true),
     );
     provider.list_models().await
 }

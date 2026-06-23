@@ -852,30 +852,6 @@ pub fn normalize_openai_base_url(raw: &str) -> String {
     t.to_string()
 }
 
-/// 将 baseUrl 规范为 http(s) 的 origin（无路径后缀）；非法则回退 default_url
-fn normalize_http_base(raw: &str, default_url: &str) -> String {
-    let t = raw.trim();
-    if t.is_empty() {
-        return default_url.to_string();
-    }
-    let Ok(u) = Url::parse(t) else {
-        return default_url.to_string();
-    };
-    if u.scheme() != "http" && u.scheme() != "https" {
-        return default_url.to_string();
-    }
-    let origin = u.origin();
-    if !origin.is_tuple() {
-        return default_url.to_string();
-    }
-    let s = origin.ascii_serialization();
-    if s == "null" || s.is_empty() {
-        default_url.to_string()
-    } else {
-        s
-    }
-}
-
 fn migrate_legacy_providers(partial: &AiDiskPartial) -> Option<(String, Vec<ProviderProfile>)> {
     let has_legacy = partial.ollama.is_some() || partial.openai_compatible.is_some();
     if !has_legacy || partial.providers.is_some() {

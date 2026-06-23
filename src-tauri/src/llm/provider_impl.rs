@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use super::provider::{ChatStreamResult, CompletionOverrides, LlmProvider, NormalizedToolCall};
 use super::{emit_chunk, emit_done, emit_error, LlmChatMessage};
 
-pub struct OpenAiCompatibleProvider {
+pub struct UnifiedProvider {
     base_url: String,
     api_key: String,
     model: String,
@@ -16,9 +16,10 @@ pub struct OpenAiCompatibleProvider {
     top_p: Option<f64>,
     timeout_ms: u64,
     organization_id: Option<String>,
+    is_remote: bool,
 }
 
-impl OpenAiCompatibleProvider {
+impl UnifiedProvider {
     pub fn new(
         base_url: String,
         api_key: String,
@@ -27,6 +28,7 @@ impl OpenAiCompatibleProvider {
         top_p: Option<f64>,
         timeout_ms: u64,
         organization_id: Option<String>,
+        is_remote: bool,
     ) -> Self {
         Self {
             base_url,
@@ -36,6 +38,7 @@ impl OpenAiCompatibleProvider {
             top_p,
             timeout_ms,
             organization_id,
+            is_remote,
         }
     }
 
@@ -52,7 +55,11 @@ impl OpenAiCompatibleProvider {
         &self,
         builder: reqwest::RequestBuilder,
     ) -> reqwest::RequestBuilder {
-        let builder = builder.bearer_auth(&self.api_key);
+        let builder = if self.api_key.is_empty() {
+            builder
+        } else {
+            builder.bearer_auth(&self.api_key)
+        };
         if let Some(ref org) = self.organization_id {
             if !org.trim().is_empty() {
                 return builder.header("OpenAI-Organization", org);
@@ -184,7 +191,7 @@ struct ModelEntry {
 const MAX_SSE_LINE_BYTES: usize = 2 * 1024 * 1024;
 
 #[async_trait]
-impl LlmProvider for OpenAiCompatibleProvider {
+impl LlmProvider for UnifiedProvider {
     async fn chat_stream(
         &self,
         app: &AppHandle,
@@ -489,7 +496,11 @@ impl LlmProvider for OpenAiCompatibleProvider {
     }
 
     fn provider_name(&self) -> &'static str {
-        "openai"
+        "openai-compatible"
+    }
+
+    fn is_remote(&self) -> bool {
+        self.is_remote
     }
 }
 
@@ -499,7 +510,7 @@ mod tests {
 
     #[test]
     fn serialize_tool_result_message() {
-        let provider = OpenAiCompatibleProvider::new(
+        let provider = UnifiedProvider::new(
             "https://api.openai.com/v1".to_string(),
             "test-key".to_string(),
             "gpt-4o".to_string(),
@@ -507,6 +518,7 @@ mod tests {
             None,
             30000,
             None,
+            true,
         );
         let msg = provider.build_tool_result_message("call_123", "web.search", "some result");
         assert_eq!(msg.role, "tool");
@@ -523,7 +535,7 @@ mod tests {
             tool_name: None,
             tool_call_id: Some("call_abc".to_string()),
         }];
-        let json = OpenAiCompatibleProvider::serialize_messages(&messages);
+        let json = UnifiedProvider::serialize_messages(&messages);
         assert_eq!(json.len(), 1);
         let obj = json[0].as_object().unwrap();
         assert_eq!(obj.get("tool_call_id").unwrap(), "call_abc");
@@ -545,7 +557,7 @@ mod tests {
             tool_name: None,
             tool_call_id: None,
         }];
-        let json = OpenAiCompatibleProvider::serialize_messages(&messages);
+        let json = UnifiedProvider::serialize_messages(&messages);
         let obj = json[0].as_object().unwrap();
         assert!(obj.get("content").unwrap().is_null());
         let tcs = obj.get("tool_calls").unwrap().as_array().unwrap();
