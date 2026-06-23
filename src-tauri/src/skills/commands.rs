@@ -357,6 +357,7 @@ pub async fn invoke_skill(
     let manifest_for_task = manifest.clone();
     let workspace_root = root.clone();
     let input = args.input.clone();
+    let max_context_tokens = ai.request.max_context_tokens;
 
     tokio::spawn(async move {
         runtime::run_skill(
@@ -374,6 +375,7 @@ pub async fn invoke_skill(
             Some(bundle),
             provider,
             cancel,
+            max_context_tokens,
         )
         .await;
         sessions_arc.remove_session(&sid);

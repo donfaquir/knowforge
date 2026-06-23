@@ -11,6 +11,7 @@
 //!    re-rendering the skill's text (per design directive).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -237,7 +238,10 @@ impl Tool for SkillAsTool {
         let cache = semantic_index::default_model_cache_dir();
         let bundle = semantic_index::resolve_bundle_model_dir(&self.app);
 
-        let summary = runtime::run_skill_with_depth(
+        let overall_timeout = Duration::from_secs(
+            (manifest.timeout_secs as u64).saturating_mul(2),
+        );
+        let skill_future = runtime::run_skill_with_depth(
             self.app.clone(),
             session_id.clone(),
             manifest.clone(),
@@ -253,8 +257,12 @@ impl Tool for SkillAsTool {
             provider,
             cancel,
             ctx.nesting_depth.saturating_add(1),
-        )
-        .await;
+            ai.request.max_context_tokens,
+        );
+        let summary = match tokio::time::timeout(overall_timeout, skill_future).await {
+            Ok(s) => s,
+            Err(_) => String::new(),
+        };
 
         sessions.remove_session(&session_id);
         drop(permit);

@@ -49,3 +49,4 @@ __pycache__/
 
 /plan/
 /worklog/
+.DS_Store

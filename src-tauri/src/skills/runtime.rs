@@ -103,6 +103,7 @@ pub async fn run_skill(
     app_bundle_resource_dir: Option<PathBuf>,
     provider: Arc<dyn LlmProvider>,
     cancel: CancellationToken,
+    max_context_tokens: Option<u64>,
 ) -> String {
     run_skill_with_depth(
         app,
@@ -120,6 +121,7 @@ pub async fn run_skill(
         provider,
         cancel,
         1,
+        max_context_tokens,
     )
     .await
 }
@@ -147,6 +149,7 @@ pub async fn run_skill_with_depth(
     provider: Arc<dyn LlmProvider>,
     cancel: CancellationToken,
     nesting_depth: u8,
+    max_context_tokens: Option<u64>,
 ) -> String {
     let workspace_root_str = workspace_root.to_string_lossy().to_string();
     let messages = build_initial_messages(
@@ -162,7 +165,7 @@ pub async fn run_skill_with_depth(
         timeout_ms: manifest.timeout_secs.saturating_mul(1000),
         max_tool_result_chars: manifest.max_tool_result_chars as usize,
         nesting_depth,
-        max_context_tokens: None,
+        max_context_tokens,
     };
 
     let conv_id = skill_conversation_id(&manifest.id, &parent_conversation_id);

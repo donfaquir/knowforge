@@ -55,12 +55,14 @@ impl ToolFilter {
         }
     }
 
+    #[allow(dead_code)]
     pub fn core() -> Self {
         Self {
             categories: HashSet::from([ToolCategory::NoteRead, ToolCategory::Utility]),
         }
     }
 
+    #[allow(dead_code)]
     pub fn with(mut self, cat: ToolCategory) -> Self {
         self.categories.insert(cat);
         self

@@ -135,7 +135,11 @@ pub async fn run_agent_stream(
     let mut messages = initial_messages;
     let mut total_tool_result_chars: usize = 0;
     let mut tool_call_count: u16 = 0;
-    let context_guard = ContextGuard::with_provider(config.max_context_tokens, provider.clone());
+    let context_guard = if config.nesting_depth > 0 {
+        ContextGuard::new(config.max_context_tokens)
+    } else {
+        ContextGuard::with_provider(config.max_context_tokens, provider.clone())
+    };
     let mut loop_detector = LoopDetector::new();
 
     loop {
