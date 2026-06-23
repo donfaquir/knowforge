@@ -107,6 +107,8 @@ type StartStreamResponse = {
   /** 后端在 depthMode=auto 时返回的解析档位 */
   resolvedDepth?: AutoResolvedDepth;
   replyContextSources: ReplyContextSources;
+  providerLabel: string;
+  modelName: string;
 };
 
 type VaultCfgForSend = {
@@ -1702,6 +1704,8 @@ export function AiConversationPanel() {
           meta: {
             timing: { startMs: Date.now() },
             replyContextSources: res.replyContextSources,
+            providerLabel: res.providerLabel,
+            modelName: res.modelName,
           },
         },
       ]);
@@ -1876,6 +1880,8 @@ export function AiConversationPanel() {
               deepening: true,
               timing: { startMs: Date.now() },
               replyContextSources: res.replyContextSources,
+              providerLabel: res.providerLabel,
+              modelName: res.modelName,
             },
           },
         ]);
@@ -2279,7 +2285,7 @@ export function AiConversationPanel() {
                       </>
                     ) : null}
                     {m.meta?.timing ? (
-                      <StreamingTimer timing={m.meta.timing} streaming={!!m.streaming} />
+                      <StreamingTimer timing={m.meta.timing} streaming={!!m.streaming} modelName={m.meta.modelName} />
                     ) : null}
                   </>
                 ) : (

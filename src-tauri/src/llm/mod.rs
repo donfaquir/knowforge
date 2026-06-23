@@ -244,6 +244,8 @@ pub struct ChatStreamStartResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_depth: Option<DepthMode>,
     pub reply_context_sources: ReplyContextSources,
+    pub provider_label: String,
+    pub model_name: String,
 }
 
 /// Auto 档：按最近一条用户消息长度做轻量启发式（与 `depth_decisions` 日志 reason 对齐）。
@@ -745,6 +747,16 @@ pub async fn start_chat_stream(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    let active_profile = ai.active_profile()
+        .ok_or("No active provider configured.")?;
+    let resp_provider_label = active_profile.label.clone();
+    let resp_model_name = model_override
+        .map(str::to_string)
+        .or_else(|| provider::resolve_model_name(
+            active_profile.last_used_model.as_deref(),
+            &active_profile.default_model,
+        ))
+        .unwrap_or_default();
     let provider = create_provider(&ai, model_override.map(|s| s))?;
 
     let cache = semantic_index::default_model_cache_dir();
@@ -1002,6 +1014,8 @@ pub async fn start_chat_stream(
         session_id,
         resolved_depth,
         reply_context_sources,
+        provider_label: resp_provider_label,
+        model_name: resp_model_name,
     })
 }
 

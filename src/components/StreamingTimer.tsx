@@ -11,9 +11,11 @@ function formatSeconds(ms: number): string {
 export function StreamingTimer({
   timing,
   streaming,
+  modelName,
 }: {
   timing: ChatMessageTiming;
   streaming: boolean;
+  modelName?: string;
 }) {
   const { t } = useTranslation();
   const [now, setNow] = useState(Date.now);
@@ -24,10 +26,15 @@ export function StreamingTimer({
     return () => window.clearInterval(id);
   }, [streaming]);
 
+  const modelTag = modelName ? (
+    <span className="streaming-timer__model">{modelName}</span>
+  ) : null;
+
   if (streaming) {
     const elapsed = now - timing.startMs;
     return (
       <span className="streaming-timer streaming-timer--active" aria-live="off">
+        {modelTag}
         {t("aiPanel.timerElapsed", { sec: formatSeconds(elapsed) })}
       </span>
     );
@@ -42,6 +49,7 @@ export function StreamingTimer({
 
   return (
     <span className="streaming-timer" aria-label={t("aiPanel.timerLabel")}>
+      {modelTag}
       {ttft !== null
         ? t("aiPanel.timerDone", {
             ttft: formatSeconds(ttft),

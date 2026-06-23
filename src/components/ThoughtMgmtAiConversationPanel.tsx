@@ -27,6 +27,8 @@ type StartStreamResponse = {
   sessionId: string;
   resolvedDepth?: typeof DEPTH_MODE;
   replyContextSources: ReplyContextSources;
+  providerLabel: string;
+  modelName: string;
 };
 
 type VaultCfgForSend = {
@@ -512,6 +514,8 @@ export function ThoughtMgmtAiConversationPanel({
           meta: {
             timing: { startMs: Date.now() },
             replyContextSources: res.replyContextSources,
+            providerLabel: res.providerLabel,
+            modelName: res.modelName,
           },
         },
       ]);
@@ -701,7 +705,7 @@ export function ThoughtMgmtAiConversationPanel({
                       </>
                     ) : null}
                     {m.meta?.timing ? (
-                      <StreamingTimer timing={m.meta.timing} streaming={!!m.streaming} />
+                      <StreamingTimer timing={m.meta.timing} streaming={!!m.streaming} modelName={m.meta.modelName} />
                     ) : null}
                   </>
                 ) : (
