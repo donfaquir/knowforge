@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::provider::{CompletionOverrides, LlmProvider};
 use super::LlmChatMessage;
 
-const DEFAULT_MAX_TOKENS: usize = 8192;
+const DEFAULT_MAX_TOKENS: usize = 32768;
 const RESERVE_TOKENS: usize = 512;
 const MIN_KEEP_ROUNDS: usize = 2;
 
@@ -23,7 +23,6 @@ pub struct ContextGuard {
 }
 
 impl ContextGuard {
-    #[allow(dead_code)]
     pub fn new(max_context_tokens: Option<u64>) -> Self {
         let max_tokens = max_context_tokens
             .map(|t| t as usize)
