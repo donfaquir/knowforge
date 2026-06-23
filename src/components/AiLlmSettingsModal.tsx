@@ -54,7 +54,6 @@ function IconGeneralSettings() {
   );
 }
 
-/** 默认模型行：刷新 Ollama 模型列表 */
 function IconRefreshModels() {
   return (
     <svg
@@ -118,9 +117,26 @@ function IconSkillsSection() {
   );
 }
 
+// --- Provider form state ---
+
+type ProviderFormState = {
+  id: string;
+  label: string;
+  baseUrl: string;
+  apiKey: string;
+  apiKeyPresent: boolean;
+  apiKeyChanged: boolean;
+  defaultModel: string;
+  organizationId: string;
+  isRemote: boolean;
+  models: string[];
+  modelsBusy: boolean;
+  modelsError: string | null;
+};
+
 type FormState = {
-  ollamaBaseUrl: string;
-  ollamaDefaultModel: string;
+  providers: ProviderFormState[];
+  activeProviderId: string;
   timeoutMs: string;
   maxContextTokens: string;
   temperature: string;
@@ -149,10 +165,15 @@ type FormState = {
   searchTavilyApiKey: string;
   searchAliyunEndpoint: string;
   searchAliyunApiKey: string;
-  openaiBaseUrl: string;
-  openaiApiKey: string;
-  openaiDefaultModel: string;
 };
+
+const PROVIDER_TEMPLATES: ReadonlyArray<{ label: string; baseUrl: string; isRemote: boolean }> = [
+  { label: "OpenAI", baseUrl: "https://api.openai.com/v1", isRemote: true },
+  { label: "DeepSeek", baseUrl: "https://api.deepseek.com", isRemote: true },
+  { label: "SiliconFlow", baseUrl: "https://api.siliconflow.cn/v1", isRemote: true },
+  { label: "Moonshot", baseUrl: "https://api.moonshot.cn/v1", isRemote: true },
+  { label: "Ollama", baseUrl: "http://127.0.0.1:11434/v1", isRemote: false },
+];
 
 /** 空串按缺省处理，避免 parseInt/parseFloat('') 为 NaN 导致保存校验误判 */
 function parseIntWithEmptyDefault(raw: string, whenEmpty: number): number {
@@ -222,8 +243,8 @@ function parseChallengeReviewCaps(form: FormState): { ok: true; capInd: number; 
 
 function defaultForm(): FormState {
   return {
-    ollamaBaseUrl: "",
-    ollamaDefaultModel: "",
+    providers: [],
+    activeProviderId: "",
     timeoutMs: "120000",
     maxContextTokens: "",
     temperature: "0.7",
@@ -252,17 +273,28 @@ function defaultForm(): FormState {
     searchTavilyApiKey: "",
     searchAliyunEndpoint: "",
     searchAliyunApiKey: "",
-    openaiBaseUrl: "",
-    openaiApiKey: "",
-    openaiDefaultModel: "",
   };
 }
 
-/** 比较 AI 表单是否与已持久化快照一致 */
+function providerFormEquals(a: ProviderFormState, b: ProviderFormState): boolean {
+  return (
+    a.id === b.id &&
+    a.label === b.label &&
+    a.baseUrl === b.baseUrl &&
+    a.defaultModel === b.defaultModel &&
+    a.organizationId === b.organizationId &&
+    a.isRemote === b.isRemote &&
+    !a.apiKeyChanged
+  );
+}
+
 function aiFormEqualsPersisted(a: FormState, b: FormState): boolean {
-  const keys: (keyof FormState)[] = [
-    "ollamaBaseUrl",
-    "ollamaDefaultModel",
+  if (a.activeProviderId !== b.activeProviderId) return false;
+  if (a.providers.length !== b.providers.length) return false;
+  for (let i = 0; i < a.providers.length; i++) {
+    if (!providerFormEquals(a.providers[i], b.providers[i])) return false;
+  }
+  const scalarKeys: ReadonlyArray<keyof Omit<FormState, "providers" | "activeProviderId">> = [
     "timeoutMs",
     "maxContextTokens",
     "temperature",
@@ -291,14 +323,9 @@ function aiFormEqualsPersisted(a: FormState, b: FormState): boolean {
     "searchTavilyApiKey",
     "searchAliyunEndpoint",
     "searchAliyunApiKey",
-    "openaiBaseUrl",
-    "openaiApiKey",
-    "openaiDefaultModel",
   ];
-  for (const k of keys) {
-    if (a[k] !== b[k]) {
-      return false;
-    }
+  for (const k of scalarKeys) {
+    if (a[k] !== b[k]) return false;
   }
   return true;
 }
@@ -310,9 +337,25 @@ function vaultConfigToForm(cfg: VaultConfigForUi): FormState {
     autoIndexOnSave: true,
     searchWeight: 0.6,
   };
+
+  const providers: ProviderFormState[] = ai.providers.map((p) => ({
+    id: p.id,
+    label: p.label,
+    baseUrl: p.baseUrl,
+    apiKey: "",
+    apiKeyPresent: p.apiKeyPresent,
+    apiKeyChanged: false,
+    defaultModel: p.defaultModel,
+    organizationId: p.organizationId ?? "",
+    isRemote: p.isRemote,
+    models: [],
+    modelsBusy: false,
+    modelsError: null,
+  }));
+
   return {
-    ollamaBaseUrl: ai.ollama.baseUrl,
-    ollamaDefaultModel: ai.ollama.defaultModel,
+    providers,
+    activeProviderId: ai.activeProviderId,
     timeoutMs: String(ai.request.timeoutMs),
     maxContextTokens:
       ai.request.maxContextTokens != null ? String(ai.request.maxContextTokens) : "",
@@ -342,9 +385,6 @@ function vaultConfigToForm(cfg: VaultConfigForUi): FormState {
     searchTavilyApiKey: cfg.search?.tavily?.apiKey ?? "",
     searchAliyunEndpoint: cfg.search?.aliyunOpensearch?.endpoint ?? "",
     searchAliyunApiKey: cfg.search?.aliyunOpensearch?.apiKey ?? "",
-    openaiBaseUrl: ai.openaiCompatible.baseUrl ?? "",
-    openaiApiKey: "",
-    openaiDefaultModel: ai.openaiCompatible.defaultModel ?? "",
   };
 }
 
@@ -361,55 +401,14 @@ export function AiLlmSettingsModal({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
-  const [modelsBusy, setModelsBusy] = useState(false);
-  const [modelsError, setModelsError] = useState<string | null>(null);
-  const [openaiApiKeyPresent, setOpenaiApiKeyPresent] = useState(false);
-  const [openaiModels, setOpenaiModels] = useState<string[]>([]);
-  const [openaiModelsBusy, setOpenaiModelsBusy] = useState(false);
-  const [openaiModelsError, setOpenaiModelsError] = useState<string | null>(null);
-  /** 下拉选项：刷新结果 + 当前已保存但不在列表中的模型名 */
-  const ollamaModelSelectOptions = useMemo(() => {
-    const cur = form.ollamaDefaultModel.trim();
-    const seen = new Set<string>();
-    const out: string[] = [];
-    if (cur && !ollamaModels.includes(cur)) {
-      out.push(cur);
-      seen.add(cur);
-    }
-    for (const m of ollamaModels) {
-      if (!seen.has(m)) {
-        out.push(m);
-        seen.add(m);
-      }
-    }
-    return out;
-  }, [ollamaModels, form.ollamaDefaultModel]);
-  const openaiModelSelectOptions = useMemo(() => {
-    const cur = form.openaiDefaultModel.trim();
-    const seen = new Set<string>();
-    const out: string[] = [];
-    if (cur && !openaiModels.includes(cur)) {
-      out.push(cur);
-      seen.add(cur);
-    }
-    for (const m of openaiModels) {
-      if (!seen.has(m)) {
-        out.push(m);
-        seen.add(m);
-      }
-    }
-    return out;
-  }, [openaiModels, form.openaiDefaultModel]);
+  const [selectedProviderId, setSelectedProviderId] = useState("");
+  const [showTemplateMenu, setShowTemplateMenu] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSection>("ai");
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [versionLoading, setVersionLoading] = useState(false);
   const [versionError, setVersionError] = useState<string | null>(null);
 
-  /** 最近一次从磁盘加载成功（或无需工作区时的默认）的 AI 表单快照，用于判断是否有未保存修改 */
   const savedAiFormRef = useRef<FormState | null>(null);
-  /** 磁盘上 activeProvider 非 ollama 时需保存一次以纠正为仅 Ollama */
-  const diskProviderNotOllamaRef = useRef(false);
 
   const disposedRef = useRef(false);
   useEffect(() => {
@@ -434,15 +433,13 @@ export function AiLlmSettingsModal({
       const next = vaultConfigToForm(cfg);
       setForm(next);
       savedAiFormRef.current = next;
-      diskProviderNotOllamaRef.current = cfg.ai.activeProvider !== "ollama";
-      setOpenaiApiKeyPresent(cfg.ai.openaiCompatible?.apiKeyPresent === true);
+      setSelectedProviderId(cfg.ai.activeProviderId);
     } catch (e) {
       if (!disposedRef.current) {
         setLoadError(e instanceof Error ? e.message : String(e));
         const d = defaultForm();
         setForm(d);
         savedAiFormRef.current = d;
-        diskProviderNotOllamaRef.current = false;
       }
     } finally {
       if (!disposedRef.current) {
@@ -473,7 +470,6 @@ export function AiLlmSettingsModal({
       const d = defaultForm();
       setForm(d);
       savedAiFormRef.current = d;
-      diskProviderNotOllamaRef.current = false;
     }
   }, [open, tauriRuntime, workspaceReady]);
 
@@ -516,9 +512,6 @@ export function AiLlmSettingsModal({
   }, [open, tauriRuntime, t]);
 
   const isAiSettingsDirty = useCallback((): boolean => {
-    if (diskProviderNotOllamaRef.current) {
-      return true;
-    }
     if (loading) {
       return false;
     }
@@ -560,64 +553,133 @@ export function AiLlmSettingsModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, requestClose]);
 
-  const refreshOllamaModels = useCallback(async () => {
-    if (!isTauri() || !workspaceReady) {
-      return;
-    }
-    setModelsBusy(true);
-    setModelsError(null);
-    try {
-      const base = form.ollamaBaseUrl.trim();
-      // Tauri 2 要求 invoke 第二参含 `args`，其值再反序列化为 ListOllamaModelsArgs
-      const list = await invoke<string[]>("list_ollama_models", {
-        args: {
-          baseUrl: base.length > 0 ? base : undefined,
-        },
-      });
-      if (!disposedRef.current) {
-        setOllamaModels(list);
-      }
-    } catch (e) {
-      if (!disposedRef.current) {
-        setModelsError(e instanceof Error ? e.message : String(e));
-        setOllamaModels([]);
-      }
-    } finally {
-      if (!disposedRef.current) {
-        setModelsBusy(false);
-      }
-    }
-  }, [workspaceReady, form.ollamaBaseUrl]);
+  // --- Provider helpers ---
 
-  const refreshOpenaiModels = useCallback(async () => {
-    if (!isTauri() || !workspaceReady) {
-      return;
+  const selectedProvider = useMemo(
+    () => form.providers.find((p) => p.id === selectedProviderId),
+    [form.providers, selectedProviderId],
+  );
+
+  const selectedModelOptions = useMemo(() => {
+    if (!selectedProvider) return [];
+    const cur = selectedProvider.defaultModel.trim();
+    const seen = new Set<string>();
+    const out: string[] = [];
+    if (cur && !selectedProvider.models.includes(cur)) {
+      out.push(cur);
+      seen.add(cur);
     }
-    setOpenaiModelsBusy(true);
-    setOpenaiModelsError(null);
-    try {
-      const base = form.openaiBaseUrl.trim();
-      const key = form.openaiApiKey.trim();
-      const list = await invoke<string[]>("list_openai_models", {
-        args: {
-          baseUrl: base.length > 0 ? base : undefined,
-          apiKey: key.length > 0 ? key : undefined,
-        },
-      });
-      if (!disposedRef.current) {
-        setOpenaiModels(list);
-      }
-    } catch (e) {
-      if (!disposedRef.current) {
-        setOpenaiModelsError(e instanceof Error ? e.message : String(e));
-        setOpenaiModels([]);
-      }
-    } finally {
-      if (!disposedRef.current) {
-        setOpenaiModelsBusy(false);
+    for (const m of selectedProvider.models) {
+      if (!seen.has(m)) {
+        out.push(m);
+        seen.add(m);
       }
     }
-  }, [workspaceReady, form.openaiBaseUrl, form.openaiApiKey]);
+    return out;
+  }, [selectedProvider]);
+
+  const updateSelectedProvider = useCallback(
+    (updates: Partial<ProviderFormState>) => {
+      setForm((f) => ({
+        ...f,
+        providers: f.providers.map((p) =>
+          p.id === selectedProviderId ? { ...p, ...updates } : p,
+        ),
+      }));
+    },
+    [selectedProviderId],
+  );
+
+  const addProviderFromTemplate = useCallback(
+    (template: { label: string; baseUrl: string; isRemote: boolean }) => {
+      const id = crypto.randomUUID();
+      const newProvider: ProviderFormState = {
+        id,
+        label: template.label,
+        baseUrl: template.baseUrl,
+        apiKey: "",
+        apiKeyPresent: false,
+        apiKeyChanged: false,
+        defaultModel: "",
+        organizationId: "",
+        isRemote: template.isRemote,
+        models: [],
+        modelsBusy: false,
+        modelsError: null,
+      };
+      setForm((f) => ({
+        ...f,
+        providers: [...f.providers, newProvider],
+        activeProviderId: f.providers.length === 0 ? id : f.activeProviderId,
+      }));
+      setSelectedProviderId(id);
+      setShowTemplateMenu(false);
+    },
+    [],
+  );
+
+  const deleteProvider = useCallback((id: string) => {
+    setForm((f) => {
+      const filtered = f.providers.filter((p) => p.id !== id);
+      if (filtered.length === 0) return f;
+      const newActive = f.activeProviderId === id ? filtered[0].id : f.activeProviderId;
+      return { ...f, providers: filtered, activeProviderId: newActive };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (form.providers.length > 0 && !form.providers.some((p) => p.id === selectedProviderId)) {
+      setSelectedProviderId(form.activeProviderId || form.providers[0].id);
+    }
+  }, [form.providers, form.activeProviderId, selectedProviderId]);
+
+  const refreshModels = useCallback(
+    async (providerId: string) => {
+      if (!isTauri() || !workspaceReady) return;
+
+      const provider = form.providers.find((p) => p.id === providerId);
+      if (!provider) return;
+
+      setForm((f) => ({
+        ...f,
+        providers: f.providers.map((p) =>
+          p.id === providerId ? { ...p, modelsBusy: true, modelsError: null } : p,
+        ),
+      }));
+
+      try {
+        const base = provider.baseUrl.trim();
+        const key = provider.apiKey.trim();
+        const list = await invoke<string[]>("list_models", {
+          args: {
+            providerId,
+            baseUrl: base.length > 0 ? base : undefined,
+            apiKey: key.length > 0 ? key : undefined,
+          },
+        });
+        if (!disposedRef.current) {
+          setForm((f) => ({
+            ...f,
+            providers: f.providers.map((p) =>
+              p.id === providerId ? { ...p, models: list, modelsBusy: false } : p,
+            ),
+          }));
+        }
+      } catch (e) {
+        if (!disposedRef.current) {
+          setForm((f) => ({
+            ...f,
+            providers: f.providers.map((p) =>
+              p.id === providerId
+                ? { ...p, models: [], modelsBusy: false, modelsError: e instanceof Error ? e.message : String(e) }
+                : p,
+            ),
+          }));
+        }
+      }
+    },
+    [workspaceReady, form.providers],
+  );
 
   const handleSave = useCallback(async () => {
     setSaveError(null);
@@ -660,8 +722,6 @@ export function AiLlmSettingsModal({
       maxContextTokens = m;
     }
 
-    const ollamaDefault = form.ollamaDefaultModel.trim();
-
     const phMin = parseFloatInRange({ raw: form.passiveHighlightConfidenceMin, emptyDefault: 0.55, min: 0, max: 1 });
     if (phMin == null) {
       setSaveError(t("settings.errPassiveConfidence"));
@@ -693,14 +753,21 @@ export function AiLlmSettingsModal({
       return;
     }
 
+    const providerPatches = form.providers.map((p) => ({
+      id: p.id,
+      label: p.label,
+      baseUrl: p.baseUrl.trim(),
+      defaultModel: p.defaultModel.trim(),
+      organizationId: p.organizationId.trim() || null,
+      lastUsedModel: p.defaultModel.trim() || null,
+      isRemote: p.isRemote,
+      ...(p.apiKeyChanged && p.apiKey.trim() ? { apiKey: p.apiKey.trim() } : {}),
+    }));
+
     const patch: VaultConfigSavePatch = {
       ai: {
-        activeProvider: "ollama",
-        ollama: {
-          baseUrl: form.ollamaBaseUrl.trim(),
-          defaultModel: ollamaDefault,
-          lastUsedModel: ollamaDefault.length > 0 ? ollamaDefault : null,
-        },
+        activeProviderId: form.activeProviderId,
+        providers: providerPatches,
         request: {
           timeoutMs,
           maxContextTokens,
@@ -716,13 +783,6 @@ export function AiLlmSettingsModal({
         planningEnabled: form.planningEnabled,
         memoryEnabled: form.memoryEnabled,
         memoryReflectionMode: form.memoryReflectionMode,
-        openaiCompatible: {
-          baseUrl: form.openaiBaseUrl.trim(),
-          defaultModel: form.openaiDefaultModel.trim(),
-          organizationId: null,
-          lastUsedModel: form.openaiDefaultModel.trim() || null,
-          ...(form.openaiApiKey.trim() ? { apiKey: form.openaiApiKey.trim() } : {}),
-        },
       },
       cognitive: {
         passiveHighlightEnabled: form.passiveHighlightEnabled,
@@ -786,6 +846,8 @@ export function AiLlmSettingsModal({
   if (!open) {
     return null;
   }
+
+  const sp = selectedProvider;
 
   const scrim = (
     <div
@@ -970,33 +1032,124 @@ export function AiLlmSettingsModal({
               <summary className="ai-settings__group-summary">{t("settings.providersGroup")}</summary>
               <div className="ai-settings__group-body">
 
+            {/* Provider tabs */}
+            <div className="ai-settings__provider-tabs">
+              {form.providers.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`app-modal__btn ai-settings__provider-tab${
+                    p.id === selectedProviderId ? " ai-settings__provider-tab--selected" : ""
+                  }`}
+                  onClick={() => setSelectedProviderId(p.id)}
+                  title={p.id === form.activeProviderId ? t("settings.activeProvider") : undefined}
+                >
+                  {p.label || p.id}
+                  {p.id === form.activeProviderId && (
+                    <span className="ai-settings__active-badge">{" ★"}</span>
+                  )}
+                </button>
+              ))}
+              <div className="ai-settings__provider-add-wrap">
+                <button
+                  type="button"
+                  className="app-modal__btn ai-settings__provider-add"
+                  onClick={() => setShowTemplateMenu((v) => !v)}
+                  title={t("settings.addProvider")}
+                  disabled={!tauriRuntime || !workspaceReady}
+                >
+                  +
+                </button>
+                {showTemplateMenu && (
+                  <div className="ai-settings__template-menu">
+                    {PROVIDER_TEMPLATES.map((tmpl) => (
+                      <button
+                        key={tmpl.label}
+                        type="button"
+                        className="app-modal__btn ai-settings__template-item"
+                        onClick={() => addProviderFromTemplate(tmpl)}
+                      >
+                        {tmpl.label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="app-modal__btn ai-settings__template-item"
+                      onClick={() =>
+                        addProviderFromTemplate({
+                          label: t("settings.customProvider"),
+                          baseUrl: "",
+                          isRemote: true,
+                        })
+                      }
+                    >
+                      {t("settings.customProvider")}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Edit panel for selected provider */}
+            {sp ? (
             <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
-              <legend className="ai-settings__legend">{t("settings.ollama")}</legend>
-              <p className="ai-settings__hint ai-settings__hint--ollama-lead">{t("settings.ollamaHint")}</p>
-              <label className="ai-settings__label" htmlFor="ai-ollama-base">
-                {t("settings.baseUrl")}
+              <legend className="ai-settings__legend">{sp.label || sp.id}</legend>
+
+              <label className="ai-settings__label" htmlFor="ai-provider-label">
+                {t("settings.providerLabel")}
               </label>
               <input
-                id="ai-ollama-base"
+                id="ai-provider-label"
                 className="app-modal__field"
-                value={form.ollamaBaseUrl}
-                onChange={(e) => setForm((f) => ({ ...f, ollamaBaseUrl: e.target.value }))}
+                value={sp.label}
+                onChange={(e) => updateSelectedProvider({ label: e.target.value })}
                 autoComplete="off"
-                placeholder={t("settings.phOllamaUrl")}
               />
-              <label className="ai-settings__label" htmlFor="ai-ollama-model">
+
+              <label className="ai-settings__label" htmlFor="ai-provider-base-url">
+                {t("settings.providerBaseUrl")}
+              </label>
+              <input
+                id="ai-provider-base-url"
+                className="app-modal__field"
+                value={sp.baseUrl}
+                onChange={(e) => updateSelectedProvider({ baseUrl: e.target.value })}
+                autoComplete="off"
+                placeholder="https://api.openai.com/v1"
+              />
+
+              <label className="ai-settings__label" htmlFor="ai-provider-api-key">
+                {t("settings.openaiApiKey")}
+              </label>
+              <input
+                id="ai-provider-api-key"
+                className="app-modal__field"
+                type="password"
+                value={sp.apiKey}
+                onChange={(e) =>
+                  updateSelectedProvider({ apiKey: e.target.value, apiKeyChanged: true })
+                }
+                autoComplete="off"
+                placeholder={
+                  sp.apiKeyPresent
+                    ? t("settings.openaiApiKeyPresent")
+                    : t("settings.openaiApiKeyEmpty")
+                }
+              />
+
+              <label className="ai-settings__label" htmlFor="ai-provider-model">
                 {t("settings.defaultModel")}
               </label>
               <div className="ai-settings__row">
                 <select
-                  id="ai-ollama-model"
+                  id="ai-provider-model"
                   className="app-modal__field ai-settings__field-grow ai-settings__model-select"
-                  value={form.ollamaDefaultModel}
-                  onChange={(e) => setForm((f) => ({ ...f, ollamaDefaultModel: e.target.value }))}
+                  value={sp.defaultModel}
+                  onChange={(e) => updateSelectedProvider({ defaultModel: e.target.value })}
                   autoComplete="off"
                 >
                   <option value="">{t("settings.modelSelectPlaceholder")}</option>
-                  {ollamaModelSelectOptions.map((m) => (
+                  {selectedModelOptions.map((m) => (
                     <option key={m} value={m}>
                       {m}
                     </option>
@@ -1004,85 +1157,56 @@ export function AiLlmSettingsModal({
                 </select>
                 <button
                   type="button"
-                  className={`app-modal__btn ai-settings__refresh-models${modelsBusy ? " ai-settings__refresh-models--busy" : ""}`}
-                  disabled={modelsBusy || !workspaceReady}
+                  className={`app-modal__btn ai-settings__refresh-models${sp.modelsBusy ? " ai-settings__refresh-models--busy" : ""}`}
+                  disabled={sp.modelsBusy || !workspaceReady}
                   aria-label={t("settings.refreshModels")}
-                  title={modelsBusy ? t("settings.loading") : t("settings.refreshModels")}
-                  aria-busy={modelsBusy}
-                  onClick={() => void refreshOllamaModels()}
+                  title={sp.modelsBusy ? t("settings.loading") : t("settings.refreshModels")}
+                  aria-busy={sp.modelsBusy}
+                  onClick={() => void refreshModels(sp.id)}
                 >
                   <IconRefreshModels />
                 </button>
               </div>
-              {modelsError ? (
+              {sp.modelsError ? (
                 <p className="ai-settings__inline-error" role="alert">
-                  {modelsError}
+                  {sp.modelsError}
                 </p>
               ) : null}
-            </fieldset>
 
-            <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
-              <legend className="ai-settings__legend">{t("settings.openaiSection")}</legend>
-              <p className="ai-settings__hint ai-settings__hint--ollama-lead">{t("settings.openaiHint")}</p>
-              <label className="ai-settings__label" htmlFor="ai-openai-base">
-                {t("settings.openaiBaseUrl")}
+              <label className="ai-settings__check">
+                <input
+                  type="checkbox"
+                  checked={sp.isRemote}
+                  onChange={(e) => updateSelectedProvider({ isRemote: e.target.checked })}
+                />
+                {t("settings.isRemote")}
               </label>
-              <input
-                id="ai-openai-base"
-                className="app-modal__field"
-                value={form.openaiBaseUrl}
-                onChange={(e) => setForm((f) => ({ ...f, openaiBaseUrl: e.target.value }))}
-                autoComplete="off"
-                placeholder="https://api.openai.com/v1"
-              />
-              <label className="ai-settings__label" htmlFor="ai-openai-key">
-                {t("settings.openaiApiKey")}
-              </label>
-              <input
-                id="ai-openai-key"
-                className="app-modal__field"
-                type="password"
-                value={form.openaiApiKey}
-                onChange={(e) => setForm((f) => ({ ...f, openaiApiKey: e.target.value }))}
-                autoComplete="off"
-                placeholder={openaiApiKeyPresent ? t("settings.openaiApiKeyPresent") : t("settings.openaiApiKeyEmpty")}
-              />
-              <label className="ai-settings__label" htmlFor="ai-openai-model">
-                {t("settings.openaiDefaultModel")}
-              </label>
-              <div className="ai-settings__row">
-                <select
-                  id="ai-openai-model"
-                  className="app-modal__field ai-settings__field-grow ai-settings__model-select"
-                  value={form.openaiDefaultModel}
-                  onChange={(e) => setForm((f) => ({ ...f, openaiDefaultModel: e.target.value }))}
-                  autoComplete="off"
-                >
-                  <option value="">{t("settings.modelSelectPlaceholder")}</option>
-                  {openaiModelSelectOptions.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className={`app-modal__btn ai-settings__refresh-models${openaiModelsBusy ? " ai-settings__refresh-models--busy" : ""}`}
-                  disabled={openaiModelsBusy || !workspaceReady}
-                  aria-label={t("settings.refreshModels")}
-                  title={openaiModelsBusy ? t("settings.loading") : t("settings.refreshModels")}
-                  aria-busy={openaiModelsBusy}
-                  onClick={() => void refreshOpenaiModels()}
-                >
-                  <IconRefreshModels />
-                </button>
+              <p className="ai-settings__hint">{t("settings.isRemoteHint")}</p>
+
+              <div className="ai-settings__provider-actions">
+                {sp.id !== form.activeProviderId && (
+                  <button
+                    type="button"
+                    className="app-modal__btn app-modal__btn--primary"
+                    onClick={() => setForm((f) => ({ ...f, activeProviderId: sp.id }))}
+                  >
+                    {t("settings.setActiveProvider")}
+                  </button>
+                )}
+                {form.providers.length > 1 && (
+                  <button
+                    type="button"
+                    className="app-modal__btn app-modal__btn--danger"
+                    onClick={() => deleteProvider(sp.id)}
+                  >
+                    {t("settings.deleteProvider")}
+                  </button>
+                )}
               </div>
-              {openaiModelsError ? (
-                <p className="ai-settings__inline-error" role="alert">
-                  {openaiModelsError}
-                </p>
-              ) : null}
             </fieldset>
+            ) : (
+              <p className="ai-settings__hint">{t("settings.noProviderConfigured")}</p>
+            )}
 
               </div>
             </details>

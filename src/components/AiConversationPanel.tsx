@@ -16,7 +16,7 @@ import type {
   GenerateChallengeQuestionResponse,
 } from "../types/cognitiveTypes";
 import type { DetectPassiveHighlightResponse, PassiveHighlightMarked } from "../types/passiveHighlight";
-import type { ActiveProvider, VaultConfigForUi } from "../types/vaultAiConfig";
+import type { VaultConfigForUi, ProviderProfileForUi } from "../types/vaultAiConfig";
 import { isChallengeInlineLlmReady } from "../utils/isChallengeReviewLlmReady";
 import { VAULT_CONFIG_UPDATED_EVENT } from "../utils/vaultConfigBroadcast";
 import { markdownTreatAsKfPrivateForUi } from "../utils/kfPrivateMarkdown";
@@ -111,8 +111,8 @@ type StartStreamResponse = {
 
 type VaultCfgForSend = {
   ai?: {
-    activeProvider?: ActiveProvider;
-    ollama?: { defaultModel?: string; lastUsedModel?: string };
+    activeProviderId?: string;
+    providers?: ProviderProfileForUi[];
     privacy?: { allowPrivateContentInLocalLlm?: boolean };
   };
   cognitive?: {
@@ -438,7 +438,7 @@ export function AiConversationPanel() {
   const [savePopoverUserMsgId, setSavePopoverUserMsgId] = useState<string | null>(null);
   const [thoughtSaveToast, setThoughtSaveToast] = useState<"saved" | "failed" | null>(null);
   /** 被动高亮门控横幅（非错误） */
-  const [passiveHighlightBanner, setPassiveHighlightBanner] = useState<null | "noOllama" | "short" | "cap">(null);
+  const [passiveHighlightBanner, setPassiveHighlightBanner] = useState<null | "short" | "cap">(null);
 
   const passiveHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 会话切换 / 卸载时递增，使已排队的 setTimeout 与 await 后续逻辑与当前生命周期对齐 */
@@ -739,8 +739,6 @@ export function AiConversationPanel() {
               return;
             }
             if (inviteSearchEpochRef.current !== epoch || disposed) return;
-            const prov = cfg.ai?.activeProvider ?? "ollama";
-            if (prov !== "ollama") return;
             if (!isChallengeInlineLlmReady(cfg as VaultConfigForUi)) return;
 
             const countResp = await invoke<CountVaultThoughtsForReviewResponse>(
@@ -1319,12 +1317,6 @@ export function AiConversationPanel() {
         const enabled = cfg.cognitive?.passiveHighlightEnabled !== false;
         if (!enabled) return;
 
-        const prov = cfg.ai?.activeProvider ?? "ollama";
-        if (prov !== "ollama") {
-          setPassiveHighlightBanner("noOllama");
-          return;
-        }
-
         const dm = depthModeForInviteRef.current;
         const ar = autoResolvedForInviteRef.current;
         if (dm === "shallow" || (dm === "auto" && ar === "shallow")) {
@@ -1449,10 +1441,10 @@ export function AiConversationPanel() {
       let modelName: string | undefined;
       try {
         const cfg = await invoke<VaultCfgForSend>("get_vault_config_for_ui");
-        const o = cfg.ai?.ollama;
-        modelName = (o?.lastUsedModel?.trim() || o?.defaultModel?.trim()) || undefined;
+        const p = cfg.ai?.providers?.find((x) => x.id === cfg.ai?.activeProviderId);
+        modelName = (p?.lastUsedModel?.trim() || p?.defaultModel?.trim()) || undefined;
       } catch {
-        /* 拉取失败时让后端用默认模型 */
+        /* let backend use default model on fetch failure */
       }
 
       try {
@@ -1561,8 +1553,8 @@ export function AiConversationPanel() {
     let allowPrivateLocal = false;
     try {
       const cfg = await invoke<VaultCfgForSend>("get_vault_config_for_ui");
-      const o = cfg.ai?.ollama;
-      modelName = (o?.lastUsedModel?.trim() || o?.defaultModel?.trim()) ?? "";
+      const p = cfg.ai?.providers?.find((x) => x.id === cfg.ai?.activeProviderId);
+      modelName = (p?.lastUsedModel?.trim() || p?.defaultModel?.trim()) ?? "";
       allowPrivateLocal = cfg.ai?.privacy?.allowPrivateContentInLocalLlm === true;
       if (!modelName) {
         setErrorBanner(t("aiPanel.noModel"));
@@ -1683,7 +1675,7 @@ export function AiConversationPanel() {
       ) {
         streamArgs.thoughtFocusContext = thoughtFocusContext;
       }
-      const res = await invoke<StartStreamResponse>("start_ollama_chat_stream", {
+      const res = await invoke<StartStreamResponse>("start_chat_stream", {
         args: streamArgs,
       });
       if (vaultSearchEpochRef.current !== searchEpoch) {
@@ -1823,8 +1815,8 @@ export function AiConversationPanel() {
       try {
         const cfg = await invoke<VaultCfgForSend>("get_vault_config_for_ui");
         if (disposedRef.current) return;
-        const o = cfg.ai?.ollama;
-        modelName = (o?.lastUsedModel?.trim() || o?.defaultModel?.trim()) ?? "";
+        const p = cfg.ai?.providers?.find((x) => x.id === cfg.ai?.activeProviderId);
+        modelName = (p?.lastUsedModel?.trim() || p?.defaultModel?.trim()) ?? "";
         if (!modelName) return;
       } catch {
         if (disposedRef.current) return;
@@ -1862,7 +1854,7 @@ export function AiConversationPanel() {
           streamArgs.thoughtFocusContext = thoughtFocusContext;
         }
 
-        const res = await invoke<StartStreamResponse>("start_ollama_chat_stream", {
+        const res = await invoke<StartStreamResponse>("start_chat_stream", {
           args: streamArgs,
         });
         if (disposedRef.current) return;
@@ -2105,11 +2097,9 @@ export function AiConversationPanel() {
           {...dragExcludeProps}
         >
           <span className="ai-chat__banner__text">
-            {passiveHighlightBanner === "noOllama"
-              ? t("aiPanel.passiveHighlightHintNoOllama")
-              : passiveHighlightBanner === "short"
-                ? t("aiPanel.passiveHighlightHintShort")
-                : t("aiPanel.passiveHighlightHintCap")}
+            {passiveHighlightBanner === "short"
+              ? t("aiPanel.passiveHighlightHintShort")
+              : t("aiPanel.passiveHighlightHintCap")}
           </span>
           <button
             type="button"

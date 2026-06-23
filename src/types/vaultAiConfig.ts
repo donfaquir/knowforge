@@ -1,25 +1,21 @@
-/** 与 `vault_config::VaultConfigForUi` / `AiConfigForUi` 的 JSON（camelCase）对齐 */
+/** Aligned with `vault_config::VaultConfigForUi` / `AiConfigForUi` JSON (camelCase) */
 
 import type { CognitiveConfigForUi, CognitiveConfigSavePatch } from "./cognitiveTypes";
 
-export type ActiveProvider = "ollama" | "openai";
+// --- Provider profile (read from backend) ---
 
-/** 与 JSON / IPC 的 activeProvider 对齐，避免业务代码散落字面量 */
-export const ACTIVE_PROVIDER_OLLAMA = "ollama" satisfies ActiveProvider;
-
-export type OllamaProfile = {
-  baseUrl: string;
-  defaultModel: string;
-  lastUsedModel?: string;
-};
-
-export type OpenAiCompatibleForUi = {
+export type ProviderProfileForUi = {
+  id: string;
+  label: string;
   baseUrl: string;
   apiKeyPresent: boolean;
   defaultModel: string;
   organizationId?: string;
   lastUsedModel?: string;
+  isRemote: boolean;
 };
+
+// --- Shared parameter types ---
 
 export type AiRequest = {
   timeoutMs: number;
@@ -35,19 +31,21 @@ export type AiPrivacy = {
   allowPrivateContentInLocalLlm: boolean;
 };
 
+// --- AI config (read) ---
+
 export type AiConfigForUi = {
-  activeProvider: ActiveProvider;
-  ollama: OllamaProfile;
-  openaiCompatible: OpenAiCompatibleForUi;
+  activeProviderId: string;
+  providers: ProviderProfileForUi[];
   request: AiRequest;
   parameters: AiParameters;
   privacy: AiPrivacy;
-  /** Iter 5 #4: 主对话工具调用总开关(含内置 skills 暴露)。旧 vault 缺该字段时后端默认 true。 */
   toolsEnabled: boolean;
   planningEnabled: boolean;
   memoryEnabled: boolean;
   memoryReflectionMode: string;
 };
+
+// --- Semantic / Search ---
 
 export type SemanticConfigForUi = {
   enabled: boolean;
@@ -65,53 +63,47 @@ export type SearchConfigForUi = {
   aliyunOpensearch?: { endpoint: string; apiKey: string };
 };
 
+// --- Top-level config (read) ---
+
 export type VaultConfigForUi = {
-  /** IPC JSON 字段名为 `$schemaVersion` */
   readonly ["$schemaVersion"]?: number;
   ai: AiConfigForUi;
   cognitive: CognitiveConfigForUi;
-  /** 迭代 6.2 起由后端返回；旧配置缺失时前端用默认值 */
   semantic?: SemanticConfigForUi;
   search?: SearchConfigForUi;
 };
 
-// --- 与 `save_vault_config_patch` / `VaultConfigPatch`（camelCase JSON）对齐的保存载荷 ---
+// --- Save payloads (write) ---
 
-/** openaiCompatible 段：apiKey 仅在用户修改过密钥时提交 */
-export type OpenAiCompatibleSavePayload = {
-  baseUrl: string;
-  defaultModel: string;
-  organizationId: string | null;
-  lastUsedModel: string | null;
+export type ProviderProfileSavePatch = {
+  id: string;
+  label?: string;
+  baseUrl?: string;
   apiKey?: string;
-};
-
-export type OllamaSavePayload = {
-  baseUrl: string;
-  defaultModel: string;
-  lastUsedModel: string | null;
+  defaultModel?: string;
+  organizationId?: string | null;
+  lastUsedModel?: string | null;
+  isRemote?: boolean;
 };
 
 export type AiConfigSavePatch = {
-  activeProvider: ActiveProvider;
-  ollama: OllamaSavePayload;
-  /** 省略则不修改磁盘上的 OpenAI 兼容段（应用仅 Ollama 时可不传） */
-  openaiCompatible?: OpenAiCompatibleSavePayload;
-  request: {
+  activeProviderId?: string;
+  providers?: ProviderProfileSavePatch[];
+  request?: {
     timeoutMs: number;
     maxContextTokens: number | null;
   };
-  parameters: {
+  parameters?: {
     temperature: number;
     topP: number | null;
   };
-  privacy: {
+  privacy?: {
     allowPrivateContentInLocalLlm: boolean;
   };
-  toolsEnabled: boolean;
-  planningEnabled: boolean;
-  memoryEnabled: boolean;
-  memoryReflectionMode: string;
+  toolsEnabled?: boolean;
+  planningEnabled?: boolean;
+  memoryEnabled?: boolean;
+  memoryReflectionMode?: string;
 };
 
 export type SemanticConfigSavePatch = {
@@ -133,3 +125,9 @@ export type VaultConfigSavePatch = {
   semantic?: SemanticConfigSavePatch;
   search?: SearchConfigSavePatch;
 };
+
+// --- Helpers ---
+
+export function getActiveProfile(ai: AiConfigForUi): ProviderProfileForUi | undefined {
+  return ai.providers.find((p) => p.id === ai.activeProviderId);
+}
