@@ -1,5 +1,5 @@
 //! Vault 根目录下 `.knowforge/config.json`：AI 配置读写、合并默认值、脱敏 IPC。
-//! 不在日志中输出 OpenAI apiKey。
+//! 不在日志中输出 provider apiKey。
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -120,9 +120,7 @@ fn apply_semantic_patch(cfg: &mut SemanticConfig, patch: SemanticConfigPatch) {
 const KNOWFORGE_DIR: &str = ".knowforge";
 const CONFIG_FILE: &str = "config.json";
 
-const DEFAULT_OLLAMA_BASE: &str = "http://127.0.0.1:11434";
 const DEFAULT_OPENAI_BASE: &str = "https://api.openai.com/v1";
-const DEFAULT_OPENAI_MODEL: &str = "gpt-4o-mini";
 
 const TIMEOUT_MS_MIN: u64 = 1_000;
 const TIMEOUT_MS_MAX: u64 = 600_000;
@@ -133,51 +131,27 @@ const TOP_P_MAX: f64 = 1.0;
 
 // --- 内部完整配置（合并后） ---
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ActiveProvider {
-    Ollama,
-    Openai,
-}
-
-impl Default for ActiveProvider {
-    fn default() -> Self {
-        Self::Ollama
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct OllamaProfile {
-    pub base_url: String,
-    pub default_model: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_used_model: Option<String>,
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct OpenAiCompatibleProfile {
+pub struct ProviderProfile {
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
     pub base_url: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
+    #[serde(default)]
     pub default_model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organization_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_used_model: Option<String>,
-}
-
-impl Default for OpenAiCompatibleProfile {
-    fn default() -> Self {
-        Self {
-            base_url: DEFAULT_OPENAI_BASE.to_string(),
-            api_key: String::new(),
-            default_model: DEFAULT_OPENAI_MODEL.to_string(),
-            organization_id: None,
-            last_used_model: None,
-        }
-    }
+    #[serde(default = "default_true")]
+    pub is_remote: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -234,11 +208,9 @@ impl Default for AiPrivacy {
 #[serde(rename_all = "camelCase")]
 pub struct AiConfig {
     #[serde(default)]
-    pub active_provider: ActiveProvider,
+    pub active_provider_id: String,
     #[serde(default)]
-    pub ollama: OllamaProfile,
-    #[serde(default)]
-    pub openai_compatible: OpenAiCompatibleProfile,
+    pub providers: Vec<ProviderProfile>,
     #[serde(default)]
     pub request: AiRequest,
     #[serde(default)]
@@ -257,6 +229,28 @@ pub struct AiConfig {
     pub memory_reflection_mode: String,
 }
 
+impl AiConfig {
+    pub fn active_profile(&self) -> Option<&ProviderProfile> {
+        self.providers.iter().find(|p| p.id == self.active_provider_id)
+    }
+
+    pub fn should_redact_private(&self) -> bool {
+        match self.active_profile() {
+            Some(p) => p.is_remote || !self.privacy.allow_private_content_in_local_llm,
+            None => true,
+        }
+    }
+
+    pub fn active_model_name(&self) -> Option<String> {
+        let p = self.active_profile()?;
+        let last = p.last_used_model.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        last.map(str::to_string).or_else(|| {
+            let d = p.default_model.trim();
+            if d.is_empty() { None } else { Some(d.to_string()) }
+        })
+    }
+}
+
 fn default_tools_enabled() -> bool {
     true
 }
@@ -272,13 +266,8 @@ fn default_memory_reflection_mode() -> String {
 impl Default for AiConfig {
     fn default() -> Self {
         Self {
-            active_provider: ActiveProvider::Ollama,
-            ollama: OllamaProfile {
-                base_url: DEFAULT_OLLAMA_BASE.to_string(),
-                default_model: String::new(),
-                last_used_model: None,
-            },
-            openai_compatible: OpenAiCompatibleProfile::default(),
+            active_provider_id: String::new(),
+            providers: Vec::new(),
             request: AiRequest {
                 timeout_ms: default_timeout_ms(),
                 max_context_tokens: None,
@@ -490,24 +479,6 @@ impl Default for CognitiveConfig {
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-struct OllamaPartial {
-    base_url: Option<String>,
-    default_model: Option<String>,
-    last_used_model: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct OpenAiPartial {
-    base_url: Option<String>,
-    api_key: Option<String>,
-    default_model: Option<String>,
-    organization_id: Option<String>,
-    last_used_model: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 struct AiRequestPartial {
     timeout_ms: Option<u64>,
     max_context_tokens: Option<u64>,
@@ -529,9 +500,13 @@ struct AiPrivacyPartial {
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct AiDiskPartial {
+    active_provider_id: Option<String>,
+    providers: Option<Vec<ProviderProfile>>,
+    // Legacy fields for migration
     active_provider: Option<String>,
-    ollama: Option<OllamaPartial>,
-    openai_compatible: Option<OpenAiPartial>,
+    ollama: Option<Value>,
+    openai_compatible: Option<Value>,
+    // Unchanged
     request: Option<AiRequestPartial>,
     parameters: Option<AiParametersPartial>,
     privacy: Option<AiPrivacyPartial>,
@@ -673,10 +648,22 @@ pub struct VaultConfigPatch {
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct ProviderProfilePatch {
+    pub id: String,
+    pub label: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub default_model: Option<String>,
+    pub organization_id: Option<Option<String>>,
+    pub last_used_model: Option<Option<String>>,
+    pub is_remote: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct AiConfigPatch {
-    pub active_provider: Option<ActiveProvider>,
-    pub ollama: Option<OllamaPatch>,
-    pub openai_compatible: Option<OpenAiCompatiblePatch>,
+    pub active_provider_id: Option<String>,
+    pub providers: Option<Vec<ProviderProfilePatch>>,
     pub request: Option<AiRequestPatch>,
     pub parameters: Option<AiParametersPatch>,
     pub privacy: Option<AiPrivacyPatch>,
@@ -684,25 +671,6 @@ pub struct AiConfigPatch {
     pub planning_enabled: Option<bool>,
     pub memory_enabled: Option<bool>,
     pub memory_reflection_mode: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct OllamaPatch {
-    pub base_url: Option<String>,
-    pub default_model: Option<String>,
-    pub last_used_model: Option<Option<String>>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct OpenAiCompatiblePatch {
-    pub base_url: Option<String>,
-    /// `None`：JSON 未传该字段，不修改密钥；`Some(x)`：写入（`""` 表示清除）
-    pub api_key: Option<String>,
-    pub default_model: Option<String>,
-    pub organization_id: Option<Option<String>>,
-    pub last_used_model: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -813,22 +781,9 @@ pub struct InviteStatsForUi {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AiConfigForUi {
-    pub active_provider: ActiveProvider,
-    pub ollama: OllamaProfile,
-    pub openai_compatible: OpenAiCompatibleForUi,
-    pub request: AiRequest,
-    pub parameters: AiParameters,
-    pub privacy: AiPrivacy,
-    pub tools_enabled: bool,
-    pub planning_enabled: bool,
-    pub memory_enabled: bool,
-    pub memory_reflection_mode: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OpenAiCompatibleForUi {
+pub struct ProviderProfileForUi {
+    pub id: String,
+    pub label: String,
     pub base_url: String,
     pub api_key_present: bool,
     pub default_model: String,
@@ -836,6 +791,21 @@ pub struct OpenAiCompatibleForUi {
     pub organization_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_used_model: Option<String>,
+    pub is_remote: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConfigForUi {
+    pub active_provider_id: String,
+    pub providers: Vec<ProviderProfileForUi>,
+    pub request: AiRequest,
+    pub parameters: AiParameters,
+    pub privacy: AiPrivacy,
+    pub tools_enabled: bool,
+    pub planning_enabled: bool,
+    pub memory_enabled: bool,
+    pub memory_reflection_mode: String,
 }
 
 // --- 路径与 I/O ---
@@ -864,11 +834,6 @@ fn backup_corrupt_config(path: &Path) -> Result<(), String> {
     let bak = parent.join(format!("config.json.broken.{ms}"));
     fs::write(&bak, raw).map_err(|e| format!("failed to write config backup: {e}"))?;
     Ok(())
-}
-
-/// 供设置页 / IPC：将 Ollama base URL 规范为合法 origin（非法则回退默认本机地址）
-pub fn normalize_ollama_base_url(raw: &str) -> String {
-    normalize_http_base(raw, DEFAULT_OLLAMA_BASE)
 }
 
 /// Normalize an OpenAI-compatible base URL — validates scheme but preserves
@@ -911,45 +876,77 @@ fn normalize_http_base(raw: &str, default_url: &str) -> String {
     }
 }
 
-fn parse_active_provider(s: &str) -> ActiveProvider {
-    match s.to_ascii_lowercase().as_str() {
-        "openai" => ActiveProvider::Openai,
-        _ => ActiveProvider::Ollama,
+fn migrate_legacy_providers(partial: &AiDiskPartial) -> Option<(String, Vec<ProviderProfile>)> {
+    let has_legacy = partial.ollama.is_some() || partial.openai_compatible.is_some();
+    if !has_legacy || partial.providers.is_some() {
+        return None;
     }
+
+    let mut providers = Vec::new();
+
+    if let Some(ref ollama) = partial.ollama {
+        let base = ollama.get("baseUrl")
+            .and_then(|v| v.as_str())
+            .unwrap_or("http://127.0.0.1:11434");
+        let base_trimmed = base.trim_end_matches('/');
+        providers.push(ProviderProfile {
+            id: "ollama".to_string(),
+            label: "Local Ollama".to_string(),
+            base_url: format!("{base_trimmed}/v1"),
+            api_key: String::new(),
+            default_model: ollama.get("defaultModel")
+                .and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            organization_id: None,
+            last_used_model: ollama.get("lastUsedModel")
+                .and_then(|v| v.as_str()).map(str::to_string),
+            is_remote: false,
+        });
+    }
+
+    if let Some(ref oai) = partial.openai_compatible {
+        let key = oai.get("apiKey").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if !key.trim().is_empty() {
+            providers.push(ProviderProfile {
+                id: "openai".to_string(),
+                label: "OpenAI".to_string(),
+                base_url: oai.get("baseUrl")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(DEFAULT_OPENAI_BASE).to_string(),
+                api_key: key,
+                default_model: oai.get("defaultModel")
+                    .and_then(|v| v.as_str()).unwrap_or("gpt-4o-mini").to_string(),
+                organization_id: oai.get("organizationId")
+                    .and_then(|v| v.as_str()).map(str::to_string),
+                last_used_model: oai.get("lastUsedModel")
+                    .and_then(|v| v.as_str()).map(str::to_string),
+                is_remote: true,
+            });
+        }
+    }
+
+    let active_id = match partial.active_provider.as_deref() {
+        Some("openai") if providers.iter().any(|p| p.id == "openai") => "openai",
+        _ if providers.iter().any(|p| p.id == "ollama") => "ollama",
+        _ => providers.first().map(|p| p.id.as_str()).unwrap_or(""),
+    };
+
+    Some((active_id.to_string(), providers))
 }
 
 fn merge_ai_from_disk_partial(mut cfg: AiConfig, partial: AiDiskPartial) -> AiConfig {
-    if let Some(s) = partial.active_provider {
-        cfg.active_provider = parse_active_provider(&s);
-    }
-    if let Some(o) = partial.ollama {
-        if let Some(u) = o.base_url {
-            cfg.ollama.base_url = u;
+    // Handle legacy migration
+    if let Some((active_id, providers)) = migrate_legacy_providers(&partial) {
+        cfg.active_provider_id = active_id;
+        cfg.providers = providers;
+    } else {
+        if let Some(id) = partial.active_provider_id {
+            cfg.active_provider_id = id;
         }
-        if let Some(m) = o.default_model {
-            cfg.ollama.default_model = m;
-        }
-        if o.last_used_model.is_some() {
-            cfg.ollama.last_used_model = o.last_used_model;
+        if let Some(providers) = partial.providers {
+            cfg.providers = providers;
         }
     }
-    if let Some(o) = partial.openai_compatible {
-        if let Some(u) = o.base_url {
-            cfg.openai_compatible.base_url = u;
-        }
-        if let Some(k) = o.api_key {
-            cfg.openai_compatible.api_key = k;
-        }
-        if let Some(m) = o.default_model {
-            cfg.openai_compatible.default_model = m;
-        }
-        if o.organization_id.is_some() {
-            cfg.openai_compatible.organization_id = o.organization_id;
-        }
-        if o.last_used_model.is_some() {
-            cfg.openai_compatible.last_used_model = o.last_used_model;
-        }
-    }
+
     if let Some(r) = partial.request {
         if let Some(t) = r.timeout_ms {
             cfg.request.timeout_ms = t;
@@ -988,16 +985,11 @@ fn merge_ai_from_disk_partial(mut cfg: AiConfig, partial: AiDiskPartial) -> AiCo
 }
 
 fn normalize_ai(cfg: &mut AiConfig) {
-    cfg.active_provider = match cfg.active_provider {
-        ActiveProvider::Openai | ActiveProvider::Ollama => cfg.active_provider,
-    };
-    cfg.ollama.base_url = normalize_http_base(&cfg.ollama.base_url, DEFAULT_OLLAMA_BASE);
-    cfg.openai_compatible.base_url = normalize_openai_base_url(&cfg.openai_compatible.base_url);
+    for p in &mut cfg.providers {
+        p.base_url = normalize_openai_base_url(&p.base_url);
+    }
     cfg.request.timeout_ms = cfg.request.timeout_ms.clamp(TIMEOUT_MS_MIN, TIMEOUT_MS_MAX);
-    cfg.parameters.temperature = cfg
-        .parameters
-        .temperature
-        .clamp(TEMP_MIN, TEMP_MAX);
+    cfg.parameters.temperature = cfg.parameters.temperature.clamp(TEMP_MIN, TEMP_MAX);
     if let Some(tp) = cfg.parameters.top_p.as_mut() {
         *tp = (*tp).clamp(TOP_P_MIN, TOP_P_MAX);
     }
@@ -1042,15 +1034,17 @@ fn load_merged_ai(v: &Value) -> Result<AiConfig, String> {
 
 fn to_ai_for_ui(ai: AiConfig) -> AiConfigForUi {
     AiConfigForUi {
-        active_provider: ai.active_provider,
-        ollama: ai.ollama,
-        openai_compatible: OpenAiCompatibleForUi {
-            base_url: ai.openai_compatible.base_url,
-            api_key_present: !ai.openai_compatible.api_key.is_empty(),
-            default_model: ai.openai_compatible.default_model,
-            organization_id: ai.openai_compatible.organization_id,
-            last_used_model: ai.openai_compatible.last_used_model,
-        },
+        active_provider_id: ai.active_provider_id,
+        providers: ai.providers.into_iter().map(|p| ProviderProfileForUi {
+            id: p.id,
+            label: p.label,
+            base_url: p.base_url,
+            api_key_present: !p.api_key.is_empty(),
+            default_model: p.default_model,
+            organization_id: p.organization_id,
+            last_used_model: p.last_used_model,
+            is_remote: p.is_remote,
+        }).collect(),
         request: ai.request,
         parameters: ai.parameters,
         privacy: ai.privacy,
@@ -1287,70 +1281,50 @@ fn apply_cognitive_patch(cfg: &mut CognitiveConfig, patch: CognitiveConfigPatch)
 }
 
 fn apply_ai_patch(cfg: &mut AiConfig, patch: AiConfigPatch) {
-    if let Some(p) = patch.active_provider {
-        cfg.active_provider = p;
+    if let Some(id) = patch.active_provider_id {
+        cfg.active_provider_id = id;
     }
-    if let Some(o) = patch.ollama {
-        if let Some(u) = o.base_url {
-            cfg.ollama.base_url = u;
-        }
-        if let Some(m) = o.default_model {
-            cfg.ollama.default_model = m;
-        }
-        if let Some(l) = o.last_used_model {
-            cfg.ollama.last_used_model = l;
-        }
-    }
-    if let Some(o) = patch.openai_compatible {
-        if let Some(u) = o.base_url {
-            cfg.openai_compatible.base_url = u;
-        }
-        if let Some(k) = o.api_key {
-            cfg.openai_compatible.api_key = k;
-        }
-        if let Some(m) = o.default_model {
-            cfg.openai_compatible.default_model = m;
-        }
-        if let Some(org) = o.organization_id {
-            cfg.openai_compatible.organization_id = org;
-        }
-        if let Some(l) = o.last_used_model {
-            cfg.openai_compatible.last_used_model = l;
+    if let Some(provider_patches) = patch.providers {
+        for pp in provider_patches {
+            if let Some(existing) = cfg.providers.iter_mut().find(|p| p.id == pp.id) {
+                if let Some(l) = pp.label { existing.label = l; }
+                if let Some(u) = pp.base_url { existing.base_url = u; }
+                if let Some(k) = pp.api_key { existing.api_key = k; }
+                if let Some(m) = pp.default_model { existing.default_model = m; }
+                if let Some(o) = pp.organization_id { existing.organization_id = o; }
+                if let Some(l) = pp.last_used_model { existing.last_used_model = l; }
+                if let Some(r) = pp.is_remote { existing.is_remote = r; }
+            } else {
+                cfg.providers.push(ProviderProfile {
+                    id: pp.id,
+                    label: pp.label.unwrap_or_default(),
+                    base_url: pp.base_url.unwrap_or_default(),
+                    api_key: pp.api_key.unwrap_or_default(),
+                    default_model: pp.default_model.unwrap_or_default(),
+                    organization_id: pp.organization_id.flatten(),
+                    last_used_model: pp.last_used_model.flatten(),
+                    is_remote: pp.is_remote.unwrap_or(true),
+                });
+            }
         }
     }
     if let Some(r) = patch.request {
-        if let Some(t) = r.timeout_ms {
-            cfg.request.timeout_ms = t;
-        }
-        if let Some(m) = r.max_context_tokens {
-            cfg.request.max_context_tokens = m;
-        }
+        if let Some(t) = r.timeout_ms { cfg.request.timeout_ms = t; }
+        if let Some(m) = r.max_context_tokens { cfg.request.max_context_tokens = m; }
     }
     if let Some(p) = patch.parameters {
-        if let Some(t) = p.temperature {
-            cfg.parameters.temperature = t;
-        }
-        if let Some(tp) = p.top_p {
-            cfg.parameters.top_p = tp;
-        }
+        if let Some(t) = p.temperature { cfg.parameters.temperature = t; }
+        if let Some(tp) = p.top_p { cfg.parameters.top_p = tp; }
     }
     if let Some(p) = patch.privacy {
         if let Some(v) = p.allow_private_content_in_local_llm {
             cfg.privacy.allow_private_content_in_local_llm = v;
         }
     }
-    if let Some(v) = patch.tools_enabled {
-        cfg.tools_enabled = v;
-    }
-    if let Some(v) = patch.planning_enabled {
-        cfg.planning_enabled = v;
-    }
-    if let Some(v) = patch.memory_enabled {
-        cfg.memory_enabled = v;
-    }
-    if let Some(v) = patch.memory_reflection_mode {
-        cfg.memory_reflection_mode = v;
-    }
+    if let Some(v) = patch.tools_enabled { cfg.tools_enabled = v; }
+    if let Some(v) = patch.planning_enabled { cfg.planning_enabled = v; }
+    if let Some(v) = patch.memory_enabled { cfg.memory_enabled = v; }
+    if let Some(v) = patch.memory_reflection_mode { cfg.memory_reflection_mode = v; }
 }
 
 fn atomic_write_json(path: &Path, value: &Value) -> Result<(), String> {
@@ -1367,14 +1341,14 @@ fn atomic_write_json(path: &Path, value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// LLM 运行时读取完整 `AiConfig`（含 OpenAI 密钥）；**禁止**经 IPC 返回给前端。
+/// LLM 运行时读取完整 `AiConfig`（含 API 密钥）；**禁止**经 IPC 返回给前端。
 pub fn load_ai_config_internal(root: &Path) -> Result<AiConfig, String> {
     let path = config_path(root);
     let v = read_root_value(&path)?;
     load_merged_ai(&v)
 }
 
-/// 供 `get_vault_config_for_ui`：合并默认、脱敏 OpenAI 密钥
+/// 供 `get_vault_config_for_ui`：合并默认、脱敏 API 密钥
 pub fn load_for_ui(root: &Path) -> Result<VaultConfigForUi, String> {
     let path = config_path(root);
     let v = read_root_value(&path)?;
@@ -1488,60 +1462,142 @@ mod tests {
     use super::*;
 
     #[test]
-    fn merge_defaults_ollama() {
+    fn merge_defaults_empty() {
         let cfg = load_merged_ai(&json!({})).unwrap();
-        assert_eq!(cfg.active_provider, ActiveProvider::Ollama);
-        assert_eq!(cfg.ollama.base_url, DEFAULT_OLLAMA_BASE);
+        assert!(cfg.providers.is_empty());
+        assert!(cfg.active_provider_id.is_empty());
     }
 
     #[test]
-    fn patch_ollama_preserves_openai_key() {
-        let mut v = json!({
-            "ai": {
-                "openaiCompatible": { "apiKey": "secret", "baseUrl": "https://api.openai.com/v1", "defaultModel": "gpt-4o-mini" }
-            }
-        });
-        // 直接在内存上测合并逻辑
-        let mut merged = load_merged_ai(&v).unwrap();
-        apply_ai_patch(
-            &mut merged,
-            AiConfigPatch {
-                ollama: Some(OllamaPatch {
-                    base_url: Some("http://127.0.0.1:11435".to_string()),
-                    default_model: Some("llama".to_string()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-        );
-        normalize_ai(&mut merged);
-        assert_eq!(merged.openai_compatible.api_key, "secret");
-        assert_eq!(merged.ollama.default_model, "llama");
-        v["ai"] = serde_json::to_value(&merged).unwrap();
-        let again = load_merged_ai(&v).unwrap();
-        assert_eq!(again.openai_compatible.api_key, "secret");
-    }
-
-    #[test]
-    fn clear_api_key_with_empty_string() {
+    fn migrate_legacy_ollama_config() {
         let v = json!({
             "ai": {
-                "openaiCompatible": { "apiKey": "x", "baseUrl": "https://api.openai.com/v1", "defaultModel": "gpt-4o-mini" }
+                "activeProvider": "ollama",
+                "ollama": {
+                    "baseUrl": "http://127.0.0.1:11434",
+                    "defaultModel": "llama3"
+                }
             }
         });
-        let mut merged = load_merged_ai(&v).unwrap();
-        apply_ai_patch(
-            &mut merged,
-            AiConfigPatch {
-                openai_compatible: Some(OpenAiCompatiblePatch {
-                    api_key: Some(String::new()),
-                    ..Default::default()
-                }),
+        let cfg = load_merged_ai(&v).unwrap();
+        assert_eq!(cfg.active_provider_id, "ollama");
+        assert_eq!(cfg.providers.len(), 1);
+        assert_eq!(cfg.providers[0].id, "ollama");
+        assert_eq!(cfg.providers[0].base_url, "http://127.0.0.1:11434/v1");
+        assert_eq!(cfg.providers[0].default_model, "llama3");
+        assert!(!cfg.providers[0].is_remote);
+    }
+
+    #[test]
+    fn migrate_legacy_both_providers() {
+        let v = json!({
+            "ai": {
+                "activeProvider": "openai",
+                "ollama": {
+                    "baseUrl": "http://127.0.0.1:11434",
+                    "defaultModel": "llama3"
+                },
+                "openaiCompatible": {
+                    "apiKey": "secret",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "defaultModel": "gpt-4o-mini"
+                }
+            }
+        });
+        let cfg = load_merged_ai(&v).unwrap();
+        assert_eq!(cfg.active_provider_id, "openai");
+        assert_eq!(cfg.providers.len(), 2);
+        assert_eq!(cfg.providers[1].api_key, "secret");
+        assert!(cfg.providers[1].is_remote);
+    }
+
+    #[test]
+    fn new_format_providers() {
+        let v = json!({
+            "ai": {
+                "activeProviderId": "ds",
+                "providers": [{
+                    "id": "ds",
+                    "label": "DeepSeek",
+                    "baseUrl": "https://api.deepseek.com",
+                    "apiKey": "key",
+                    "defaultModel": "deepseek-chat",
+                    "isRemote": true
+                }]
+            }
+        });
+        let cfg = load_merged_ai(&v).unwrap();
+        assert_eq!(cfg.active_provider_id, "ds");
+        assert_eq!(cfg.providers.len(), 1);
+        assert_eq!(cfg.providers[0].default_model, "deepseek-chat");
+    }
+
+    #[test]
+    fn should_redact_private_remote() {
+        let mut cfg = AiConfig::default();
+        cfg.providers.push(ProviderProfile {
+            id: "cloud".to_string(),
+            label: "Cloud".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: "key".to_string(),
+            default_model: "gpt-4o".to_string(),
+            organization_id: None,
+            last_used_model: None,
+            is_remote: true,
+        });
+        cfg.active_provider_id = "cloud".to_string();
+        assert!(cfg.should_redact_private());
+    }
+
+    #[test]
+    fn should_not_redact_private_local_opt_in() {
+        let mut cfg = AiConfig::default();
+        cfg.providers.push(ProviderProfile {
+            id: "local".to_string(),
+            label: "Local".to_string(),
+            base_url: "http://127.0.0.1:11434/v1".to_string(),
+            api_key: String::new(),
+            default_model: "llama3".to_string(),
+            organization_id: None,
+            last_used_model: None,
+            is_remote: false,
+        });
+        cfg.active_provider_id = "local".to_string();
+        cfg.privacy.allow_private_content_in_local_llm = true;
+        assert!(!cfg.should_redact_private());
+    }
+
+    #[test]
+    fn active_model_name_prefers_last_used() {
+        let mut cfg = AiConfig::default();
+        cfg.providers.push(ProviderProfile {
+            id: "test".to_string(),
+            label: "Test".to_string(),
+            base_url: "http://localhost".to_string(),
+            api_key: String::new(),
+            default_model: "default-model".to_string(),
+            organization_id: None,
+            last_used_model: Some("last-model".to_string()),
+            is_remote: false,
+        });
+        cfg.active_provider_id = "test".to_string();
+        assert_eq!(cfg.active_model_name(), Some("last-model".to_string()));
+    }
+
+    #[test]
+    fn patch_adds_new_provider() {
+        let mut cfg = AiConfig::default();
+        apply_ai_patch(&mut cfg, AiConfigPatch {
+            providers: Some(vec![ProviderProfilePatch {
+                id: "new".to_string(),
+                label: Some("New".to_string()),
+                base_url: Some("https://api.example.com".to_string()),
                 ..Default::default()
-            },
-        );
-        normalize_ai(&mut merged);
-        assert!(merged.openai_compatible.api_key.is_empty());
+            }]),
+            ..Default::default()
+        });
+        assert_eq!(cfg.providers.len(), 1);
+        assert_eq!(cfg.providers[0].id, "new");
     }
 
     #[test]

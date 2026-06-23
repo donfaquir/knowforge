@@ -6,7 +6,7 @@ use tauri::AppHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::LlmChatMessage;
-use crate::vault_config::{ActiveProvider, AiConfig};
+use crate::vault_config::{AiConfig, ProviderProfile};
 
 #[derive(Debug, Clone)]
 pub struct NormalizedToolCall {
@@ -76,96 +76,61 @@ pub fn resolve_model_name(last_used: Option<&str>, default_model: &str) -> Optio
         })
 }
 
+/// Create a provider from the active profile in the config.
 pub fn create_provider(
     config: &AiConfig,
     model_override: Option<&str>,
 ) -> Result<Arc<dyn LlmProvider>, String> {
-    match config.active_provider {
-        ActiveProvider::Ollama => {
-            let model = model_override
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .or_else(|| {
-                    resolve_model_name(
-                        config.ollama.last_used_model.as_deref(),
-                        &config.ollama.default_model,
-                    )
-                })
-                .ok_or("No model selected. Choose a model in settings.")?;
-            Ok(Arc::new(super::provider_ollama::OllamaProvider::new(
-                config.ollama.base_url.clone(),
-                model,
-                config.parameters.temperature,
-                config.parameters.top_p,
-                config.request.timeout_ms,
-            )))
-        }
-        ActiveProvider::Openai => {
-            let model = model_override
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .or_else(|| {
-                    resolve_model_name(
-                        config.openai_compatible.last_used_model.as_deref(),
-                        &config.openai_compatible.default_model,
-                    )
-                })
-                .ok_or("No OpenAI model selected. Choose a model in settings.")?;
-            if config.openai_compatible.api_key.trim().is_empty() {
-                return Err("OpenAI API key is required. Set it in settings.".to_string());
-            }
-            Ok(Arc::new(
-                super::provider_openai::OpenAiCompatibleProvider::new(
-                    config.openai_compatible.base_url.clone(),
-                    config.openai_compatible.api_key.clone(),
-                    model,
-                    config.parameters.temperature,
-                    config.parameters.top_p,
-                    config.request.timeout_ms,
-                    config.openai_compatible.organization_id.clone(),
-                ),
-            ))
-        }
-    }
+    let profile = config
+        .active_profile()
+        .ok_or("No active provider configured. Choose a provider in settings.")?;
+    create_provider_from_profile(profile, config, model_override)
 }
 
-pub fn create_cloud_provider(config: &AiConfig) -> Result<Arc<dyn LlmProvider>, String> {
-    let model = resolve_model_name(
-        config.openai_compatible.last_used_model.as_deref(),
-        &config.openai_compatible.default_model,
-    )
-    .ok_or("No OpenAI model configured for cloud planning.")?;
-    if config.openai_compatible.api_key.trim().is_empty() {
-        return Err("OpenAI API key is required for tiered mode.".to_string());
+/// Create a provider for a specific profile identified by `provider_id`.
+pub fn create_provider_by_id(
+    config: &AiConfig,
+    provider_id: &str,
+    model_override: Option<&str>,
+) -> Result<Arc<dyn LlmProvider>, String> {
+    let profile = config
+        .providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .ok_or_else(|| format!("Provider '{}' not found in config.", provider_id))?;
+    create_provider_from_profile(profile, config, model_override)
+}
+
+fn create_provider_from_profile(
+    profile: &ProviderProfile,
+    config: &AiConfig,
+    model_override: Option<&str>,
+) -> Result<Arc<dyn LlmProvider>, String> {
+    let model = model_override
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| resolve_model_name(profile.last_used_model.as_deref(), &profile.default_model))
+        .ok_or("No model selected. Choose a model in settings.")?;
+
+    if profile.is_remote && profile.api_key.trim().is_empty() {
+        return Err(format!(
+            "API key is required for provider '{}'. Set it in settings.",
+            profile.label
+        ));
     }
+
     Ok(Arc::new(
         super::provider_openai::OpenAiCompatibleProvider::new(
-            config.openai_compatible.base_url.clone(),
-            config.openai_compatible.api_key.clone(),
+            profile.base_url.clone(),
+            profile.api_key.clone(),
             model,
             config.parameters.temperature,
             config.parameters.top_p,
             config.request.timeout_ms,
-            config.openai_compatible.organization_id.clone(),
+            profile.organization_id.clone(),
         ),
     ))
-}
-
-pub fn create_local_provider(config: &AiConfig) -> Result<Arc<dyn LlmProvider>, String> {
-    let model = resolve_model_name(
-        config.ollama.last_used_model.as_deref(),
-        &config.ollama.default_model,
-    )
-    .ok_or("No Ollama model configured for local generation.")?;
-    Ok(Arc::new(super::provider_ollama::OllamaProvider::new(
-        config.ollama.base_url.clone(),
-        model,
-        config.parameters.temperature,
-        config.parameters.top_p,
-        config.request.timeout_ms,
-    )))
 }
 
 #[cfg(test)]

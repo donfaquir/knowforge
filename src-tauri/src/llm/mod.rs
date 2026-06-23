@@ -8,36 +8,23 @@ pub(crate) mod planning;
 pub(crate) mod provider;
 pub(crate) mod provider_ollama;
 pub(crate) mod provider_openai;
-pub(crate) mod tiered;
 pub mod memory;
 
 pub use provider::{
-    create_provider, resolve_model_name, CompletionOverrides, LlmProvider,
+    create_provider, create_provider_by_id, resolve_model_name, CompletionOverrides, LlmProvider,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentMode {
     Direct,
-    LocalPlanning,
-    Tiered,
+    Planning,
 }
 
 fn determine_agent_mode(ai: &vault_config::AiConfig) -> AgentMode {
-    if !ai.planning_enabled {
-        return AgentMode::Direct;
-    }
-
-    let has_ollama = ai.ollama.last_used_model.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some()
-        || !ai.ollama.default_model.trim().is_empty();
-
-    let has_openai = !ai.openai_compatible.api_key.trim().is_empty()
-        && (ai.openai_compatible.last_used_model.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some()
-            || !ai.openai_compatible.default_model.trim().is_empty());
-
-    if has_ollama && has_openai {
-        AgentMode::Tiered
+    if ai.planning_enabled {
+        AgentMode::Planning
     } else {
-        AgentMode::LocalPlanning
+        AgentMode::Direct
     }
 }
 
@@ -48,7 +35,7 @@ use crate::semantic_index;
 use crate::skills::SkillRegistry;
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::{ToolFilter, ToolRegistry};
-use crate::vault_config::{self, ActiveProvider, DepthMode};
+use crate::vault_config::{self, DepthMode};
 use crate::vault_context_search::{self, VaultSnippetKind};
 use std::path::PathBuf;
 use chrono::Utc;
@@ -436,9 +423,7 @@ fn assemble_ollama_messages(
     if let Some(nc) = &args.note_context {
         note_privacy::validate_workspace_rel_path(&nc.rel_path)?;
         let is_private = note_privacy::markdown_treat_as_kf_private(&nc.markdown_for_gate);
-        let redact = is_private
-            && (matches!(ai.active_provider, ActiveProvider::Openai)
-                || !ai.privacy.allow_private_content_in_local_llm);
+        let redact = is_private && ai.should_redact_private();
         reply_context_sources.current_note = Some(ReplyCurrentNoteSource {
             rel_path: nc.rel_path.clone(),
             mode: if redact {
@@ -712,8 +697,8 @@ pub async fn list_ollama_models(
         .await
         .map_err(|e| e.to_string())??;
     let base = match args.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(raw) => vault_config::normalize_ollama_base_url(raw),
-        None => ai.ollama.base_url.clone(),
+        Some(raw) => vault_config::normalize_openai_base_url(raw),
+        None => ai.active_profile().map(|p| p.base_url.clone()).unwrap_or_default(),
     };
     let timeout_ms = ai.request.timeout_ms;
     ollama::list_models(&base, timeout_ms).await
@@ -738,13 +723,14 @@ pub async fn list_openai_models(
         .await
         .map_err(|e| e.to_string())??;
 
+    let profile = ai.active_profile();
     let base = match args.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => vault_config::normalize_openai_base_url(raw),
-        None => ai.openai_compatible.base_url.clone(),
+        None => profile.map(|p| p.base_url.clone()).unwrap_or_default(),
     };
     let key = match args.api_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(k) => k.to_string(),
-        None => ai.openai_compatible.api_key.clone(),
+        None => profile.map(|p| p.api_key.clone()).unwrap_or_default(),
     };
     if key.is_empty() {
         return Err("API key is required".to_string());
@@ -757,7 +743,7 @@ pub async fn list_openai_models(
         ai.parameters.temperature,
         ai.parameters.top_p,
         ai.request.timeout_ms,
-        ai.openai_compatible.organization_id.clone(),
+        profile.and_then(|p| p.organization_id.clone()),
     );
     provider.list_models().await
 }
@@ -852,9 +838,7 @@ pub async fn start_ollama_chat_stream(
 
     tokio::spawn(async move {
         let memory_manager: agent_loop::SharedMemoryManager = if memory_enabled {
-            let extraction_provider = provider::create_cloud_provider(&ai_for_memory)
-                .or_else(|_| provider::create_local_provider(&ai_for_memory))
-                .ok();
+            let extraction_provider = provider::create_provider(&ai_for_memory, None).ok();
             let mgr = memory::MemoryManager::new(workspace_root.clone(), extraction_provider);
             if let Some(mem_msg) = mgr.format_for_injection() {
                 let pos = if messages.is_empty() { 0 } else { 1 };
@@ -910,7 +894,7 @@ pub async fn start_ollama_chat_stream(
                     )
                     .await;
                 }
-                AgentMode::LocalPlanning => {
+                AgentMode::Planning => {
                     let _ = planning::run_planned_agent(
                         app_h.clone(),
                         sid.clone(),
@@ -929,50 +913,6 @@ pub async fn start_ollama_chat_stream(
                         memory_manager.clone(),
                     )
                     .await;
-                }
-                AgentMode::Tiered => {
-                    let cloud_ok = provider::create_cloud_provider(&ai).ok();
-                    let local_ok = provider::create_local_provider(&ai).ok();
-                    if let (Some(cloud), Some(local)) = (cloud_ok, local_ok) {
-                        let _ = tiered::run_tiered_agent(
-                            cloud,
-                            local,
-                            app_h.clone(),
-                            sid.clone(),
-                            messages,
-                            tools_json,
-                            registry_arc,
-                            ctx_factory_arc,
-                            workspace_root,
-                            Some(cache),
-                            Some(bundle),
-                            cancel,
-                            loop_config,
-                            conversation_id,
-                            approval_arc,
-                            memory_manager.clone(),
-                        )
-                        .await;
-                    } else {
-                        let _ = planning::run_planned_agent(
-                            app_h.clone(),
-                            sid.clone(),
-                            messages,
-                            tools_json,
-                            registry_arc,
-                            ctx_factory_arc,
-                            workspace_root,
-                            Some(cache),
-                            Some(bundle),
-                            provider.clone(),
-                            cancel,
-                            loop_config,
-                            conversation_id,
-                            approval_arc,
-                            memory_manager.clone(),
-                        )
-                        .await;
-                    }
                 }
             }
 
@@ -1230,31 +1170,10 @@ mod agent_mode_tests {
     }
 
     #[test]
-    fn local_planning_with_single_provider() {
+    fn planning_when_enabled() {
         let mut ai = base_config();
         ai.planning_enabled = true;
-        ai.ollama.default_model = "llama3".to_string();
-        assert_eq!(determine_agent_mode(&ai), AgentMode::LocalPlanning);
-    }
-
-    #[test]
-    fn tiered_when_both_configured() {
-        let mut ai = base_config();
-        ai.planning_enabled = true;
-        ai.ollama.default_model = "llama3".to_string();
-        ai.openai_compatible.api_key = "sk-test".to_string();
-        ai.openai_compatible.default_model = "gpt-4o".to_string();
-        assert_eq!(determine_agent_mode(&ai), AgentMode::Tiered);
-    }
-
-    #[test]
-    fn local_planning_when_openai_has_no_key() {
-        let mut ai = base_config();
-        ai.planning_enabled = true;
-        ai.ollama.default_model = "llama3".to_string();
-        ai.openai_compatible.default_model = "gpt-4o".to_string();
-        // No API key
-        assert_eq!(determine_agent_mode(&ai), AgentMode::LocalPlanning);
+        assert_eq!(determine_agent_mode(&ai), AgentMode::Planning);
     }
 }
 

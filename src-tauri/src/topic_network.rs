@@ -905,7 +905,7 @@ struct TopicExtractProgressPayload {
 /// 全量：扫描 vault、增量提取、构图
 pub async fn build_topic_network(vault_root: &Path, app: &AppHandle) -> Result<TopicNetworkForUi, String> {
     let ai = crate::vault_config::load_ai_config_internal(vault_root)?;
-    let ollama_ok = create_provider(&ai, None).is_ok();
+    let llm_available = create_provider(&ai, None).is_ok();
 
     let topic_conn = open_topic_db(vault_root)?;
     let mut paths: Vec<PathBuf> = Vec::new();
@@ -913,7 +913,7 @@ pub async fn build_topic_network(vault_root: &Path, app: &AppHandle) -> Result<T
 
     let cache_dir = semantic_index::default_model_cache_dir();
     let bundle_dir = semantic_index::resolve_bundle_model_dir(app);
-    let emb_model = if ollama_ok {
+    let emb_model = if llm_available {
         semantic_index::get_cached_or_load_model(&cache_dir, &bundle_dir).ok()
     } else {
         None
@@ -961,7 +961,7 @@ pub async fn build_topic_network(vault_root: &Path, app: &AppHandle) -> Result<T
             }
         }
 
-        if !ollama_ok {
+        if !llm_available {
             continue;
         }
 
@@ -975,17 +975,9 @@ pub async fn build_topic_network(vault_root: &Path, app: &AppHandle) -> Result<T
         if raw_topics.len() < MIN_TOPICS_PER_DOC {
             continue;
         }
-        let model_id = match ai.active_provider {
-            crate::vault_config::ActiveProvider::Ollama => crate::llm::resolve_model_name(
-                ai.ollama.last_used_model.as_deref(),
-                &ai.ollama.default_model,
-            ),
-            crate::vault_config::ActiveProvider::Openai => crate::llm::resolve_model_name(
-                ai.openai_compatible.last_used_model.as_deref(),
-                &ai.openai_compatible.default_model,
-            ),
-        }
-        .unwrap_or_else(|| MODEL_ID_FALLBACK.to_string());
+        let model_id = ai
+            .active_model_name()
+            .unwrap_or_else(|| MODEL_ID_FALLBACK.to_string());
 
         let mut normalized: Vec<(String, f64)> = Vec::new();
         let mut new_aliases: Vec<(String, String)> = Vec::new();
@@ -1029,7 +1021,7 @@ pub async fn build_topic_network(vault_root: &Path, app: &AppHandle) -> Result<T
     }
 
     let mut graph = load_topic_network_graph(vault_root, &topic_conn)?;
-    graph.meta.extract_skipped_no_llm = !ollama_ok;
+    graph.meta.extract_skipped_no_llm = !llm_available;
     Ok(graph)
 }
 

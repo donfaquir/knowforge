@@ -1,7 +1,7 @@
 //! 用户态 Vault 全文关键词检索：多文件、多命中、行号与预览；与 AI 用的 `search_workspace_context` 分离。
 
 use crate::note_privacy;
-use crate::vault_config::{self, ActiveProvider};
+use crate::vault_config;
 use crate::vault_context_search::{enumerate_nonoverlapping_ci_byte_ranges, enumerate_nonoverlapping_cs_byte_ranges, rel_path_from_root, walk_markdown_files};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -19,7 +19,7 @@ const DEFAULT_DEADLINE_MS: u64 = 15_000;
 const PREVIEW_MAX_CHARS: usize = 240;
 
 fn redact_private_snippets(ai: &vault_config::AiConfig) -> bool {
-    matches!(ai.active_provider, ActiveProvider::Openai) || !ai.privacy.allow_private_content_in_local_llm
+    ai.should_redact_private()
 }
 
 /// 1-based 行号与列号（列按 Unicode 标量计数）
