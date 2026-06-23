@@ -115,13 +115,6 @@ fn create_provider_from_profile(
         .or_else(|| resolve_model_name(profile.last_used_model.as_deref(), &profile.default_model))
         .ok_or("No model selected. Choose a model in settings.")?;
 
-    if profile.is_remote && profile.api_key.trim().is_empty() {
-        return Err(format!(
-            "API key is required for provider '{}'. Set it in settings.",
-            profile.label
-        ));
-    }
-
     Ok(Arc::new(
         super::provider_impl::UnifiedProvider::new(
             profile.base_url.clone(),
