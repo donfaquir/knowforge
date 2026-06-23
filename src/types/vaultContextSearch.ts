@@ -1,4 +1,4 @@
-/** 与 `search_workspace_context` / `start_ollama_chat_stream` 的 vaultContext 对齐（camelCase） */
+/** Aligned with `search_workspace_context` / `start_chat_stream` vaultContext (camelCase) */
 
 export type VaultSnippetKind = "excerpt" | "privateOmitted";
 

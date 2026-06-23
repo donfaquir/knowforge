@@ -9,7 +9,7 @@ import { useTranslation } from "react-i18next";
 import { useThoughtMgmtAiConversationSession } from "../contexts/ThoughtMgmtAiConversationSessionContext";
 import type { ThoughtFocusContext } from "../types/aiConversation";
 import type { SearchWorkspaceContextResponse } from "../types/vaultContextSearch";
-import type { ActiveProvider } from "../types/vaultAiConfig";
+import type { ProviderProfileForUi } from "../types/vaultAiConfig";
 import { markdownTreatAsKfPrivateForUi } from "../utils/kfPrivateMarkdown";
 import { useAiNoteContext } from "../contexts/AiNoteContext";
 import type { ReplyContextSources } from "../types/replyContextSources";
@@ -27,12 +27,14 @@ type StartStreamResponse = {
   sessionId: string;
   resolvedDepth?: typeof DEPTH_MODE;
   replyContextSources: ReplyContextSources;
+  providerLabel: string;
+  modelName: string;
 };
 
 type VaultCfgForSend = {
   ai?: {
-    activeProvider?: ActiveProvider;
-    ollama?: { defaultModel?: string; lastUsedModel?: string };
+    activeProviderId?: string;
+    providers?: ProviderProfileForUi[];
     privacy?: { allowPrivateContentInLocalLlm?: boolean };
   };
 };
@@ -399,8 +401,8 @@ export function ThoughtMgmtAiConversationPanel({
     let allowPrivateLocal = false;
     try {
       const cfg = await invoke<VaultCfgForSend>("get_vault_config_for_ui");
-      const o = cfg.ai?.ollama;
-      modelName = (o?.lastUsedModel?.trim() || o?.defaultModel?.trim()) ?? "";
+      const p = cfg.ai?.providers?.find((x) => x.id === cfg.ai?.activeProviderId);
+      modelName = (p?.lastUsedModel?.trim() || p?.defaultModel?.trim()) ?? "";
       allowPrivateLocal = cfg.ai?.privacy?.allowPrivateContentInLocalLlm === true;
       if (!modelName) {
         setErrorBanner(t("aiPanel.noModel"));
@@ -493,7 +495,7 @@ export function ThoughtMgmtAiConversationPanel({
       if (tf != null && tf.thoughtId.trim() !== "" && tf.thoughtBody.trim() !== "") {
         streamArgs.thoughtFocusContext = tf;
       }
-      const res = await invoke<StartStreamResponse>("start_ollama_chat_stream", {
+      const res = await invoke<StartStreamResponse>("start_chat_stream", {
         args: streamArgs,
       });
       if (vaultSearchEpochRef.current !== searchEpoch) {
@@ -512,6 +514,8 @@ export function ThoughtMgmtAiConversationPanel({
           meta: {
             timing: { startMs: Date.now() },
             replyContextSources: res.replyContextSources,
+            providerLabel: res.providerLabel,
+            modelName: res.modelName,
           },
         },
       ]);
@@ -701,7 +705,7 @@ export function ThoughtMgmtAiConversationPanel({
                       </>
                     ) : null}
                     {m.meta?.timing ? (
-                      <StreamingTimer timing={m.meta.timing} streaming={!!m.streaming} />
+                      <StreamingTimer timing={m.meta.timing} streaming={!!m.streaming} modelName={m.meta.modelName} />
                     ) : null}
                   </>
                 ) : (

@@ -1,4 +1,4 @@
-//! 写作教练：段落级论证检查 + Vault 关键词关联（Ollama JSON）
+//! Writing coach: paragraph-level argumentation check + vault keyword linkage (JSON mode).
 
 use crate::llm::create_provider;
 use crate::llm::LlmChatMessage;

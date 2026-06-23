@@ -1,43 +1,26 @@
-//! Rust 侧 Ollama 代理：模型列表、流式 chat、会话中止（任务 04）。
+//! LLM integration: model listing, streaming chat, agent loop, session abort.
 
-pub(crate) mod ollama;
 pub(crate) mod agent_loop;
 pub mod approval;
 pub(crate) mod context_guard;
 pub(crate) mod planning;
 pub(crate) mod provider;
-pub(crate) mod provider_ollama;
-pub(crate) mod provider_openai;
-pub(crate) mod tiered;
+pub(crate) mod provider_impl;
 pub mod memory;
 
-pub use provider::{
-    create_provider, resolve_model_name, CompletionOverrides, LlmProvider,
-};
+pub use provider::{create_provider, create_provider_by_id, CompletionOverrides, LlmProvider};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentMode {
     Direct,
-    LocalPlanning,
-    Tiered,
+    Planning,
 }
 
 fn determine_agent_mode(ai: &vault_config::AiConfig) -> AgentMode {
-    if !ai.planning_enabled {
-        return AgentMode::Direct;
-    }
-
-    let has_ollama = ai.ollama.last_used_model.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some()
-        || !ai.ollama.default_model.trim().is_empty();
-
-    let has_openai = !ai.openai_compatible.api_key.trim().is_empty()
-        && (ai.openai_compatible.last_used_model.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some()
-            || !ai.openai_compatible.default_model.trim().is_empty());
-
-    if has_ollama && has_openai {
-        AgentMode::Tiered
+    if ai.planning_enabled {
+        AgentMode::Planning
     } else {
-        AgentMode::LocalPlanning
+        AgentMode::Direct
     }
 }
 
@@ -48,7 +31,7 @@ use crate::semantic_index;
 use crate::skills::SkillRegistry;
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::{ToolFilter, ToolRegistry};
-use crate::vault_config::{self, ActiveProvider, DepthMode};
+use crate::vault_config::{self, DepthMode};
 use crate::vault_context_search::{self, VaultSnippetKind};
 use std::path::PathBuf;
 use chrono::Utc;
@@ -123,7 +106,6 @@ pub struct LlmToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmToolCallFunction {
     pub name: String,
-    /// Ollama 返回的已解析 JSON 参数对象。
     pub arguments: Value,
 }
 
@@ -152,14 +134,14 @@ pub struct ThoughtFocusContextIn {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct OllamaChatStreamStartArgs {
+pub struct ChatStreamStartArgs {
     /// 仅 `user` / `assistant`；笔记 system 由本模块根据 `note_context` 与配置拼装。
     pub messages: Vec<LlmChatMessage>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub note_context: Option<NoteContextIn>,
-    /// 由 `search_workspace_context` 结果回传；出站前在 `assemble_ollama_messages` 内按磁盘重算摘录。
+    /// 由 `search_workspace_context` 结果回传；出站前在 `assemble_messages` 内按磁盘重算摘录。
     #[serde(default)]
     pub vault_context: Option<VaultContextIn>,
     /// 当前深度模式（迭代 3）；影响系统提示的详细程度与风格。
@@ -256,12 +238,14 @@ pub struct ReplyThoughtFocusSource {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct OllamaChatStreamStartResponse {
+pub struct ChatStreamStartResponse {
     pub session_id: String,
     /// 仅当请求 `depthMode` 为 `auto` 时返回：本次启发式解析出的具体档位。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_depth: Option<DepthMode>,
     pub reply_context_sources: ReplyContextSources,
+    pub provider_label: String,
+    pub model_name: String,
 }
 
 /// Auto 档：按最近一条用户消息长度做轻量启发式（与 `depth_decisions` 日志 reason 对齐）。
@@ -423,10 +407,10 @@ fn build_skills_system_block(
 }
 
 /// 合并 `note_context`、可选 `vault_context` 与对话轮次，并校验角色。
-fn assemble_ollama_messages(
+fn assemble_messages(
     canonical_root: &Path,
     ai: &vault_config::AiConfig,
-    args: &OllamaChatStreamStartArgs,
+    args: &ChatStreamStartArgs,
     embed_cache_bundle: Option<(PathBuf, PathBuf)>,
     auto_invocable_skills: &[(String, String, Option<String>)],
 ) -> Result<AssembleOutcome, String> {
@@ -436,9 +420,7 @@ fn assemble_ollama_messages(
     if let Some(nc) = &args.note_context {
         note_privacy::validate_workspace_rel_path(&nc.rel_path)?;
         let is_private = note_privacy::markdown_treat_as_kf_private(&nc.markdown_for_gate);
-        let redact = is_private
-            && (matches!(ai.active_provider, ActiveProvider::Openai)
-                || !ai.privacy.allow_private_content_in_local_llm);
+        let redact = is_private && ai.should_redact_private();
         reply_context_sources.current_note = Some(ReplyCurrentNoteSource {
             rel_path: nc.rel_path.clone(),
             mode: if redact {
@@ -695,33 +677,9 @@ pub(super) fn emit_error(app: &AppHandle, session_id: &str, code: Option<&str>, 
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct ListOllamaModelsArgs {
-    /// 非空时优先使用（设置页未保存的 URL）；否则读磁盘配置
+pub struct ListModelsArgs {
     #[serde(default)]
-    pub base_url: Option<String>,
-}
-
-/// 列出 Ollama 模型；默认用配置中的 `ollama.baseUrl`，`args.baseUrl` 非空时覆盖（便于设置页探测）。
-#[tauri::command]
-pub async fn list_ollama_models(
-    state: State<'_, crate::WorkspaceState>,
-    args: ListOllamaModelsArgs,
-) -> Result<Vec<String>, String> {
-    let root = lock_workspace_root(&state)?;
-    let ai = tauri::async_runtime::spawn_blocking(move || vault_config::load_ai_config_internal(&root))
-        .await
-        .map_err(|e| e.to_string())??;
-    let base = match args.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(raw) => vault_config::normalize_ollama_base_url(raw),
-        None => ai.ollama.base_url.clone(),
-    };
-    let timeout_ms = ai.request.timeout_ms;
-    ollama::list_models(&base, timeout_ms).await
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ListOpenAiModelsArgs {
+    pub provider_id: Option<String>,
     #[serde(default)]
     pub base_url: Option<String>,
     #[serde(default)]
@@ -729,41 +687,42 @@ pub struct ListOpenAiModelsArgs {
 }
 
 #[tauri::command]
-pub async fn list_openai_models(
+pub async fn list_models(
     state: State<'_, crate::WorkspaceState>,
-    args: ListOpenAiModelsArgs,
+    args: ListModelsArgs,
 ) -> Result<Vec<String>, String> {
     let root = lock_workspace_root(&state)?;
     let ai = tauri::async_runtime::spawn_blocking(move || vault_config::load_ai_config_internal(&root))
         .await
         .map_err(|e| e.to_string())??;
 
+    let id = args.provider_id.as_deref().unwrap_or(&ai.active_provider_id);
+    let profile = ai.providers.iter().find(|p| p.id == id).or_else(|| ai.active_profile());
+
     let base = match args.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => vault_config::normalize_openai_base_url(raw),
-        None => ai.openai_compatible.base_url.clone(),
+        None => profile.map(|p| p.base_url.clone()).unwrap_or_default(),
     };
     let key = match args.api_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(k) => k.to_string(),
-        None => ai.openai_compatible.api_key.clone(),
+        None => profile.map(|p| p.api_key.clone()).unwrap_or_default(),
     };
-    if key.is_empty() {
-        return Err("API key is required".to_string());
-    }
 
-    let provider = provider_openai::OpenAiCompatibleProvider::new(
+    let provider = provider_impl::UnifiedProvider::new(
         base,
         key,
         String::new(),
         ai.parameters.temperature,
         ai.parameters.top_p,
         ai.request.timeout_ms,
-        ai.openai_compatible.organization_id.clone(),
+        profile.and_then(|p| p.organization_id.clone()),
+        profile.map(|p| p.is_remote).unwrap_or(true),
     );
     provider.list_models().await
 }
 
 #[tauri::command]
-pub async fn start_ollama_chat_stream(
+pub async fn start_chat_stream(
     app: AppHandle,
     workspace: State<'_, crate::WorkspaceState>,
     sessions: State<'_, Arc<LlmSessionState>>,
@@ -771,8 +730,8 @@ pub async fn start_ollama_chat_stream(
     ctx_factory: State<'_, Arc<ToolContextFactory>>,
     approval: State<'_, Arc<approval::ToolApprovalState>>,
     skills: State<'_, Arc<SkillRegistry>>,
-    args: OllamaChatStreamStartArgs,
-) -> Result<OllamaChatStreamStartResponse, String> {
+    args: ChatStreamStartArgs,
+) -> Result<ChatStreamStartResponse, String> {
     let root = lock_workspace_root(&workspace)?;
     let root_for_config = root.clone();
     let ai = tauri::async_runtime::spawn_blocking(move || vault_config::load_ai_config_internal(&root_for_config))
@@ -788,6 +747,16 @@ pub async fn start_ollama_chat_stream(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    let active_profile = ai.active_profile()
+        .ok_or("No active provider configured.")?;
+    let resp_provider_label = active_profile.label.clone();
+    let resp_model_name = model_override
+        .map(str::to_string)
+        .or_else(|| provider::resolve_model_name(
+            active_profile.last_used_model.as_deref(),
+            &active_profile.default_model,
+        ))
+        .unwrap_or_default();
     let provider = create_provider(&ai, model_override.map(|s| s))?;
 
     let cache = semantic_index::default_model_cache_dir();
@@ -804,7 +773,7 @@ pub async fn start_ollama_chat_stream(
     } else {
         Vec::new()
     };
-    let outcome = assemble_ollama_messages(&root, &ai, &args, embed_paths, &skills_for_prompt)?;
+    let outcome = assemble_messages(&root, &ai, &args, embed_paths, &skills_for_prompt)?;
     let mut messages = outcome.messages;
     let resolved_depth = outcome.resolved_depth;
     let reply_context_sources = outcome.reply_context_sources;
@@ -852,9 +821,7 @@ pub async fn start_ollama_chat_stream(
 
     tokio::spawn(async move {
         let memory_manager: agent_loop::SharedMemoryManager = if memory_enabled {
-            let extraction_provider = provider::create_cloud_provider(&ai_for_memory)
-                .or_else(|_| provider::create_local_provider(&ai_for_memory))
-                .ok();
+            let extraction_provider = provider::create_provider(&ai_for_memory, None).ok();
             let mgr = memory::MemoryManager::new(workspace_root.clone(), extraction_provider);
             if let Some(mem_msg) = mgr.format_for_injection() {
                 let pos = if messages.is_empty() { 0 } else { 1 };
@@ -910,7 +877,7 @@ pub async fn start_ollama_chat_stream(
                     )
                     .await;
                 }
-                AgentMode::LocalPlanning => {
+                AgentMode::Planning => {
                     let _ = planning::run_planned_agent(
                         app_h.clone(),
                         sid.clone(),
@@ -929,50 +896,6 @@ pub async fn start_ollama_chat_stream(
                         memory_manager.clone(),
                     )
                     .await;
-                }
-                AgentMode::Tiered => {
-                    let cloud_ok = provider::create_cloud_provider(&ai).ok();
-                    let local_ok = provider::create_local_provider(&ai).ok();
-                    if let (Some(cloud), Some(local)) = (cloud_ok, local_ok) {
-                        let _ = tiered::run_tiered_agent(
-                            cloud,
-                            local,
-                            app_h.clone(),
-                            sid.clone(),
-                            messages,
-                            tools_json,
-                            registry_arc,
-                            ctx_factory_arc,
-                            workspace_root,
-                            Some(cache),
-                            Some(bundle),
-                            cancel,
-                            loop_config,
-                            conversation_id,
-                            approval_arc,
-                            memory_manager.clone(),
-                        )
-                        .await;
-                    } else {
-                        let _ = planning::run_planned_agent(
-                            app_h.clone(),
-                            sid.clone(),
-                            messages,
-                            tools_json,
-                            registry_arc,
-                            ctx_factory_arc,
-                            workspace_root,
-                            Some(cache),
-                            Some(bundle),
-                            provider.clone(),
-                            cancel,
-                            loop_config,
-                            conversation_id,
-                            approval_arc,
-                            memory_manager.clone(),
-                        )
-                        .await;
-                    }
                 }
             }
 
@@ -1087,10 +1010,12 @@ pub async fn start_ollama_chat_stream(
         sessions_arc.remove_session(&sid);
     });
 
-    Ok(OllamaChatStreamStartResponse {
+    Ok(ChatStreamStartResponse {
         session_id,
         resolved_depth,
         reply_context_sources,
+        provider_label: resp_provider_label,
+        model_name: resp_model_name,
     })
 }
 
@@ -1230,31 +1155,10 @@ mod agent_mode_tests {
     }
 
     #[test]
-    fn local_planning_with_single_provider() {
+    fn planning_when_enabled() {
         let mut ai = base_config();
         ai.planning_enabled = true;
-        ai.ollama.default_model = "llama3".to_string();
-        assert_eq!(determine_agent_mode(&ai), AgentMode::LocalPlanning);
-    }
-
-    #[test]
-    fn tiered_when_both_configured() {
-        let mut ai = base_config();
-        ai.planning_enabled = true;
-        ai.ollama.default_model = "llama3".to_string();
-        ai.openai_compatible.api_key = "sk-test".to_string();
-        ai.openai_compatible.default_model = "gpt-4o".to_string();
-        assert_eq!(determine_agent_mode(&ai), AgentMode::Tiered);
-    }
-
-    #[test]
-    fn local_planning_when_openai_has_no_key() {
-        let mut ai = base_config();
-        ai.planning_enabled = true;
-        ai.ollama.default_model = "llama3".to_string();
-        ai.openai_compatible.default_model = "gpt-4o".to_string();
-        // No API key
-        assert_eq!(determine_agent_mode(&ai), AgentMode::LocalPlanning);
+        assert_eq!(determine_agent_mode(&ai), AgentMode::Planning);
     }
 }
 

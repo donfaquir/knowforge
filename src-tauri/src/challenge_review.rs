@@ -1,4 +1,4 @@
-//! 挑战式回顾：写回磁盘、Ollama 非流式问句/点评与后续队列 IPC（迭代 4）。
+//! Challenge review: write-back, non-streaming Q&A/critique, and follow-up queue IPC (iter 4).
 
 use chrono::{Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
@@ -121,7 +121,7 @@ pub struct GenerateChallengeQuestionResponse {
     pub template_kind: String,
     /// 使用固定模板或模型明确降级
     pub degraded: bool,
-    /// true 时不应展示内联回顾（Ollama 不可用、解析失败、模型主动 skipped）
+    /// true when inline review should not be shown (LLM unavailable, parse failure, model skipped)
     pub should_skip: bool,
 }
 
@@ -403,7 +403,7 @@ pub async fn generate_challenge_question(
     })
 }
 
-/// 评估用户作答（仅 Ollama；网络/解析失败时 passed=false、简短降级点评）
+/// Evaluate user answer via LLM; on network/parse failure: passed=false with degraded critique.
 #[tauri::command]
 pub async fn evaluate_challenge_answer(
     workspace: tauri::State<'_, crate::WorkspaceState>,

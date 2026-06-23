@@ -702,7 +702,7 @@ pub async fn enrich_recommendations_with_reasons(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vault_config::{self, ActiveProvider};
+    use crate::vault_config::{self, ProviderProfile};
 
     fn row(rel: &str, idx: i32, emb: Vec<f32>) -> DocChunkRow {
         let dim = emb.len() as i32;
@@ -913,7 +913,17 @@ mod tests {
     #[tokio::test]
     async fn enrich_openai_branch_completes_ok_without_reason_until_completion_wired() {
         let mut ai = vault_config::AiConfig::default();
-        ai.active_provider = ActiveProvider::Openai;
+        ai.active_provider_id = "openai-test".to_string();
+        ai.providers = vec![ProviderProfile {
+            id: "openai-test".to_string(),
+            label: "OpenAI Test".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: String::new(),
+            default_model: "gpt-4".to_string(),
+            organization_id: None,
+            last_used_model: None,
+            is_remote: true,
+        }];
         let mut c = vec![LinkRecommendation {
             target_rel_path: "x.md".into(),
             score: 0.5,

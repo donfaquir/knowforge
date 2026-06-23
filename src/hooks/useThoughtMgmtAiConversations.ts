@@ -18,6 +18,8 @@ export type ThoughtMgmtChatMessage = {
     deepening?: boolean;
     timing?: { startMs: number; firstTokenMs?: number; endMs?: number };
     replyContextSources?: ReplyContextSources;
+    providerLabel?: string;
+    modelName?: string;
   };
 };
 
