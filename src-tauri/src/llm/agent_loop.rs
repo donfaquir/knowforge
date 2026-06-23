@@ -1,10 +1,6 @@
-//! P2 Tool Calling Loop：在原文字流的基础上，识别 Ollama 返回的 tool_calls，
-//! 经 ToolContext（含 privacy_filter）执行工具，并把结果回喂下一轮模型对话。
-//!
-//! 关键约束：
-//! - 工具调用必须经过 [`ToolRegistry`] + [`ToolContextFactory`]，绝不可绕过。
-//! - tool_call 追踪 ID 由服务端生成（uuid v7）。
-//! - tool 结果消息使用 `tool_name` 字段（非 `tool_call_id`），与 Ollama 协议保持一致。
+//! Tool Calling Loop: detect tool_calls from the LLM stream, execute them
+//! through [`ToolRegistry`] + [`ToolContextFactory`] (with privacy filter),
+//! and feed results back into the next model turn.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
@@ -205,7 +201,7 @@ pub async fn run_agent_stream(
             looped.push(is_loop);
         }
 
-        // 4. NormalizedToolCall already carries an ID (UUID v7 for Ollama, server-provided for OpenAI)
+        // 4. NormalizedToolCall already carries an ID (UUID v7 or server-provided)
         for tc in &normalized_calls {
             let input_summary = summarize_tool_input(&tc.arguments);
             emit_tool_call_start(&app, &session_id, &tc.id, &tc.name, &input_summary);
@@ -567,9 +563,8 @@ fn fence_if_external(tool_name: &str, content: &str) -> String {
     }
 }
 
-/// 把单个 manifest 转换为 Ollama `tools` 字段要求的格式。
 #[allow(dead_code)]
-pub fn manifest_to_ollama_tool(manifest: &ToolManifest) -> Value {
+pub fn manifest_to_tool(manifest: &ToolManifest) -> Value {
     json!({
         "type": "function",
         "function": {
@@ -581,7 +576,7 @@ pub fn manifest_to_ollama_tool(manifest: &ToolManifest) -> Value {
 }
 
 #[allow(dead_code)]
-pub fn list_for_llm_to_ollama_tools(manifests: &[Value]) -> Vec<Value> {
+pub fn list_for_llm_to_tools(manifests: &[Value]) -> Vec<Value> {
     manifests
         .iter()
         .map(|m| {

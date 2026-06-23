@@ -1,4 +1,4 @@
-//! 被动高亮：对用户消息做旁路价值检测（Ollama 非流式 JSON）
+//! Passive highlight: sidecar value detection on user messages (non-streaming JSON).
 
 use crate::llm::create_provider;
 use crate::llm::LlmChatMessage;

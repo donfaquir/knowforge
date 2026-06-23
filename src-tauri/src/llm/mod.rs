@@ -106,7 +106,6 @@ pub struct LlmToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmToolCallFunction {
     pub name: String,
-    /// Ollama 返回的已解析 JSON 参数对象。
     pub arguments: Value,
 }
 
@@ -135,14 +134,14 @@ pub struct ThoughtFocusContextIn {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct OllamaChatStreamStartArgs {
+pub struct ChatStreamStartArgs {
     /// 仅 `user` / `assistant`；笔记 system 由本模块根据 `note_context` 与配置拼装。
     pub messages: Vec<LlmChatMessage>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub note_context: Option<NoteContextIn>,
-    /// 由 `search_workspace_context` 结果回传；出站前在 `assemble_ollama_messages` 内按磁盘重算摘录。
+    /// 由 `search_workspace_context` 结果回传；出站前在 `assemble_messages` 内按磁盘重算摘录。
     #[serde(default)]
     pub vault_context: Option<VaultContextIn>,
     /// 当前深度模式（迭代 3）；影响系统提示的详细程度与风格。
@@ -239,7 +238,7 @@ pub struct ReplyThoughtFocusSource {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct OllamaChatStreamStartResponse {
+pub struct ChatStreamStartResponse {
     pub session_id: String,
     /// 仅当请求 `depthMode` 为 `auto` 时返回：本次启发式解析出的具体档位。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -406,10 +405,10 @@ fn build_skills_system_block(
 }
 
 /// 合并 `note_context`、可选 `vault_context` 与对话轮次，并校验角色。
-fn assemble_ollama_messages(
+fn assemble_messages(
     canonical_root: &Path,
     ai: &vault_config::AiConfig,
-    args: &OllamaChatStreamStartArgs,
+    args: &ChatStreamStartArgs,
     embed_cache_bundle: Option<(PathBuf, PathBuf)>,
     auto_invocable_skills: &[(String, String, Option<String>)],
 ) -> Result<AssembleOutcome, String> {
@@ -676,42 +675,9 @@ pub(super) fn emit_error(app: &AppHandle, session_id: &str, code: Option<&str>, 
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct ListOllamaModelsArgs {
-    /// 非空时优先使用（设置页未保存的 URL）；否则读磁盘配置
+pub struct ListModelsArgs {
     #[serde(default)]
-    pub base_url: Option<String>,
-}
-
-#[tauri::command]
-pub async fn list_ollama_models(
-    state: State<'_, crate::WorkspaceState>,
-    args: ListOllamaModelsArgs,
-) -> Result<Vec<String>, String> {
-    let root = lock_workspace_root(&state)?;
-    let ai = tauri::async_runtime::spawn_blocking(move || vault_config::load_ai_config_internal(&root))
-        .await
-        .map_err(|e| e.to_string())??;
-    let profile = ai.active_profile();
-    let base = match args.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(raw) => vault_config::normalize_openai_base_url(raw),
-        None => profile.map(|p| p.base_url.clone()).unwrap_or_default(),
-    };
-    let provider = provider_impl::UnifiedProvider::new(
-        base,
-        profile.map(|p| p.api_key.clone()).unwrap_or_default(),
-        String::new(),
-        ai.parameters.temperature,
-        ai.parameters.top_p,
-        ai.request.timeout_ms,
-        profile.and_then(|p| p.organization_id.clone()),
-        profile.map(|p| p.is_remote).unwrap_or(false),
-    );
-    provider.list_models().await
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ListOpenAiModelsArgs {
+    pub provider_id: Option<String>,
     #[serde(default)]
     pub base_url: Option<String>,
     #[serde(default)]
@@ -719,16 +685,18 @@ pub struct ListOpenAiModelsArgs {
 }
 
 #[tauri::command]
-pub async fn list_openai_models(
+pub async fn list_models(
     state: State<'_, crate::WorkspaceState>,
-    args: ListOpenAiModelsArgs,
+    args: ListModelsArgs,
 ) -> Result<Vec<String>, String> {
     let root = lock_workspace_root(&state)?;
     let ai = tauri::async_runtime::spawn_blocking(move || vault_config::load_ai_config_internal(&root))
         .await
         .map_err(|e| e.to_string())??;
 
-    let profile = ai.active_profile();
+    let id = args.provider_id.as_deref().unwrap_or(&ai.active_provider_id);
+    let profile = ai.providers.iter().find(|p| p.id == id).or_else(|| ai.active_profile());
+
     let base = match args.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => vault_config::normalize_openai_base_url(raw),
         None => profile.map(|p| p.base_url.clone()).unwrap_or_default(),
@@ -737,9 +705,6 @@ pub async fn list_openai_models(
         Some(k) => k.to_string(),
         None => profile.map(|p| p.api_key.clone()).unwrap_or_default(),
     };
-    if key.is_empty() {
-        return Err("API key is required".to_string());
-    }
 
     let provider = provider_impl::UnifiedProvider::new(
         base,
@@ -755,7 +720,7 @@ pub async fn list_openai_models(
 }
 
 #[tauri::command]
-pub async fn start_ollama_chat_stream(
+pub async fn start_chat_stream(
     app: AppHandle,
     workspace: State<'_, crate::WorkspaceState>,
     sessions: State<'_, Arc<LlmSessionState>>,
@@ -763,8 +728,8 @@ pub async fn start_ollama_chat_stream(
     ctx_factory: State<'_, Arc<ToolContextFactory>>,
     approval: State<'_, Arc<approval::ToolApprovalState>>,
     skills: State<'_, Arc<SkillRegistry>>,
-    args: OllamaChatStreamStartArgs,
-) -> Result<OllamaChatStreamStartResponse, String> {
+    args: ChatStreamStartArgs,
+) -> Result<ChatStreamStartResponse, String> {
     let root = lock_workspace_root(&workspace)?;
     let root_for_config = root.clone();
     let ai = tauri::async_runtime::spawn_blocking(move || vault_config::load_ai_config_internal(&root_for_config))
@@ -796,7 +761,7 @@ pub async fn start_ollama_chat_stream(
     } else {
         Vec::new()
     };
-    let outcome = assemble_ollama_messages(&root, &ai, &args, embed_paths, &skills_for_prompt)?;
+    let outcome = assemble_messages(&root, &ai, &args, embed_paths, &skills_for_prompt)?;
     let mut messages = outcome.messages;
     let resolved_depth = outcome.resolved_depth;
     let reply_context_sources = outcome.reply_context_sources;
@@ -1033,7 +998,7 @@ pub async fn start_ollama_chat_stream(
         sessions_arc.remove_session(&sid);
     });
 
-    Ok(OllamaChatStreamStartResponse {
+    Ok(ChatStreamStartResponse {
         session_id,
         resolved_depth,
         reply_context_sources,

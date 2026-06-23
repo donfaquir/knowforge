@@ -1,6 +1,6 @@
 //! Vault 级关键词检索（任务 08 MVP）：与 `build_md_tree` 相同遍历规则，供 AI 上下文摘录。
 //!
-//! 私密命中在检索阶段即标 `privateOmitted`；`assemble_ollama_messages` 仍会按磁盘重算摘录，避免信任前端正文。
+//! Private hits are tagged `privateOmitted` at search time; `assemble_messages` re-derives excerpts from disk to avoid trusting frontend payloads.
 
 use crate::note_privacy;
 use crate::vault_config;
