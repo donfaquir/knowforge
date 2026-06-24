@@ -293,6 +293,7 @@ impl Tool for VaultSemanticSearchTool {
         let root = ctx.workspace_root.clone();
         let privacy_filter = Arc::clone(&ctx.privacy_filter);
         let workspace_root_for_filter = root.clone();
+        let embed_cache = ctx.embed_cache.clone();
 
         let args = SemanticSearchArgs {
             query,
@@ -301,7 +302,15 @@ impl Tool for VaultSemanticSearchTool {
         };
 
         let result = tauri::async_runtime::spawn_blocking(move || {
-            crate::semantic_index::run_semantic_search(&root, &cache_dir, &bundle_dir, args)
+            let fallback_cache;
+            let cache_ref = match embed_cache.as_ref() {
+                Some(c) => c.as_ref(),
+                None => {
+                    fallback_cache = crate::semantic_index::EmbeddingCache::new();
+                    &fallback_cache
+                }
+            };
+            crate::semantic_index::run_semantic_search(&root, &cache_dir, &bundle_dir, args, cache_ref)
         })
         .await;
 

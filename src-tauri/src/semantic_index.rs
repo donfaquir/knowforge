@@ -13,7 +13,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
@@ -168,6 +169,68 @@ pub struct ThoughtEmbeddingRow {
     pub embedding: Vec<f32>,
     pub dim: i32,
     pub model_id: String,
+}
+
+pub struct EmbeddingCache {
+    docs: RwLock<Option<(u64, Arc<Vec<DocChunkRow>>)>>,
+    thoughts: RwLock<Option<(u64, Arc<Vec<ThoughtEmbeddingRow>>)>>,
+    generation: AtomicU64,
+}
+
+impl EmbeddingCache {
+    pub fn new() -> Self {
+        Self {
+            docs: RwLock::new(None),
+            thoughts: RwLock::new(None),
+            generation: AtomicU64::new(0),
+        }
+    }
+
+    pub fn invalidate(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn get_docs(&self, conn: &Connection) -> Arc<Vec<DocChunkRow>> {
+        let current_gen = self.generation.load(Ordering::Relaxed);
+        {
+            let guard = self.docs.read().unwrap();
+            if let Some((cached_gen, ref data)) = *guard {
+                if cached_gen == current_gen {
+                    return Arc::clone(data);
+                }
+            }
+        }
+        let mut guard = self.docs.write().unwrap();
+        if let Some((cached_gen, ref data)) = *guard {
+            if cached_gen == current_gen {
+                return Arc::clone(data);
+            }
+        }
+        let rows = Arc::new(load_all_doc_embeddings(conn).unwrap_or_default());
+        *guard = Some((current_gen, Arc::clone(&rows)));
+        rows
+    }
+
+    pub fn get_thoughts(&self, conn: &Connection) -> Arc<Vec<ThoughtEmbeddingRow>> {
+        let current_gen = self.generation.load(Ordering::Relaxed);
+        {
+            let guard = self.thoughts.read().unwrap();
+            if let Some((cached_gen, ref data)) = *guard {
+                if cached_gen == current_gen {
+                    return Arc::clone(data);
+                }
+            }
+        }
+        let mut guard = self.thoughts.write().unwrap();
+        if let Some((cached_gen, ref data)) = *guard {
+            if cached_gen == current_gen {
+                return Arc::clone(data);
+            }
+        }
+        let rows = Arc::new(load_all_thought_embeddings(conn).unwrap_or_default());
+        *guard = Some((current_gen, Arc::clone(&rows)));
+        rows
+    }
 }
 
 pub fn upsert_doc_chunk(
@@ -1147,6 +1210,10 @@ fn rebuild_index_impl(vault_root: &Path, app: &AppHandle, resume: bool) -> Resul
     rebuild_progress::write_rebuild_progress(vault_root, &rp)?;
     rebuild_progress::emit_checkpoint(app, &rp);
 
+    if let Some(ec) = app.try_state::<Arc<EmbeddingCache>>() {
+        ec.invalidate();
+    }
+
     semantic_rebuild_log(&format!(
         "rebuild_index: ok indexed_chunks={indexed_chunks} indexed_thoughts={indexed_thoughts} elapsed_ms={elapsed_ms}"
     ));
@@ -1171,6 +1238,7 @@ pub fn run_semantic_search(
     cache_dir: &Path,
     bundle_dir: &Path,
     args: SemanticSearchArgs,
+    embed_cache: &EmbeddingCache,
 ) -> Result<Vec<SemanticSearchHit>, String> {
     let model = get_cached_or_load_model(cache_dir, bundle_dir)?;
     let conn = open_embedding_db(vault_root)?;
@@ -1184,11 +1252,11 @@ pub fn run_semantic_search(
     let exclude = HashSet::new();
     let mut out = Vec::new();
     if scope == "docs" || scope == "all" {
-        let rows = load_all_doc_embeddings(&conn)?;
+        let rows = embed_cache.get_docs(&conn);
         out.extend(semantic_search_docs(&qv, &rows, args.top_k, &exclude));
     }
     if scope == "thoughts" || scope == "all" {
-        let thoughts = load_all_thought_embeddings(&conn)?;
+        let thoughts = embed_cache.get_thoughts(&conn);
         let mut h = semantic_search_thoughts(&qv, &thoughts, args.top_k);
         let tconn = vault_thoughts_db::open_thoughts_db(vault_root)?;
         for hit in &mut h {
@@ -1267,6 +1335,7 @@ pub fn build_semantic_context_for_llm(
     cfg: &SemanticConfig,
     keyword_snippet_paths: &[String],
     omit_doc_rel_paths: &[String],
+    embed_cache: &EmbeddingCache,
 ) -> Option<SemanticContextForLlmResult> {
     if !cfg.enabled {
         return None;
@@ -1284,8 +1353,8 @@ pub fn build_semantic_context_for_llm(
     let conn = open_embedding_db(vault_root).ok()?;
     let tconn = vault_thoughts_db::open_thoughts_db(vault_root).ok()?;
     let qv = encode_single(model.as_ref(), q).ok()?;
-    let doc_rows = load_all_doc_embeddings(&conn).ok()?;
-    let thought_rows = load_all_thought_embeddings(&conn).ok()?;
+    let doc_rows = embed_cache.get_docs(&conn);
+    let thought_rows = embed_cache.get_thoughts(&conn);
     let sem_docs = semantic_search_docs(&qv, &doc_rows, 12, &omit_set);
     let mut sem_thoughts = semantic_search_thoughts(&qv, &thought_rows, 12);
     for hit in &mut sem_thoughts {
@@ -1462,7 +1531,12 @@ pub fn incremental_reindex_note(vault_root: &Path, app: &AppHandle, rel_path: &s
         tx.commit().map_err(|e| e.to_string())?;
         Ok(())
     })();
-    if let Err(e) = res {
+    if let Err(e) = &res {
         eprintln!("[semantic_index] incremental reindex skipped: {e}");
+    }
+    if res.is_ok() {
+        if let Some(ec) = app.try_state::<Arc<EmbeddingCache>>() {
+            ec.invalidate();
+        }
     }
 }

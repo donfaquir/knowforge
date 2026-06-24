@@ -61,6 +61,7 @@ export type ChatMessage = {
      *  即使关闭并重新打开 vault，徽章和过滤行为均保持一致。 */
     skillId?: string;
     skillName?: string;
+    planningText?: string;
   };
 };
 
@@ -111,8 +112,6 @@ export function useWorkspaceAiConversations(opts: {
   const [includeVaultContext, setIncludeVaultContext] = useState(false);
   const [thoughtFocusContext, setThoughtFocusContext] = useState<ThoughtFocusContext | null>(null);
   const [isVaultSearching, setIsVaultSearching] = useState(false);
-  /** 与会话切换对齐：丢弃过时的 vault 检索/发送链 */
-  const vaultSearchEpochRef = useRef(0);
 
   const saveChainRef = useRef(Promise.resolve());
   const pendingPersistRef = useRef(false);
@@ -138,7 +137,6 @@ export function useWorkspaceAiConversations(opts: {
   }, [thoughtFocusContext]);
 
   useEffect(() => {
-    vaultSearchEpochRef.current += 1;
     setIsVaultSearching(false);
   }, [conversationId]);
 
@@ -408,7 +406,6 @@ export function useWorkspaceAiConversations(opts: {
     setThoughtFocusContext,
     isVaultSearching,
     setIsVaultSearching,
-    vaultSearchEpochRef,
     switchConversation,
     createConversation,
     deleteConversation,

@@ -60,7 +60,6 @@ export function useThoughtMgmtAiConversations(opts: {
   const [sessionReady, setSessionReady] = useState(false);
   const [thoughtFocusContext, setThoughtFocusContext] = useState<ThoughtFocusContext | null>(null);
   const [isVaultSearching, setIsVaultSearching] = useState(false);
-  const vaultSearchEpochRef = useRef(0);
 
   const saveChainRef = useRef(Promise.resolve());
   const pendingPersistRef = useRef(false);
@@ -76,7 +75,6 @@ export function useThoughtMgmtAiConversations(opts: {
   }, [thoughtFocusContext]);
 
   useEffect(() => {
-    vaultSearchEpochRef.current += 1;
     setIsVaultSearching(false);
   }, [conversationId]);
 
@@ -317,7 +315,6 @@ export function useThoughtMgmtAiConversations(opts: {
     setThoughtFocusContext,
     isVaultSearching,
     setIsVaultSearching,
-    vaultSearchEpochRef,
     switchConversation,
     createConversation,
     deleteConversation,

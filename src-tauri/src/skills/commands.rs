@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::llm::approval::ToolApprovalState;
@@ -326,7 +326,8 @@ pub async fn invoke_skill(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let provider = create_provider(&ai, model_override)?;
+    let http_client: Arc<reqwest::Client> = Arc::clone(&*app.state::<Arc<reqwest::Client>>());
+    let provider = create_provider(&ai, model_override, &http_client)?;
 
     let workspace_name = root
         .file_name()

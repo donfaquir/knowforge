@@ -1540,11 +1540,13 @@ async fn semantic_search(
     args: semantic_index::SemanticSearchArgs,
     app: tauri::AppHandle,
     state: tauri::State<'_, WorkspaceState>,
+    embed_cache: tauri::State<'_, Arc<semantic_index::EmbeddingCache>>,
 ) -> Result<Vec<semantic_index::SemanticSearchHit>, String> {
     let root = lock_workspace_root(&state)?;
     let cache = semantic_index::default_model_cache_dir();
     let bundle = semantic_index::resolve_bundle_model_dir(&app);
-    tauri::async_runtime::spawn_blocking(move || semantic_index::run_semantic_search(&root, &cache, &bundle, args))
+    let embed_cache_arc = Arc::clone(embed_cache.inner());
+    tauri::async_runtime::spawn_blocking(move || semantic_index::run_semantic_search(&root, &cache, &bundle, args, &embed_cache_arc))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -1557,6 +1559,8 @@ async fn suggest_related_notes(
     include_reasons: Option<bool>,
     editor_markdown_override: Option<String>,
     state: tauri::State<'_, WorkspaceState>,
+    http_client: tauri::State<'_, Arc<reqwest::Client>>,
+    embed_cache: tauri::State<'_, Arc<semantic_index::EmbeddingCache>>,
 ) -> Result<Vec<link_recommendation::LinkRecommendation>, String> {
     let canonical_root = lock_workspace_root(&state)?;
     let rel_path = rel_path.trim().to_string();
@@ -1569,6 +1573,7 @@ async fn suggest_related_notes(
     let root = canonical_root.clone();
     let rel = rel_path.clone();
     let md_override = editor_markdown_override.clone();
+    let embed_cache_arc = Arc::clone(embed_cache.inner());
     let mut out = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<link_recommendation::LinkRecommendation>, String> {
         let emb = semantic_index::open_embedding_db(&root)?;
         let thoughts = vault_thoughts_db::open_thoughts_db(&root)?;
@@ -1579,6 +1584,7 @@ async fn suggest_related_notes(
             &thoughts,
             max_results,
             md_override.as_deref(),
+            &embed_cache_arc,
         )
     })
     .await
@@ -1593,7 +1599,7 @@ async fn suggest_related_notes(
         })
         .await
         .map_err(|e| e.to_string())??;
-        link_recommendation::enrich_recommendations_with_reasons(&mut out, &excerpt, &ai).await?;
+        link_recommendation::enrich_recommendations_with_reasons(&mut out, &excerpt, &ai, http_client.inner()).await?;
     }
 
     Ok(out)
@@ -1655,6 +1661,8 @@ async fn add_manual_topic_semantic(
 pub fn run() {
     tauri::Builder::default()
         .manage(WorkspaceState::default())
+        .manage(Arc::new(llm::build_shared_http_client()))
+        .manage(Arc::new(semantic_index::EmbeddingCache::new()))
         .manage(Arc::new(llm::LlmSessionState::default()))
         .manage(Arc::new(llm::approval::ToolApprovalState::new()))
         .manage(Arc::new(tools::ToolRegistry::new()))

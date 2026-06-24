@@ -1,5 +1,7 @@
 //! 主题网络（迭代 6.4）：LLM 提取主题、SQLite 缓存、二部图构建与 Markdown 导出快照。
 
+use std::sync::Arc;
+
 use crate::llm::{create_provider, CompletionOverrides};
 use crate::llm::LlmChatMessage;
 use crate::note_privacy;
@@ -18,8 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use tauri::AppHandle;
-use tauri::Emitter;
+use tauri::{AppHandle, Emitter, Manager};
 
 const MAX_FILES: usize = 600;
 const READ_CAP: usize = 512 * 1024;
@@ -346,8 +347,9 @@ pub async fn extract_topics_for_document(
     doc_content_for_prompt: &str,
     existing_topics_list: &[String],
     ai: &AiConfig,
+    http_client: &Arc<reqwest::Client>,
 ) -> Result<Vec<String>, String> {
-    let provider = create_provider(ai, None)?;
+    let provider = create_provider(ai, None, http_client)?;
     let list_block = if existing_topics_list.is_empty() {
         "(none)".to_string()
     } else {
@@ -683,7 +685,8 @@ pub fn add_manual_topic_semantic_blocking(
 
     let query_vec = crate::builtin_embed::encode_single(&emb_model, display)?;
     let emb_conn = semantic_index::open_embedding_db(vault_root)?;
-    let chunks = semantic_index::load_all_doc_embeddings(&emb_conn)?;
+    let embed_cache: Arc<semantic_index::EmbeddingCache> = Arc::clone(&*app.state::<Arc<semantic_index::EmbeddingCache>>());
+    let chunks = embed_cache.get_docs(&emb_conn);
     if chunks.is_empty() {
         return Err("语义索引中尚无文档向量，请先在设置中重建嵌入索引后再新增主题。".to_string());
     }
@@ -905,7 +908,8 @@ struct TopicExtractProgressPayload {
 /// 全量：扫描 vault、增量提取、构图
 pub async fn build_topic_network(vault_root: &Path, app: &AppHandle) -> Result<TopicNetworkForUi, String> {
     let ai = crate::vault_config::load_ai_config_internal(vault_root)?;
-    let llm_available = create_provider(&ai, None).is_ok();
+    let http_client: Arc<reqwest::Client> = Arc::clone(&*app.state::<Arc<reqwest::Client>>());
+    let llm_available = create_provider(&ai, None, &http_client).is_ok();
 
     let topic_conn = open_topic_db(vault_root)?;
     let mut paths: Vec<PathBuf> = Vec::new();
@@ -968,7 +972,7 @@ pub async fn build_topic_network(vault_root: &Path, app: &AppHandle) -> Result<T
         let mut dict_vec = list_dictionary_canonicals(&topic_conn).unwrap_or_default();
         let (excerpt, headings) = markdown_body_and_headings(&text);
         let prompt_body = format!("## Outline / headings\n{headings}\n\n## Body excerpt\n{excerpt}");
-        let raw_topics = match extract_topics_for_document(&prompt_body, &dict_vec, &ai).await {
+        let raw_topics = match extract_topics_for_document(&prompt_body, &dict_vec, &ai, &http_client).await {
             Ok(t) => t,
             Err(_) => continue,
         };

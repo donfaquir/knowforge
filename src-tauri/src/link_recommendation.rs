@@ -1,6 +1,8 @@
 //! 文档级语义相似度 → 双向链接推荐候选（迭代 6.3 步骤 15）。
 //! 无语义索引时不提供推荐（无关键词兜底）。
 
+use std::sync::Arc;
+
 use crate::llm::create_provider;
 use crate::llm::LlmChatMessage;
 use crate::note_privacy;
@@ -435,6 +437,7 @@ pub fn suggest_related_notes(
     _thoughts_db: &Connection,
     max_results: usize,
     editor_markdown_override: Option<&str>,
+    embed_cache: &semantic_index::EmbeddingCache,
 ) -> Result<Vec<LinkRecommendation>, String> {
     if max_results == 0 {
         return Ok(Vec::new());
@@ -456,7 +459,7 @@ pub fn suggest_related_notes(
         return Err("semantic_index_not_ready: kf-private notes are excluded from link recommendations".to_string());
     }
 
-    let all_chunks = semantic_index::load_all_doc_embeddings(embedding_db)?;
+    let all_chunks = embed_cache.get_docs(embedding_db);
     if all_chunks.is_empty() {
         return Err(
             "semantic_index_not_ready: no document chunks in embedding index; rebuild embeddings first"
@@ -623,8 +626,9 @@ async fn link_reason_completion_body(
     ai: &ResolvedAiConfig,
     messages: &[LlmChatMessage],
     timeout_ms: u64,
+    http_client: &Arc<reqwest::Client>,
 ) -> Option<String> {
-    let provider = create_provider(ai, None).ok()?;
+    let provider = create_provider(ai, None, http_client).ok()?;
     let overrides = crate::llm::CompletionOverrides {
         timeout_ms: Some(timeout_ms),
         ..Default::default()
@@ -639,6 +643,7 @@ pub async fn enrich_recommendations_with_reasons(
     candidates: &mut [LinkRecommendation],
     current_doc_excerpt: &str,
     config: &ResolvedAiConfig,
+    http_client: &Arc<reqwest::Client>,
 ) -> Result<(), String> {
     if candidates.is_empty() {
         return Ok(());
@@ -680,7 +685,7 @@ pub async fn enrich_recommendations_with_reasons(
         },
     ];
 
-    let raw = match link_reason_completion_body(config, &msgs, timeout_ms).await {
+    let raw = match link_reason_completion_body(config, &msgs, timeout_ms, http_client).await {
         Some(s) => {
             let t = s.trim();
             if t.is_empty() {
@@ -813,7 +818,8 @@ mod tests {
         semantic_index::upsert_doc_chunk(&conn, "far.md#0", "far.md", 0, "t", &far, "m").unwrap();
 
         let tconn = Connection::open_in_memory().unwrap();
-        let rec = suggest_related_notes(root, "cur.md", &conn, &tconn, 5, None).unwrap();
+        let ec = semantic_index::EmbeddingCache::new();
+        let rec = suggest_related_notes(root, "cur.md", &conn, &tconn, 5, None, &ec).unwrap();
         assert_eq!(rec.len(), 2);
         assert_eq!(rec[0].target_rel_path, "near.md");
         assert_eq!(rec[1].target_rel_path, "mid.md");
@@ -837,7 +843,8 @@ mod tests {
         semantic_index::upsert_doc_chunk(&conn, "linked#0", "linked", 0, "t", &near, "m").unwrap();
 
         let tconn = Connection::open_in_memory().unwrap();
-        let rec = suggest_related_notes(root, "cur.md", &conn, &tconn, 5, None).expect("chunks align");
+        let ec = semantic_index::EmbeddingCache::new();
+        let rec = suggest_related_notes(root, "cur.md", &conn, &tconn, 5, None, &ec).expect("chunks align");
         assert_eq!(rec.len(), 1);
         assert_eq!(rec[0].target_rel_path, "near.md");
     }
@@ -862,6 +869,7 @@ mod tests {
         semantic_index::upsert_doc_chunk(&conn, "far.md#0", "far.md", 0, "t", &far, "m").unwrap();
 
         let tconn = Connection::open_in_memory().unwrap();
+        let ec = semantic_index::EmbeddingCache::new();
         let rec = suggest_related_notes(
             root,
             "cur.md",
@@ -869,6 +877,7 @@ mod tests {
             &tconn,
             5,
             Some("x [[linked]]\n"),
+            &ec,
         )
         .unwrap();
         assert_eq!(rec.len(), 1);
@@ -931,7 +940,8 @@ mod tests {
             existing_link: false,
             reason: None,
         }];
-        super::enrich_recommendations_with_reasons(&mut c, "excerpt", &ai)
+        let http_client = Arc::new(reqwest::Client::new());
+        super::enrich_recommendations_with_reasons(&mut c, "excerpt", &ai, &http_client)
             .await
             .unwrap();
         assert!(c[0].reason.is_none());

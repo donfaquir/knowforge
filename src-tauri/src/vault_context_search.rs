@@ -1,6 +1,6 @@
 //! Vault 级关键词检索（任务 08 MVP）：与 `build_md_tree` 相同遍历规则，供 AI 上下文摘录。
 //!
-//! Private hits are tagged `privateOmitted` at search time; `assemble_messages` re-derives excerpts from disk to avoid trusting frontend payloads.
+//! Private hits are tagged `privateOmitted` at search time; `build_context_pipeline` re-derives excerpts from disk.
 
 use crate::note_privacy;
 use crate::vault_config;

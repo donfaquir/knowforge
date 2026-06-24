@@ -8,7 +8,6 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "re
 import { useTranslation } from "react-i18next";
 import { useThoughtMgmtAiConversationSession } from "../contexts/ThoughtMgmtAiConversationSessionContext";
 import type { ThoughtFocusContext } from "../types/aiConversation";
-import type { SearchWorkspaceContextResponse } from "../types/vaultContextSearch";
 import type { ProviderProfileForUi } from "../types/vaultAiConfig";
 import { markdownTreatAsKfPrivateForUi } from "../utils/kfPrivateMarkdown";
 import { useAiNoteContext } from "../contexts/AiNoteContext";
@@ -168,7 +167,6 @@ export function ThoughtMgmtAiConversationPanel({
     tauriRuntime,
     isVaultSearching,
     setIsVaultSearching,
-    vaultSearchEpochRef,
     setThoughtFocusContext,
   } = useThoughtMgmtAiConversationSession();
 
@@ -254,6 +252,7 @@ export function ThoughtMgmtAiConversationPanel({
         if (p.sessionId !== activeSessionRef.current) {
           return;
         }
+        setIsVaultSearching(false);
         markNeedPersist();
         activeSessionRef.current = null;
         setIsStreaming(false);
@@ -280,6 +279,7 @@ export function ThoughtMgmtAiConversationPanel({
         markNeedPersist();
         activeSessionRef.current = null;
         setIsStreaming(false);
+        setIsVaultSearching(false);
         if (p.code === "cancelled") {
           setMessages((prev) => {
             if (composerInputRef.current.trim().length > 0) {
@@ -310,6 +310,44 @@ export function ThoughtMgmtAiConversationPanel({
         });
         setErrorBanner(p.message);
       }),
+      listen<{
+        sessionId: string;
+        snippets: import("../types/vaultContextSearch").VaultSnippetRecord[];
+        meta: import("../types/vaultContextSearch").SearchWorkspaceContextMeta | null;
+        replyContextSources: ReplyContextSources;
+      }>("llm:context-ready", (e) => {
+        const { sessionId, snippets, meta, replyContextSources } = e.payload;
+        if (sessionId !== activeSessionRef.current) return;
+
+        if (snippets.length > 0 && meta) {
+          const paths = snippets.map((s) => s.relPath).join(", ");
+          const priv = snippets.filter((s) => s.kind === "privateOmitted").length;
+          let line = t("aiPanel.vaultLine", {
+            paths,
+            scannedFiles: meta.scannedFiles,
+            elapsedMs: meta.elapsedMs,
+          });
+          if (priv > 0) {
+            line += ` ${t("aiPanel.vaultPrivateOmitted", { count: priv })}`;
+          }
+          if (meta.stoppedEarly) {
+            line += ` ${t("aiPanel.vaultStoppedEarly")}`;
+          }
+          setVaultSearchSummary(line);
+        } else {
+          setVaultSearchSummary(null);
+        }
+
+        setMessages((prev) => {
+          const idx = prev.findIndex((m) => m.role === "assistant" && m.streaming);
+          if (idx < 0) return prev;
+          const next = [...prev];
+          next[idx] = { ...next[idx], meta: { ...next[idx].meta, replyContextSources } };
+          return next;
+        });
+
+        setIsVaultSearching(false);
+      }),
     ]).then((unlisteners) => {
       if (disposed) {
         unlisteners.forEach((u) => void u());
@@ -325,12 +363,7 @@ export function ThoughtMgmtAiConversationPanel({
   }, [markNeedPersist, setMessages, setIsStreaming]);
 
   const handleStop = useCallback(async () => {
-    if (isVaultSearching) {
-      vaultSearchEpochRef.current += 1;
-      setIsVaultSearching(false);
-      setVaultSearchSummary(null);
-      return;
-    }
+    setIsVaultSearching(false);
 
     const sid = activeSessionRef.current;
     if (!sid || !isTauri()) {
@@ -422,59 +455,14 @@ export function ThoughtMgmtAiConversationPanel({
       setPrivacyHint(null);
     }
 
-    vaultSearchEpochRef.current += 1;
-    const searchEpoch = vaultSearchEpochRef.current;
-
-    let vaultSearchResult: SearchWorkspaceContextResponse | null = null;
-    if (workspaceReady) {
-      setIsVaultSearching(true);
-      setVaultSearchSummary(null);
-      try {
-        const excludeRelPaths =
-          noteContext != null ? [noteContext.relPath] : ([] as string[]);
-        vaultSearchResult = await invoke<SearchWorkspaceContextResponse>("search_workspace_context", {
-          args: {
-            query: trimmed,
-            excludeRelPaths,
-          },
-        });
-      } catch (e) {
-        console.error(e);
-        vaultSearchResult = null;
-      } finally {
-        if (vaultSearchEpochRef.current === searchEpoch) {
-          setIsVaultSearching(false);
-        }
-      }
-    }
-
-    if (vaultSearchEpochRef.current !== searchEpoch) {
-      return;
-    }
-
-    if (vaultSearchResult != null && vaultSearchResult.snippets.length > 0) {
-      const paths = vaultSearchResult.snippets.map((s) => s.relPath).join(", ");
-      const priv = vaultSearchResult.snippets.filter((s) => s.kind === "privateOmitted").length;
-      const m = vaultSearchResult.meta;
-      let line = t("aiPanel.vaultLine", {
-        paths,
-        scannedFiles: m.scannedFiles,
-        elapsedMs: m.elapsedMs,
-      });
-      if (priv > 0) {
-        line += ` ${t("aiPanel.vaultPrivateOmitted", { count: priv })}`;
-      }
-      if (m.stoppedEarly) {
-        line += ` ${t("aiPanel.vaultStoppedEarly")}`;
-      }
-      setVaultSearchSummary(line);
-    } else {
-      setVaultSearchSummary(null);
-    }
-
     setErrorBanner(null);
     setInput("");
     setMessages(nextChat);
+
+    if (workspaceReady) {
+      setIsVaultSearching(true);
+      setVaultSearchSummary(null);
+    }
 
     const tf = thoughtFocusFromDetail;
 
@@ -482,15 +470,16 @@ export function ThoughtMgmtAiConversationPanel({
       const streamArgs: {
         messages: { role: string; content: string }[];
         noteContext?: { relPath: string; markdownForGate: string };
-        vaultContext?: { snippets: SearchWorkspaceContextResponse["snippets"] };
+        includeVaultContext?: boolean;
         depthMode: typeof DEPTH_MODE;
         thoughtFocusContext?: ThoughtFocusContext;
-      } = { messages: chatTurns, depthMode: DEPTH_MODE };
+      } = {
+        messages: chatTurns,
+        depthMode: DEPTH_MODE,
+        includeVaultContext: workspaceReady,
+      };
       if (noteContext) {
         streamArgs.noteContext = noteContext;
-      }
-      if (vaultSearchResult != null && vaultSearchResult.snippets.length > 0) {
-        streamArgs.vaultContext = { snippets: vaultSearchResult.snippets };
       }
       if (tf != null && tf.thoughtId.trim() !== "" && tf.thoughtBody.trim() !== "") {
         streamArgs.thoughtFocusContext = tf;
@@ -498,10 +487,6 @@ export function ThoughtMgmtAiConversationPanel({
       const res = await invoke<StartStreamResponse>("start_chat_stream", {
         args: streamArgs,
       });
-      if (vaultSearchEpochRef.current !== searchEpoch) {
-        void invoke("abort_llm_stream", { sessionId: res.sessionId }).catch(() => {});
-        return;
-      }
       activeSessionRef.current = res.sessionId;
       setIsStreaming(true);
       setMessages((prev) => [

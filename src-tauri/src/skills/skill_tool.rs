@@ -199,7 +199,8 @@ impl Tool for SkillAsTool {
                 return tool_err(ToolErrorCode::Internal, &format!("config join: {e}"));
             }
         };
-        let provider = match create_provider(&ai, None) {
+        let http_client: std::sync::Arc<reqwest::Client> = std::sync::Arc::clone(&*self.app.state::<std::sync::Arc<reqwest::Client>>());
+        let provider = match create_provider(&ai, None, &http_client) {
             Ok(p) => p,
             Err(e) => {
                 drop(permit);
