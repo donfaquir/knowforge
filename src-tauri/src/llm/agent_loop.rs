@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use futures_util::future::join_all;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
 use super::approval::ToolApprovalState;
@@ -484,6 +484,9 @@ pub(crate) async fn execute_tool(
     );
     ctx.call_id = Some(tc.id.clone());
     ctx.provider = provider;
+    if let Some(ec) = app.try_state::<Arc<crate::semantic_index::EmbeddingCache>>() {
+        ctx.embed_cache = Some(Arc::clone(&*ec));
+    }
 
     let manifest = tool.manifest().clone();
     let start = std::time::Instant::now();

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::llm::provider::LlmProvider;
+use crate::semantic_index::EmbeddingCache;
 
 // ─── ToolContext ───────────────────────────────────────────────────────────────
 
@@ -24,6 +25,7 @@ pub struct ToolContext {
     /// (or another tool that recursed into agent_loop). Stage 1 caps this at 1.
     pub nesting_depth: u8,
     pub provider: Option<Arc<dyn LlmProvider>>,
+    pub embed_cache: Option<Arc<EmbeddingCache>>,
 }
 
 // ─── AuditSink trait ───────────────────────────────────────────────────────────
@@ -107,6 +109,7 @@ impl ToolContextFactory {
             app_bundle_resource_dir,
             nesting_depth,
             provider: None,
+            embed_cache: None,
         }
     }
 }

@@ -2,6 +2,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tauri::State;
 
+use crate::semantic_index::EmbeddingCache;
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::{ToolRegistry, ToolScope};
 use crate::WorkspaceState;
@@ -23,6 +24,7 @@ pub async fn invoke_tool(
     registry: State<'_, Arc<ToolRegistry>>,
     ctx_factory: State<'_, Arc<ToolContextFactory>>,
     ws_state: State<'_, WorkspaceState>,
+    embed_cache_state: State<'_, Arc<EmbeddingCache>>,
     app: tauri::AppHandle,
 ) -> Result<Value, String> {
     let workspace_root = crate::lock_workspace_root(&ws_state)?;
@@ -43,6 +45,7 @@ pub async fn invoke_tool(
         Some(bundle_dir),
     );
     ctx.call_id = Some(uuid::Uuid::now_v7().to_string());
+    ctx.embed_cache = Some(Arc::clone(embed_cache_state.inner()));
 
     let manifest = tool.manifest().clone();
     let start = std::time::Instant::now();

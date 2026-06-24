@@ -8,7 +8,10 @@ pub(crate) mod provider;
 pub(crate) mod provider_impl;
 pub mod memory;
 
-pub use provider::{create_provider, create_provider_by_id, CompletionOverrides, LlmProvider};
+pub use provider::{
+    build_shared_http_client, create_provider, create_provider_by_id, CompletionOverrides,
+    LlmProvider,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentMode {
@@ -413,6 +416,7 @@ fn assemble_messages(
     args: &ChatStreamStartArgs,
     embed_cache_bundle: Option<(PathBuf, PathBuf)>,
     auto_invocable_skills: &[(String, String, Option<String>)],
+    embed_cache: &semantic_index::EmbeddingCache,
 ) -> Result<AssembleOutcome, String> {
     let mut out: Vec<LlmChatMessage> = Vec::new();
     let mut reply_context_sources = ReplyContextSources::default();
@@ -557,6 +561,7 @@ fn assemble_messages(
                         &sem_cfg,
                         &kw_paths,
                         &omit_semantic_docs,
+                        embed_cache,
                     ) {
                         reply_context_sources.semantic = ReplySemanticSource {
                             injected: true,
@@ -689,6 +694,7 @@ pub struct ListModelsArgs {
 #[tauri::command]
 pub async fn list_models(
     state: State<'_, crate::WorkspaceState>,
+    http_client: State<'_, Arc<reqwest::Client>>,
     args: ListModelsArgs,
 ) -> Result<Vec<String>, String> {
     let root = lock_workspace_root(&state)?;
@@ -709,6 +715,7 @@ pub async fn list_models(
     };
 
     let provider = provider_impl::UnifiedProvider::new(
+        Arc::clone(http_client.inner()),
         base,
         key,
         String::new(),
@@ -730,6 +737,8 @@ pub async fn start_chat_stream(
     ctx_factory: State<'_, Arc<ToolContextFactory>>,
     approval: State<'_, Arc<approval::ToolApprovalState>>,
     skills: State<'_, Arc<SkillRegistry>>,
+    http_client: State<'_, Arc<reqwest::Client>>,
+    embed_cache_state: State<'_, Arc<semantic_index::EmbeddingCache>>,
     args: ChatStreamStartArgs,
 ) -> Result<ChatStreamStartResponse, String> {
     let root = lock_workspace_root(&workspace)?;
@@ -757,7 +766,8 @@ pub async fn start_chat_stream(
             &active_profile.default_model,
         ))
         .unwrap_or_default();
-    let provider = create_provider(&ai, model_override.map(|s| s))?;
+    let http_client_arc = Arc::clone(http_client.inner());
+    let provider = create_provider(&ai, model_override.map(|s| s), &http_client_arc)?;
 
     let cache = semantic_index::default_model_cache_dir();
     let bundle = semantic_index::resolve_bundle_model_dir(&app);
@@ -773,7 +783,8 @@ pub async fn start_chat_stream(
     } else {
         Vec::new()
     };
-    let outcome = assemble_messages(&root, &ai, &args, embed_paths, &skills_for_prompt)?;
+    let embed_cache_arc = Arc::clone(embed_cache_state.inner());
+    let outcome = assemble_messages(&root, &ai, &args, embed_paths, &skills_for_prompt, &embed_cache_arc)?;
     let mut messages = outcome.messages;
     let resolved_depth = outcome.resolved_depth;
     let reply_context_sources = outcome.reply_context_sources;
@@ -821,7 +832,7 @@ pub async fn start_chat_stream(
 
     tokio::spawn(async move {
         let memory_manager: agent_loop::SharedMemoryManager = if memory_enabled {
-            let extraction_provider = provider::create_provider(&ai_for_memory, None).ok();
+            let extraction_provider = provider::create_provider(&ai_for_memory, None, &http_client_arc).ok();
             let mgr = memory::MemoryManager::new(workspace_root.clone(), extraction_provider);
             if let Some(mem_msg) = mgr.format_for_injection() {
                 let pos = if messages.is_empty() { 0 } else { 1 };

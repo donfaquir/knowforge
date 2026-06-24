@@ -7,6 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+use std::sync::Arc;
+
 use crate::llm::{create_provider, CompletionOverrides};
 use crate::llm::LlmChatMessage;
 use crate::thought_parser;
@@ -272,6 +274,7 @@ fn normalize_template_kind(raw: Option<&str>) -> String {
 #[tauri::command]
 pub async fn generate_challenge_question(
     workspace: tauri::State<'_, crate::WorkspaceState>,
+    http_client: tauri::State<'_, Arc<reqwest::Client>>,
     args: GenerateChallengeQuestionArgs,
 ) -> Result<GenerateChallengeQuestionResponse, String> {
     let root = crate::lock_workspace_root(&workspace)?;
@@ -282,7 +285,7 @@ pub async fn generate_challenge_question(
     .await
     .map_err(|e| e.to_string())??;
 
-    let provider = match create_provider(&ai, None) {
+    let provider = match create_provider(&ai, None, http_client.inner()) {
         Ok(p) => p,
         Err(_) => {
             return Ok(GenerateChallengeQuestionResponse {
@@ -407,6 +410,7 @@ pub async fn generate_challenge_question(
 #[tauri::command]
 pub async fn evaluate_challenge_answer(
     workspace: tauri::State<'_, crate::WorkspaceState>,
+    http_client: tauri::State<'_, Arc<reqwest::Client>>,
     args: EvaluateChallengeAnswerArgs,
 ) -> Result<EvaluateChallengeAnswerResponse, String> {
     let root = crate::lock_workspace_root(&workspace)?;
@@ -424,7 +428,7 @@ pub async fn evaluate_challenge_answer(
         }
     };
 
-    let provider = match create_provider(&ai, None) {
+    let provider = match create_provider(&ai, None, http_client.inner()) {
         Ok(p) => p,
         Err(_) => {
             return Ok(EvaluateChallengeAnswerResponse {

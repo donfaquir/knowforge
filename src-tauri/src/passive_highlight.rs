@@ -1,5 +1,7 @@
 //! Passive highlight: sidecar value detection on user messages (non-streaming JSON).
 
+use std::sync::Arc;
+
 use crate::llm::create_provider;
 use crate::llm::LlmChatMessage;
 use crate::lock_workspace_root;
@@ -98,6 +100,7 @@ fn normalize_kind(k: &str) -> Option<&'static str> {
 #[tauri::command]
 pub async fn detect_passive_highlight(
     workspace: State<'_, crate::WorkspaceState>,
+    http_client: State<'_, Arc<reqwest::Client>>,
     args: DetectPassiveHighlightArgs,
 ) -> Result<DetectPassiveHighlightResponse, String> {
     let root = lock_workspace_root(&workspace)?;
@@ -122,7 +125,7 @@ pub async fn detect_passive_highlight(
         return Ok(empty());
     }
 
-    let provider = match create_provider(&ai, None) {
+    let provider = match create_provider(&ai, None, http_client.inner()) {
         Ok(p) => p,
         Err(_) => return Ok(empty()),
     };

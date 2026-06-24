@@ -1,5 +1,7 @@
 //! Writing coach: paragraph-level argumentation check + vault keyword linkage (JSON mode).
 
+use std::sync::Arc;
+
 use crate::llm::create_provider;
 use crate::llm::LlmChatMessage;
 use crate::lock_workspace_root;
@@ -367,6 +369,7 @@ fn filter_response(
 #[tauri::command]
 pub async fn analyze_writing_coach(
     workspace: State<'_, crate::WorkspaceState>,
+    http_client: State<'_, Arc<reqwest::Client>>,
     args: AnalyzeWritingCoachArgs,
 ) -> Result<AnalyzeWritingCoachResponse, String> {
     let root = lock_workspace_root(&workspace)?;
@@ -385,7 +388,7 @@ pub async fn analyze_writing_coach(
 
     let ai = vault_config::load_ai_config_internal(&root)
         .map_err(|e| e.to_string())?;
-    let provider = create_provider(&ai, None)?;
+    let provider = create_provider(&ai, None, http_client.inner())?;
 
     let msgs = vec![
         LlmChatMessage {

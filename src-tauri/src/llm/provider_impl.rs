@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -9,6 +11,7 @@ use super::provider::{ChatStreamResult, CompletionOverrides, LlmProvider, Normal
 use super::{emit_chunk, emit_done, emit_error, LlmChatMessage};
 
 pub struct UnifiedProvider {
+    client: Arc<reqwest::Client>,
     base_url: String,
     api_key: String,
     model: String,
@@ -21,6 +24,7 @@ pub struct UnifiedProvider {
 
 impl UnifiedProvider {
     pub fn new(
+        client: Arc<reqwest::Client>,
         base_url: String,
         api_key: String,
         model: String,
@@ -31,6 +35,7 @@ impl UnifiedProvider {
         is_remote: bool,
     ) -> Self {
         Self {
+            client,
             base_url,
             api_key,
             model,
@@ -40,15 +45,6 @@ impl UnifiedProvider {
             organization_id,
             is_remote,
         }
-    }
-
-    fn http_client(&self) -> Result<reqwest::Client, String> {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_millis(self.timeout_ms))
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .use_rustls_tls()
-            .build()
-            .map_err(|e| format!("Failed to create HTTP client: {e}"))
     }
 
     fn build_auth_headers(
@@ -200,7 +196,6 @@ impl LlmProvider for UnifiedProvider {
         tools: Option<Vec<Value>>,
         cancel: CancellationToken,
     ) -> Result<ChatStreamResult, String> {
-        let client = self.http_client()?;
         let url = format!(
             "{}/chat/completions",
             self.base_url.trim_end_matches('/')
@@ -223,7 +218,12 @@ impl LlmProvider for UnifiedProvider {
             }
         }
 
-        let req = self.build_auth_headers(client.post(&url)).json(&body);
+        let req = self.build_auth_headers(
+            self.client
+                .post(&url)
+                .timeout(std::time::Duration::from_millis(self.timeout_ms)),
+        )
+        .json(&body);
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
@@ -388,13 +388,6 @@ impl LlmProvider for UnifiedProvider {
             .and_then(|o| o.timeout_ms)
             .unwrap_or(self.timeout_ms);
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_millis(timeout.max(3000).min(45_000)))
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .use_rustls_tls()
-            .build()
-            .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
-
         let url = format!(
             "{}/chat/completions",
             self.base_url.trim_end_matches('/')
@@ -413,7 +406,12 @@ impl LlmProvider for UnifiedProvider {
             body["response_format"] = json!({"type": "json_object"});
         }
 
-        let req = self.build_auth_headers(client.post(&url)).json(&body);
+        let req = self.build_auth_headers(
+            self.client
+                .post(&url)
+                .timeout(std::time::Duration::from_millis(timeout.max(3000).min(45_000))),
+        )
+        .json(&body);
         let resp = req
             .send()
             .await
@@ -442,9 +440,12 @@ impl LlmProvider for UnifiedProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<String>, String> {
-        let client = self.http_client()?;
         let url = format!("{}/models", self.base_url.trim_end_matches('/'));
-        let req = self.build_auth_headers(client.get(&url));
+        let req = self.build_auth_headers(
+            self.client
+                .get(&url)
+                .timeout(std::time::Duration::from_millis(self.timeout_ms)),
+        );
         let resp = req
             .send()
             .await
@@ -508,9 +509,14 @@ impl LlmProvider for UnifiedProvider {
 mod tests {
     use super::*;
 
+    fn test_client() -> Arc<reqwest::Client> {
+        Arc::new(reqwest::Client::new())
+    }
+
     #[test]
     fn serialize_tool_result_message() {
         let provider = UnifiedProvider::new(
+            test_client(),
             "https://api.openai.com/v1".to_string(),
             "test-key".to_string(),
             "gpt-4o".to_string(),

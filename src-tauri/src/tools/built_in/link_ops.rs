@@ -96,23 +96,30 @@ impl Tool for LinkSuggestRelatedTool {
 
         let root = ctx.workspace_root.clone();
         let rel = rel_path.clone();
+        let embed_cache = ctx.embed_cache.clone();
 
         let result = tauri::async_runtime::spawn_blocking(
             move || -> Result<Vec<crate::link_recommendation::LinkRecommendation>, String> {
                 let full_path = root.join(&rel);
 
-                // 检查文件是否存在
                 if !full_path.exists() {
                     return Err("__NOT_FOUND__".to_string());
                 }
 
-                // 检查是否私密
                 if crate::note_privacy::peek_kf_private_from_md_file(&full_path) {
                     return Err("__PRIVACY_BLOCKED__".to_string());
                 }
 
                 let emb_conn = crate::semantic_index::open_embedding_db(&root)?;
                 let thoughts_conn = crate::vault_thoughts_db::open_thoughts_db(&root)?;
+                let fallback_cache;
+                let cache_ref = match embed_cache.as_ref() {
+                    Some(c) => c.as_ref(),
+                    None => {
+                        fallback_cache = crate::semantic_index::EmbeddingCache::new();
+                        &fallback_cache
+                    }
+                };
                 crate::link_recommendation::suggest_related_notes(
                     &root,
                     &rel,
@@ -120,6 +127,7 @@ impl Tool for LinkSuggestRelatedTool {
                     &thoughts_conn,
                     max_results,
                     None,
+                    cache_ref,
                 )
             },
         )

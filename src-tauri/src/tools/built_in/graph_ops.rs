@@ -166,13 +166,21 @@ impl Tool for IndexStatusTool {
         let root = ctx.workspace_root.clone();
         let cache_dir_opt = ctx.app_cache_dir.clone();
         let bundle_dir_opt = ctx.app_bundle_resource_dir.clone();
+        let embed_cache = ctx.embed_cache.clone();
 
         let result = tauri::async_runtime::spawn_blocking(
             move || -> Result<(usize, usize, bool), String> {
                 let conn = crate::semantic_index::open_embedding_db(&root)?;
-                let doc_chunks = crate::semantic_index::load_all_doc_embeddings(&conn)?;
-                let thought_embeddings =
-                    crate::semantic_index::load_all_thought_embeddings(&conn)?;
+                let fallback_cache;
+                let cache_ref = match embed_cache.as_ref() {
+                    Some(c) => c.as_ref(),
+                    None => {
+                        fallback_cache = crate::semantic_index::EmbeddingCache::new();
+                        &fallback_cache
+                    }
+                };
+                let doc_chunks = cache_ref.get_docs(&conn);
+                let thought_embeddings = cache_ref.get_thoughts(&conn);
 
                 let doc_chunk_count = doc_chunks.len();
                 let thought_embedding_count = thought_embeddings.len();

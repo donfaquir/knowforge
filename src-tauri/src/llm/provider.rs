@@ -78,15 +78,27 @@ pub fn resolve_model_name(last_used: Option<&str>, default_model: &str) -> Optio
         })
 }
 
+/// Build a default shared HTTP client for LLM providers.
+pub fn build_shared_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .pool_max_idle_per_host(4)
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .use_rustls_tls()
+        .build()
+        .expect("Failed to create shared HTTP client")
+}
+
 /// Create a provider from the active profile in the config.
 pub fn create_provider(
     config: &AiConfig,
     model_override: Option<&str>,
+    http_client: &Arc<reqwest::Client>,
 ) -> Result<Arc<dyn LlmProvider>, String> {
     let profile = config
         .active_profile()
         .ok_or("No active provider configured. Choose a provider in settings.")?;
-    create_provider_from_profile(profile, config, model_override)
+    create_provider_from_profile(profile, config, model_override, http_client)
 }
 
 /// Create a provider for a specific profile identified by `provider_id`.
@@ -94,19 +106,21 @@ pub fn create_provider_by_id(
     config: &AiConfig,
     provider_id: &str,
     model_override: Option<&str>,
+    http_client: &Arc<reqwest::Client>,
 ) -> Result<Arc<dyn LlmProvider>, String> {
     let profile = config
         .providers
         .iter()
         .find(|p| p.id == provider_id)
         .ok_or_else(|| format!("Provider '{}' not found in config.", provider_id))?;
-    create_provider_from_profile(profile, config, model_override)
+    create_provider_from_profile(profile, config, model_override, http_client)
 }
 
 fn create_provider_from_profile(
     profile: &ProviderProfile,
     config: &AiConfig,
     model_override: Option<&str>,
+    http_client: &Arc<reqwest::Client>,
 ) -> Result<Arc<dyn LlmProvider>, String> {
     let model = model_override
         .map(str::trim)
@@ -117,6 +131,7 @@ fn create_provider_from_profile(
 
     Ok(Arc::new(
         super::provider_impl::UnifiedProvider::new(
+            Arc::clone(http_client),
             profile.base_url.clone(),
             profile.api_key.clone(),
             model,
