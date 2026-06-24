@@ -104,8 +104,6 @@ pub async fn run_planned_agent(
     memory_manager: SharedMemoryManager,
 ) -> String {
     // Phase A: Planning (no tools, text-only output)
-    // Use a separate session_id so plan tokens don't stream into the user's chat
-    let planning_sid = format!("plan-{}", uuid::Uuid::new_v4());
     let tool_desc = build_tool_descriptions(&tools_json);
     let plan_messages = build_planning_messages(&initial_messages, &tool_desc);
 
@@ -114,7 +112,7 @@ pub async fn run_planned_agent(
     let plan_result = provider
         .chat_stream(
             &app,
-            &planning_sid,
+            &session_id,
             plan_messages,
             None,
             cancel.clone(),

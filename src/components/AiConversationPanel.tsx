@@ -1071,6 +1071,21 @@ export function AiConversationPanel() {
       listen<{ sessionId: string; planText: string }>("llm:planning-done", (e) => {
         if (e.payload.sessionId !== activeSessionRef.current) return;
         setIsPlanning(false);
+        const planText = e.payload.planText;
+        if (planText && planText.trim()) {
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant" && last.streaming) {
+              next[next.length - 1] = {
+                ...last,
+                content: "",
+                meta: { ...last.meta, planningText: planText },
+              };
+            }
+            return next;
+          });
+        }
       }),
       // Budget warning: tool call budget reaching 80%
       listen<{ sessionId: string; used: number; limit: number; type: string }>(
@@ -2209,7 +2224,15 @@ export function AiConversationPanel() {
                         Agent {m.meta.budgetWarning.used}/{m.meta.budgetWarning.limit} tool calls used
                       </div>
                     )}
-                    <AiAssistantMarkdown content={m.content} />
+                    {m.meta?.planningText && (
+                      <details className="ai-chat__planning-fold">
+                        <summary>Plan</summary>
+                        <AiAssistantMarkdown content={m.meta.planningText} />
+                      </details>
+                    )}
+                    <div className={isPlanning && m.streaming ? "ai-chat__planning-live" : undefined}>
+                      <AiAssistantMarkdown content={m.content} />
+                    </div>
                     {!m.streaming && m.meta?.thoughtCitation && !m.meta.thoughtCitation.privateOmitted ? (
                       <button
                         type="button"

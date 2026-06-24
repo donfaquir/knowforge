@@ -61,6 +61,7 @@ export type ChatMessage = {
      *  即使关闭并重新打开 vault，徽章和过滤行为均保持一致。 */
     skillId?: string;
     skillName?: string;
+    planningText?: string;
   };
 };
 
