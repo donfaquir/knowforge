@@ -126,7 +126,7 @@ impl WebReadPageTool {
         Self {
             app,
             manifest: ToolManifest {
-                name: "web.read_page".to_string(),
+                name: "web-read_page".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "Fetch a specific URL and extract its article content as Markdown. Use this whenever the user provides a URL to read"
@@ -743,7 +743,7 @@ mod tests {
     fn test_manifest_shape() {
         let tool = WebReadPageTool::new(None);
         let m = tool.manifest();
-        assert_eq!(m.name, "web.read_page");
+        assert_eq!(m.name, "web-read_page");
         assert_eq!(m.effects, vec![Effect::Network]);
         assert_eq!(m.risk, Risk::Caution);
         assert_eq!(m.default_approval, ApprovalPolicy::Auto);

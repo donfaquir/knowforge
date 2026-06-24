@@ -169,24 +169,24 @@ mod tests {
     #[test]
     fn approval_cache_per_conversation_and_tool() {
         let s = ToolApprovalState::new();
-        assert!(!s.is_pre_approved("c1", "note.create"));
-        s.remember_approval("c1", "note.create");
-        assert!(s.is_pre_approved("c1", "note.create"));
+        assert!(!s.is_pre_approved("c1", "note-create"));
+        s.remember_approval("c1", "note-create");
+        assert!(s.is_pre_approved("c1", "note-create"));
         // 不同 conv
-        assert!(!s.is_pre_approved("c2", "note.create"));
+        assert!(!s.is_pre_approved("c2", "note-create"));
         // 不同 tool
-        assert!(!s.is_pre_approved("c1", "note.write_section"));
+        assert!(!s.is_pre_approved("c1", "note-write_section"));
     }
 
     #[test]
     fn clear_conversation_drops_cache() {
         let s = ToolApprovalState::new();
-        s.remember_approval("c1", "note.create");
-        s.remember_approval("c1", "thought.create");
-        s.remember_approval("c2", "note.create");
+        s.remember_approval("c1", "note-create");
+        s.remember_approval("c1", "thought-create");
+        s.remember_approval("c2", "note-create");
         s.clear_conversation("c1");
-        assert!(!s.is_pre_approved("c1", "note.create"));
-        assert!(!s.is_pre_approved("c1", "thought.create"));
-        assert!(s.is_pre_approved("c2", "note.create"));
+        assert!(!s.is_pre_approved("c1", "note-create"));
+        assert!(!s.is_pre_approved("c1", "thought-create"));
+        assert!(s.is_pre_approved("c2", "note-create"));
     }
 }

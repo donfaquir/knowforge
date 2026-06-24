@@ -265,7 +265,7 @@ pub fn list_available_tools(
                 .and_then(|d| d.as_str())
                 .unwrap_or("")
                 .to_string();
-            if name.starts_with("skill.") {
+            if name.starts_with("skill-") {
                 return None;
             }
             Some(ToolSummary { name, description })

@@ -19,7 +19,7 @@ impl MemorySaveTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "memory.save".to_string(),
+                name: "memory-save".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "Save a user preference, knowledge, or style to persistent memory. \
@@ -28,7 +28,7 @@ impl MemorySaveTool {
                               states their expertise or background. Use category=\"style\" when \
                               the user specifies communication preferences. Do NOT use for the \
                               user's intellectual ideas or topic insights — those belong in \
-                              thought.create."
+                              thought-create."
                     .to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -192,7 +192,7 @@ impl MemoryForgetTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "memory.forget".to_string(),
+                name: "memory-forget".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "Remove a previously saved preference or instruction from persistent \

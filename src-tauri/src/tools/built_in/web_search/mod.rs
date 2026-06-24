@@ -59,7 +59,7 @@ impl WebSearchTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "web.search".to_string(),
+                name: "web-search".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "Search the web by keyword query (NOT a URL). Use only when you need to discover pages — if the user already provided a URL, use web.read_page instead".to_string(),
@@ -343,7 +343,7 @@ mod tests {
     fn test_manifest_shape() {
         let tool = WebSearchTool::new();
         let m = tool.manifest();
-        assert_eq!(m.name, "web.search");
+        assert_eq!(m.name, "web-search");
         assert_eq!(m.effects, vec![Effect::Network]);
         assert_eq!(m.risk, Risk::Caution);
         assert!(m.requires_workspace);

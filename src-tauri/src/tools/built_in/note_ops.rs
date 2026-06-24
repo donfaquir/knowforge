@@ -47,7 +47,7 @@ impl NoteListTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "note.list".to_string(),
+                name: "note-list".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "列出工作区内所有 Markdown 笔记文件的相对路径".to_string(),
@@ -166,7 +166,7 @@ impl NoteReadTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "note.read".to_string(),
+                name: "note-read".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "读取指定 Markdown 笔记的完整内容".to_string(),
@@ -334,7 +334,7 @@ impl NoteWriteSectionTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "note.write_section".to_string(),
+                name: "note-write_section".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "覆写笔记中指定标题（heading）对应的章节内容。仅修改该 heading 到下一个同级或更高级 heading 之间的内容。".to_string(),
@@ -568,7 +568,7 @@ impl NoteCreateTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "note.create".to_string(),
+                name: "note-create".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "在工作区创建一篇新的 Markdown 笔记文件（含 frontmatter）".to_string(),
@@ -756,7 +756,7 @@ impl NoteAppendTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "note.append".to_string(),
+                name: "note-append".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "在已有笔记文件末尾追加内容。适用于向文件尾部添加新段落、列表项或引用，无需读取并覆写整个文件。".to_string(),

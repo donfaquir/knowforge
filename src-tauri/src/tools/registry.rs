@@ -70,13 +70,14 @@ impl ToolFilter {
 }
 
 // ─── name regex ────────────────────────────────────────────────────────────────
-// ^[a-z][a-z0-9]*(\.[a-z][a-z0-9_]*)+$
+// ^[a-z][a-z0-9]*(-[a-z][a-z0-9_]*)+$
+// Uses '-' as the namespace separator (OpenAI-compatible: ^[a-zA-Z0-9_-]+$).
 
 fn is_valid_tool_name(name: &str) -> bool {
     if name.is_empty() {
         return false;
     }
-    let parts: Vec<&str> = name.split('.').collect();
+    let parts: Vec<&str> = name.split('-').collect();
     if parts.len() < 2 {
         return false;
     }
@@ -193,18 +194,18 @@ mod tests {
 
     #[test]
     fn valid_names() {
-        assert!(is_valid_tool_name("time.now"));
-        assert!(is_valid_tool_name("note.read_content"));
-        assert!(is_valid_tool_name("ab1.cd2_ef3"));
+        assert!(is_valid_tool_name("time-now"));
+        assert!(is_valid_tool_name("note-read_content"));
+        assert!(is_valid_tool_name("ab1-cd2_ef3"));
     }
 
     #[test]
     fn invalid_names() {
-        assert!(!is_valid_tool_name("time"));       // no dot
-        assert!(!is_valid_tool_name(".time"));       // starts with dot
-        assert!(!is_valid_tool_name("Time.now"));    // uppercase
-        assert!(!is_valid_tool_name("1time.now"));   // starts with digit
-        assert!(!is_valid_tool_name("time."));       // trailing dot
+        assert!(!is_valid_tool_name("time"));       // no hyphen
+        assert!(!is_valid_tool_name("-time"));       // starts with hyphen
+        assert!(!is_valid_tool_name("Time-now"));    // uppercase
+        assert!(!is_valid_tool_name("1time-now"));   // starts with digit
+        assert!(!is_valid_tool_name("time-"));       // trailing hyphen
         assert!(!is_valid_tool_name(""));            // empty
     }
 }

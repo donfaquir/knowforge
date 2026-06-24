@@ -17,7 +17,7 @@ impl GraphQueryTopicNetworkTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "graph.query_topic_network".to_string(),
+                name: "graph-query_topic_network".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description:
@@ -119,7 +119,7 @@ impl IndexStatusTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "index.status".to_string(),
+                name: "index-status".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description:

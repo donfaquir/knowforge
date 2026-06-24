@@ -1,5 +1,5 @@
 //! Iter 5 #4 (Stage 1): bridge a Skill into the tool surface so the main agent
-//! loop can auto-invoke it via `skill.<id>`.
+//! loop can auto-invoke it via `skill-<id>`.
 //!
 //! On invoke:
 //! 1. Bail with PermissionDenied when nesting_depth >= 1 (skills can't nest).
@@ -57,7 +57,7 @@ impl SkillAsTool {
         app: AppHandle,
         semaphore: Arc<Semaphore>,
     ) -> Arc<Self> {
-        let tool_name = format!("skill.{}", skill.id);
+        let tool_name = format!("skill-{}", skill.id);
         let when = skill
             .when_to_use
             .as_deref()
@@ -327,7 +327,7 @@ pub fn unregister_skill_tool(
     skill_id: &str,
     tool_registry: &ToolRegistry,
 ) -> Result<(), String> {
-    let tool_name = format!("skill.{}", skill_id);
+    let tool_name = format!("skill-{}", skill_id);
     tool_registry.unregister(&tool_name)
 }
 
@@ -343,7 +343,7 @@ mod tests {
             version: "0.1.0".to_string(),
             description: "desc".to_string(),
             system_prompt_template: "p".to_string(),
-            allowed_tools: vec!["time.now".to_string()],
+            allowed_tools: vec!["time-now".to_string()],
             max_tool_calls: 4,
             timeout_secs: 30,
             ui_entry: SkillUiEntry::ConversationMode,
@@ -366,8 +366,8 @@ mod tests {
             format!("{}\n\nWhen to use: {}", s.description, when)
         };
         assert!(description.contains("打磨笔记"));
-        // skill.<id> conforms to is_valid_tool_name (a–z + . + a–z0–9_).
-        let candidate = format!("skill.{}", s.id);
-        assert_eq!(candidate, "skill.writing_coach");
+        // skill-<id> conforms to is_valid_tool_name (a–z + - + a–z0–9_).
+        let candidate = format!("skill-{}", s.id);
+        assert_eq!(candidate, "skill-writing_coach");
     }
 }

@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn builds_messages_with_system_user() {
-        let m = sample_manifest(vec!["time.now"]);
+        let m = sample_manifest(vec!["time-now"]);
         let msgs = build_initial_messages(&m, "vault-x", "/tmp/v", "ask me");
         assert_eq!(msgs.len(), 4);
         assert_eq!(msgs[0].role, "system");
@@ -224,7 +224,7 @@ mod tests {
         assert_eq!(msgs[1].role, "system");
         assert_eq!(msgs[2].role, "system");
         assert!(
-            msgs[2].content.contains("note.list") && msgs[2].content.contains("vault.search_keyword"),
+            msgs[2].content.contains("note-list") && msgs[2].content.contains("vault-search_keyword"),
             "expected discover-before-read hint at msgs[2], got: {}",
             msgs[2].content,
         );
@@ -236,17 +236,17 @@ mod tests {
     fn filters_tools_by_whitelist() {
         let r = ToolRegistry::new();
         register_builtin_tools(&r, None).unwrap();
-        let m = sample_manifest(vec!["time.now"]);
+        let m = sample_manifest(vec!["time-now"]);
         let filtered = filter_tools_for_skill(&r, &m);
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].get("name").and_then(|n| n.as_str()), Some("time.now"));
+        assert_eq!(filtered[0].get("name").and_then(|n| n.as_str()), Some("time-now"));
     }
 
     #[test]
     fn skips_unknown_allowed_tools_at_filter_time() {
         let r = ToolRegistry::new();
         register_builtin_tools(&r, None).unwrap();
-        let m = sample_manifest(vec!["time.now", "nonexistent.tool"]);
+        let m = sample_manifest(vec!["time-now", "nonexistent-tool"]);
         let filtered = filter_tools_for_skill(&r, &m);
         assert_eq!(filtered.len(), 1);
     }

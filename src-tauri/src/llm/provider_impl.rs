@@ -79,8 +79,14 @@ impl UnifiedProvider {
                     return Value::Object(obj);
                 }
 
+                // OpenAI API: assistant message must have either content or tool_calls.
+                // content: null is only valid when tool_calls are present.
                 if m.content.is_empty() {
-                    obj.insert("content".into(), Value::Null);
+                    if m.tool_calls.as_ref().map_or(true, |tc| tc.is_empty()) {
+                        obj.insert("content".into(), json!(""));
+                    } else {
+                        obj.insert("content".into(), Value::Null);
+                    }
                 } else {
                     obj.insert("content".into(), json!(m.content));
                 }
@@ -526,7 +532,7 @@ mod tests {
             None,
             true,
         );
-        let msg = provider.build_tool_result_message("call_123", "web.search", "some result");
+        let msg = provider.build_tool_result_message("call_123", "web-search", "some result");
         assert_eq!(msg.role, "tool");
         assert_eq!(msg.tool_call_id, Some("call_123".to_string()));
         assert!(msg.tool_name.is_none());
@@ -556,7 +562,7 @@ mod tests {
             tool_calls: Some(vec![LlmToolCall {
                 id: "call_xyz".to_string(),
                 function: LlmToolCallFunction {
-                    name: "web.search".to_string(),
+                    name: "web-search".to_string(),
                     arguments: json!({"query": "test"}),
                 },
             }]),

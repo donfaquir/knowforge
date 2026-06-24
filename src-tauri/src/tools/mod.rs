@@ -12,7 +12,7 @@ pub use types::*;
 pub use registry::ToolRegistry;
 pub use context::{ToolContext, ToolContextFactory};
 
-// ─── time.now 内置工具 ─────────────────────────────────────────────────────────
+// ─── time-now 内置工具 ─────────────────────────────────────────────────────────
 // P0 唯一内置工具，用于端到端验证
 
 use std::sync::Arc;
@@ -25,7 +25,7 @@ impl TimeNowTool {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             manifest: ToolManifest {
-                name: "time.now".to_string(),
+                name: "time-now".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "返回当前 UTC 时间戳（ISO 8601 格式）".to_string(),
@@ -136,7 +136,7 @@ mod mod_tests {
             "register_builtin_tools failed: {:?}",
             result.err()
         );
-        // 确认工具总数：1(time.now) + 8(P1) + 4(P3 写操作) + 2(memory) + 4(P4 网络) = 19
+        // 确认工具总数：1(time-now) + 8(P1) + 4(P3 写操作) + 2(memory) + 4(P4 网络) = 19
         let tools = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
         assert_eq!(tools.len(), 19, "expected 19 registered tools, got {}", tools.len());
     }
@@ -148,7 +148,7 @@ mod mod_tests {
         let all = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
         let core = registry.list_for_llm_filtered(&crate::tools::registry::ToolFilter::core());
         assert!(core.len() < all.len(), "core ({}) should be less than all ({})", core.len(), all.len());
-        // NoteRead(5) + Utility(1 time.now + 2 memory) = 8
+        // NoteRead(5) + Utility(1 time-now + 2 memory) = 8
         assert_eq!(core.len(), 8, "core should have 8 tools (5 NoteRead + 3 Utility)");
     }
 
@@ -162,28 +162,28 @@ mod mod_tests {
             assert_eq!(tool.category(), expected, "wrong category for {name}");
         };
 
-        check("note.list", ToolCategory::NoteRead);
-        check("note.read", ToolCategory::NoteRead);
-        check("vault.search_keyword", ToolCategory::NoteRead);
-        check("vault.semantic_search", ToolCategory::NoteRead);
-        check("thought.list", ToolCategory::NoteRead);
+        check("note-list", ToolCategory::NoteRead);
+        check("note-read", ToolCategory::NoteRead);
+        check("vault-search_keyword", ToolCategory::NoteRead);
+        check("vault-semantic_search", ToolCategory::NoteRead);
+        check("thought-list", ToolCategory::NoteRead);
 
-        check("note.write_section", ToolCategory::NoteWrite);
-        check("note.append", ToolCategory::NoteWrite);
-        check("note.create", ToolCategory::NoteWrite);
-        check("thought.create", ToolCategory::NoteWrite);
+        check("note-write_section", ToolCategory::NoteWrite);
+        check("note-append", ToolCategory::NoteWrite);
+        check("note-create", ToolCategory::NoteWrite);
+        check("thought-create", ToolCategory::NoteWrite);
 
-        check("web.read_page", ToolCategory::Web);
-        check("web.search", ToolCategory::Web);
-        check("web.download", ToolCategory::Web);
-        check("web.read_pdf", ToolCategory::Web);
+        check("web-read_page", ToolCategory::Web);
+        check("web-search", ToolCategory::Web);
+        check("web-download", ToolCategory::Web);
+        check("web-read_pdf", ToolCategory::Web);
 
-        check("graph.query_topic_network", ToolCategory::Graph);
-        check("index.status", ToolCategory::Graph);
-        check("link.suggest_related", ToolCategory::Graph);
+        check("graph-query_topic_network", ToolCategory::Graph);
+        check("index-status", ToolCategory::Graph);
+        check("link-suggest_related", ToolCategory::Graph);
 
-        check("time.now", ToolCategory::Utility);
-        check("memory.save", ToolCategory::Utility);
-        check("memory.forget", ToolCategory::Utility);
+        check("time-now", ToolCategory::Utility);
+        check("memory-save", ToolCategory::Utility);
+        check("memory-forget", ToolCategory::Utility);
     }
 }

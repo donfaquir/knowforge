@@ -404,18 +404,18 @@ fn build_skills_system_block(
         return None;
     }
     let mut s = String::from(
-        "Available skills (call as tools via `skill.<id>` with a single string `input`):\n",
+        "Available skills (call as tools via `skill-<id>` with a single string `input`):\n",
     );
     for (id, name, when) in skills {
         if let Some(when) = when.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
-            s.push_str(&format!("- skill.{id} ({name}): {when}\n"));
+            s.push_str(&format!("- skill-{id} ({name}): {when}\n"));
         } else {
-            s.push_str(&format!("- skill.{id} ({name})\n"));
+            s.push_str(&format!("- skill-{id} ({name})\n"));
         }
     }
     s.push_str(
         "Skills cannot invoke other skills. The skill streams its own output to the user;\n\
-         after `skill.<id>` returns, acknowledge briefly without repeating the skill's content.",
+         after `skill-<id>` returns, acknowledge briefly without repeating the skill's content.",
     );
     Some(s)
 }
@@ -1274,10 +1274,10 @@ mod skills_block_tests {
             ("review".to_string(), "复盘".to_string(), None),
         ];
         let block = build_skills_system_block(&skills).expect("should build");
-        assert!(block.contains("skill.writing_coach"));
+        assert!(block.contains("skill-writing_coach"));
         assert!(block.contains("写作教练"));
         assert!(block.contains("打磨笔记"));
-        assert!(block.contains("skill.review"));
+        assert!(block.contains("skill-review"));
         assert!(block.contains("复盘"));
         // The trailing instruction must be present so the parent LLM does not
         // re-render the skill's content.
