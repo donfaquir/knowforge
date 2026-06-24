@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
 use super::approval::ToolApprovalState;
-use super::context_guard::ContextGuard;
+use super::context_guard::{ContextGuard, PrecomputedSummary};
 use super::memory;
 use super::provider::{LlmProvider, NormalizedToolCall};
 use super::{LlmChatMessage, LlmToolCall, LlmToolCallFunction};
@@ -137,6 +137,7 @@ pub async fn run_agent_stream(
         ContextGuard::with_provider(config.max_context_tokens, provider.clone())
     };
     let mut loop_detector = LoopDetector::new();
+    let mut pending_summary: Option<tokio::task::JoinHandle<Option<PrecomputedSummary>>> = None;
 
     loop {
         if cancel.is_cancelled() {
@@ -154,6 +155,11 @@ pub async fn run_agent_stream(
             }
         }
 
+        if let Some(handle) = pending_summary.take() {
+            if let Ok(Some(cached)) = handle.await {
+                context_guard.apply_cached_summary(&mut messages, &cached);
+            }
+        }
         context_guard.trim_with_summary(&mut messages).await;
 
         // 1. 流式请求（携带 tools 字段；本轮文字会通过 emit_chunk/emit_done 推给前端）
@@ -384,7 +390,14 @@ pub async fn run_agent_stream(
             store_extraction_msgs(&memory_manager, &messages).await;
             return String::new();
         }
-        // 继续 loop：下一轮流式请求会带上完整的 messages 历史
+
+        if context_guard.budget_pressure(&messages) > 0.7 {
+            let msgs_snapshot = messages.clone();
+            let guard_clone = context_guard.clone();
+            pending_summary = Some(tokio::spawn(async move {
+                guard_clone.pre_summarize(&msgs_snapshot).await
+            }));
+        }
     }
 }
 

@@ -16,10 +16,16 @@ Summarize the following conversation excerpt in 2-3 concise sentences. \
 Focus on: what the user asked, what tools were called, and key findings. \
 Output only the summary, nothing else.";
 
+#[derive(Clone)]
 pub struct ContextGuard {
     max_tokens: usize,
     reserve: usize,
     provider: Option<Arc<dyn LlmProvider>>,
+}
+
+pub struct PrecomputedSummary {
+    pub summary_text: String,
+    pub original_msg_count: usize,
 }
 
 impl ContextGuard {
@@ -71,6 +77,91 @@ impl ContextGuard {
 
     fn budget(&self) -> usize {
         self.max_tokens.saturating_sub(self.reserve)
+    }
+
+    pub fn budget_pressure(&self, messages: &[LlmChatMessage]) -> f64 {
+        let budget = self.budget();
+        if budget == 0 {
+            return 0.0;
+        }
+        let used = Self::estimate_total(messages);
+        (used as f64 / budget as f64).min(1.0)
+    }
+
+    pub async fn pre_summarize(
+        &self,
+        messages: &[LlmChatMessage],
+    ) -> Option<PrecomputedSummary> {
+        let provider = self.provider.as_ref()?;
+
+        let tail_boundary = Self::find_tail_boundary(messages);
+        let removable_indices: Vec<usize> = (0..tail_boundary.min(messages.len()))
+            .filter(|&i| messages[i].role != "system")
+            .collect();
+
+        if removable_indices.len() < MIN_MESSAGES_FOR_SUMMARY {
+            return None;
+        }
+
+        let removable_msgs: Vec<&LlmChatMessage> =
+            removable_indices.iter().map(|&i| &messages[i]).collect();
+
+        let summary_input = build_summary_input(&removable_msgs);
+        let overrides = CompletionOverrides {
+            temperature: Some(0.0),
+            ..Default::default()
+        };
+
+        let summary_text = provider
+            .chat_completion(&summary_input, Some(&overrides))
+            .await
+            .ok()
+            .filter(|t| !t.trim().is_empty())?;
+
+        Some(PrecomputedSummary {
+            summary_text,
+            original_msg_count: messages.len(),
+        })
+    }
+
+    pub fn apply_cached_summary(
+        &self,
+        messages: &mut Vec<LlmChatMessage>,
+        cached: &PrecomputedSummary,
+    ) -> bool {
+        if messages.len() != cached.original_msg_count {
+            return false;
+        }
+
+        let tail_boundary = Self::find_tail_boundary(messages);
+        let removable_indices: Vec<usize> = (0..tail_boundary.min(messages.len()))
+            .filter(|&i| messages[i].role != "system")
+            .collect();
+
+        for &i in removable_indices.iter().rev() {
+            if i < messages.len() {
+                messages.remove(i);
+            }
+        }
+
+        let insert_pos = messages
+            .iter()
+            .position(|m| m.role != "system")
+            .unwrap_or(messages.len());
+
+        messages.insert(
+            insert_pos,
+            LlmChatMessage {
+                role: "system".to_string(),
+                content: format!(
+                    "[Earlier conversation summary]\n{}",
+                    cached.summary_text.trim()
+                ),
+                ..Default::default()
+            },
+        );
+
+        true
     }
 
     pub async fn trim_with_summary(&self, messages: &mut Vec<LlmChatMessage>) {
@@ -422,6 +513,26 @@ mod tests {
         let truncated = truncate_for_summary(s, 7);
         assert!(truncated.ends_with("..."));
         assert!(truncated.len() <= 10); // 6 bytes (2 chars) + "..."
+    }
+
+    #[test]
+    fn budget_pressure_under() {
+        let guard = ContextGuard::new(Some(4096));
+        let msgs = vec![sys("hello"), user("hi"), assistant("hey")];
+        let pressure = guard.budget_pressure(&msgs);
+        assert!(pressure < 0.1, "expected low pressure, got {}", pressure);
+    }
+
+    #[test]
+    fn budget_pressure_over() {
+        let guard = ContextGuard::new(Some(600));
+        let msgs = vec![
+            sys("system prompt"),
+            user(&"long message ".repeat(50)),
+            assistant(&"long reply ".repeat(50)),
+        ];
+        let pressure = guard.budget_pressure(&msgs);
+        assert!(pressure >= 0.7, "expected high pressure, got {}", pressure);
     }
 
     #[tokio::test]
