@@ -8,7 +8,6 @@ import { useAiNoteContext } from "../contexts/AiNoteContext";
 import type { ChatMessage, ToolCallDisplayInfo } from "../hooks/useWorkspaceAiConversations";
 import type { ReplyContextSources } from "../types/replyContextSources";
 import { hasReplyContextSourcesToShow } from "../types/replyContextSources";
-import type { SearchWorkspaceContextResponse } from "../types/vaultContextSearch";
 import type {
   AutoResolvedDepth,
   ThoughtRetrievalResult,
@@ -237,7 +236,6 @@ export function AiConversationPanel() {
     setIncludeVaultContext,
     isVaultSearching,
     setIsVaultSearching,
-    vaultSearchEpochRef,
     depthMode,
     setDepthMode,
     autoResolved,
@@ -638,6 +636,7 @@ export function AiConversationPanel() {
         if (p.sessionId !== activeSessionRef.current) {
           return;
         }
+        setIsVaultSearching(false);
         // P2 Tool Calling Loop：agent 模式下 stream-done 只是轮次中的中间信号，
         // 后续还会有 tool-call-* 与后续文本输出，只能由 llm:agent-done 最终化。
         if (isAgentModeRef.current) {
@@ -834,6 +833,7 @@ export function AiConversationPanel() {
         activeSessionRef.current = null;
         isAgentModeRef.current = false;
         setIsStreaming(false);
+        setIsVaultSearching(false);
         if (p.code === "cancelled") {
           setMessages((prev) => {
             if (composerInputRef.current.trim().length > 0) {
@@ -1093,6 +1093,50 @@ export function AiConversationPanel() {
           });
         },
       ),
+      listen<{
+        sessionId: string;
+        snippets: import("../types/vaultContextSearch").VaultSnippetRecord[];
+        meta: import("../types/vaultContextSearch").SearchWorkspaceContextMeta | null;
+        replyContextSources: ReplyContextSources;
+      }>("llm:context-ready", (e) => {
+        const { sessionId, snippets, meta, replyContextSources } = e.payload;
+        if (sessionId !== activeSessionRef.current) return;
+
+        if (snippets.length > 0 && meta) {
+          const paths = snippets.map((s) => s.relPath).join(", ");
+          const priv = snippets.filter((s) => s.kind === "privateOmitted").length;
+          let line = t("aiPanel.vaultLine", {
+            paths,
+            scannedFiles: meta.scannedFiles,
+            elapsedMs: meta.elapsedMs,
+          });
+          if (priv > 0) {
+            line += ` ${t("aiPanel.vaultPrivateOmitted", { count: priv })}`;
+          }
+          if (meta.stoppedEarly) {
+            line += ` ${t("aiPanel.vaultStoppedEarly")}`;
+          }
+          setVaultSearchSummary(line);
+        } else {
+          setVaultSearchSummary(null);
+        }
+
+        for (const s of snippets) {
+          if (s.kind !== "privateOmitted") {
+            sharedDocPathsRef.current.add(s.relPath);
+          }
+        }
+
+        setMessages((prev) => {
+          const idx = prev.findIndex((m) => m.role === "assistant" && m.streaming);
+          if (idx < 0) return prev;
+          const next = [...prev];
+          next[idx] = { ...next[idx], meta: { ...next[idx].meta, replyContextSources } };
+          return next;
+        });
+
+        setIsVaultSearching(false);
+      }),
       // P2 Tool Calling Loop：Agent 轮次结束 → 最终化助手消息、清理 streaming 状态
       listen<{ sessionId: string }>("llm:agent-done", (e) => {
         const sid = e.payload.sessionId;
@@ -1136,6 +1180,7 @@ export function AiConversationPanel() {
         activeSessionRef.current = null;
         isAgentModeRef.current = false;
         setIsStreaming(false);
+        setIsVaultSearching(false);
         setIsPlanning(false);
         setMessages((prev) => {
           const next = [...prev];
@@ -1223,12 +1268,7 @@ export function AiConversationPanel() {
   }, []);
 
   const handleStop = useCallback(async () => {
-    if (isVaultSearching) {
-      vaultSearchEpochRef.current += 1;
-      setIsVaultSearching(false);
-      setVaultSearchSummary(null);
-      return;
-    }
+    setIsVaultSearching(false);
 
     const sid = activeSessionRef.current;
     if (!sid || !isTauri()) {
@@ -1576,80 +1616,27 @@ export function AiConversationPanel() {
       setPrivacyHint(null);
     }
 
-    vaultSearchEpochRef.current += 1;
-    const searchEpoch = vaultSearchEpochRef.current;
-
-    let vaultSearchResult: SearchWorkspaceContextResponse | null = null;
-    if (includeVaultContext && workspaceReady) {
-      setIsVaultSearching(true);
-      setVaultSearchSummary(null);
-      try {
-        const excludeRelPaths =
-          noteContext != null ? [noteContext.relPath] : ([] as string[]);
-        vaultSearchResult = await invoke<SearchWorkspaceContextResponse>("search_workspace_context", {
-          args: {
-            query: trimmed,
-            excludeRelPaths,
-          },
-        });
-      } catch (e) {
-        console.error(e);
-        vaultSearchResult = null;
-      } finally {
-        if (vaultSearchEpochRef.current === searchEpoch) {
-          setIsVaultSearching(false);
-        }
-      }
-    }
-
-    if (vaultSearchEpochRef.current !== searchEpoch) {
-      return;
-    }
-
     thoughtInviteExcludeRef.current =
       noteContext != null ? [noteContext.relPath.replace(/\\/g, "/")] : [];
 
-    if (vaultSearchResult != null && vaultSearchResult.snippets.length > 0) {
-      const paths = vaultSearchResult.snippets.map((s) => s.relPath).join(", ");
-      const priv = vaultSearchResult.snippets.filter((s) => s.kind === "privateOmitted").length;
-      const m = vaultSearchResult.meta;
-      let line = t("aiPanel.vaultLine", {
-        paths,
-        scannedFiles: m.scannedFiles,
-        elapsedMs: m.elapsedMs,
-      });
-      if (priv > 0) {
-        line += ` ${t("aiPanel.vaultPrivateOmitted", { count: priv })}`;
-      }
-      if (m.stoppedEarly) {
-        line += ` ${t("aiPanel.vaultStoppedEarly")}`;
-      }
-      setVaultSearchSummary(line);
-    } else {
-      setVaultSearchSummary(null);
-    }
-
-    // 记录本轮发送涉及的文档路径，用于隐私变更检测
     if (noteContext && !markdownTreatAsKfPrivateForUi(noteContext.markdownForGate)) {
       sharedDocPathsRef.current.add(noteContext.relPath);
-    }
-    if (vaultSearchResult) {
-      for (const s of vaultSearchResult.snippets) {
-        if (s.kind !== "privateOmitted") {
-          sharedDocPathsRef.current.add(s.relPath);
-        }
-      }
     }
 
     setErrorBanner(null);
     setInput("");
     setMessages(nextChat);
 
+    if (includeVaultContext && workspaceReady) {
+      setIsVaultSearching(true);
+      setVaultSearchSummary(null);
+    }
+
     try {
       const streamArgs: {
         messages: { role: string; content: string }[];
         noteContext?: { relPath: string; markdownForGate: string };
-        vaultContext?: { snippets: SearchWorkspaceContextResponse["snippets"] };
+        includeVaultContext?: boolean;
         depthMode: typeof depthMode;
         thoughtFocusContext?: ThoughtFocusContext;
         toolsEnabled?: boolean;
@@ -1658,17 +1645,11 @@ export function AiConversationPanel() {
         messages: chatTurns,
         depthMode,
         toolsEnabled,
+        includeVaultContext: includeVaultContext && workspaceReady,
         conversationId: conversationId ?? undefined,
       };
       if (noteContext) {
         streamArgs.noteContext = noteContext;
-      }
-      if (
-        includeVaultContext &&
-        vaultSearchResult != null &&
-        vaultSearchResult.snippets.length > 0
-      ) {
-        streamArgs.vaultContext = { snippets: vaultSearchResult.snippets };
       }
       if (
         thoughtFocusContext != null &&
@@ -1680,10 +1661,6 @@ export function AiConversationPanel() {
       const res = await invoke<StartStreamResponse>("start_chat_stream", {
         args: streamArgs,
       });
-      if (vaultSearchEpochRef.current !== searchEpoch) {
-        void invoke("abort_llm_stream", { sessionId: res.sessionId }).catch(() => {});
-        return;
-      }
       if (depthMode === "auto" && res.resolvedDepth) {
         setAutoResolved(res.resolvedDepth);
       } else if (depthMode !== "auto") {

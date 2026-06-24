@@ -41,7 +41,6 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 use tokio_util::sync::CancellationToken;
@@ -120,12 +119,6 @@ pub struct NoteContextIn {
     pub markdown_for_gate: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VaultContextIn {
-    pub snippets: Vec<vault_context_search::VaultSnippetRecord>,
-}
-
 /// 想法聚焦对话：由前端与会话持久化传入（迭代 6.1）
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -144,9 +137,8 @@ pub struct ChatStreamStartArgs {
     pub model: Option<String>,
     #[serde(default)]
     pub note_context: Option<NoteContextIn>,
-    /// 由 `search_workspace_context` 结果回传；出站前在 `assemble_messages` 内按磁盘重算摘录。
     #[serde(default)]
-    pub vault_context: Option<VaultContextIn>,
+    pub include_vault_context: Option<bool>,
     /// 当前深度模式（迭代 3）；影响系统提示的详细程度与风格。
     #[serde(default)]
     pub depth_mode: Option<DepthMode>,
@@ -264,11 +256,30 @@ fn resolve_auto_depth_heuristic(query: &str) -> (DepthMode, String) {
     (DepthMode::Deep, "long_query".to_string())
 }
 
-struct AssembleOutcome {
+struct AssembleFastOutcome {
     messages: Vec<LlmChatMessage>,
-    /// `Some` 仅当本次请求显式为 Auto：解析结果供前端展示与决策日志。
+    context_insert_pos: usize,
     resolved_depth: Option<DepthMode>,
     auto_resolve_reason: Option<String>,
+    reply_context_sources: ReplyContextSources,
+}
+
+#[derive(Default)]
+struct ContextBlocks {
+    vault_block: Option<String>,
+    vault_snippets: Vec<vault_context_search::VaultSnippetRecord>,
+    vault_meta: Option<vault_context_search::SearchWorkspaceContextMeta>,
+    vault_reply_sources: Option<ReplyVaultKeywordSource>,
+    semantic_block: Option<String>,
+    semantic_reply_sources: ReplySemanticSource,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextReadyPayload {
+    session_id: String,
+    snippets: Vec<vault_context_search::VaultSnippetRecord>,
+    meta: Option<vault_context_search::SearchWorkspaceContextMeta>,
     reply_context_sources: ReplyContextSources,
 }
 
@@ -409,15 +420,11 @@ fn build_skills_system_block(
     Some(s)
 }
 
-/// 合并 `note_context`、可选 `vault_context` 与对话轮次，并校验角色。
-fn assemble_messages(
-    canonical_root: &Path,
+fn assemble_messages_fast(
     ai: &vault_config::AiConfig,
     args: &ChatStreamStartArgs,
-    embed_cache_bundle: Option<(PathBuf, PathBuf)>,
     auto_invocable_skills: &[(String, String, Option<String>)],
-    embed_cache: &semantic_index::EmbeddingCache,
-) -> Result<AssembleOutcome, String> {
+) -> Result<AssembleFastOutcome, String> {
     let mut out: Vec<LlmChatMessage> = Vec::new();
     let mut reply_context_sources = ReplyContextSources::default();
 
@@ -459,6 +466,8 @@ fn assemble_messages(
         }
     }
 
+    let context_insert_pos = out.len();
+
     let last_user_query: Option<String> = args
         .messages
         .iter()
@@ -480,106 +489,6 @@ fn assemble_messages(
         Some(d) => Some(d),
     };
 
-    // Vault 摘录：预算与 `maxContextTokens` 粗挂钩（字符≈4×token），当前笔记 system 优先占满后再给摘录。
-    if let (Some(vc), Some(q)) = (&args.vault_context, last_user_query.as_deref()) {
-        if !vc.snippets.is_empty() {
-            let rebuilt = vault_context_search::rebuild_vault_snippets_for_llm(
-                canonical_root,
-                ai,
-                &vc.snippets,
-                q,
-                1200,
-                96 * 1024,
-            );
-            if !rebuilt.is_empty() {
-                let default_total: usize = 32_000;
-                let total_budget = ai
-                    .request
-                    .max_context_tokens
-                    .map(|m| (m as usize).saturating_mul(4))
-                    .unwrap_or(default_total)
-                    .clamp(4_000, 100_000);
-                let used_note: usize = out.first().map(|m| m.content.chars().count()).unwrap_or(0);
-                let used_msgs: usize = args.messages.iter().map(|m| m.content.chars().count() + 8).sum();
-                let vault_cap = total_budget
-                    .saturating_sub(used_note)
-                    .saturating_sub(used_msgs)
-                    .min(12_000)
-                    .max(400);
-                if let Some((vault_block, truncated, used_rel_paths)) =
-                    vault_context_search::build_vault_context_system_block(&rebuilt, vault_cap)
-                {
-                    let used_set: HashSet<&str> = used_rel_paths.iter().map(String::as_str).collect();
-                    let entries: Vec<ReplyVaultKeywordEntry> = rebuilt
-                        .iter()
-                        .filter(|s| used_set.contains(s.rel_path.as_str()))
-                        .map(|s| ReplyVaultKeywordEntry {
-                            rel_path: s.rel_path.clone(),
-                            kind: s.kind.clone(),
-                        })
-                        .collect();
-                    reply_context_sources.vault_keyword = Some(ReplyVaultKeywordSource {
-                        entries,
-                        truncated,
-                    });
-                    out.push(LlmChatMessage {
-                        role: "system".to_string(),
-                        content: vault_block,
-                        ..Default::default()
-                    });
-                } else {
-                    reply_context_sources.vault_keyword = Some(ReplyVaultKeywordSource {
-                        entries: Vec::new(),
-                        truncated: true,
-                    });
-                }
-            }
-        }
-    }
-
-    let sem_ctx_on = args.semantic_context_enabled.unwrap_or(true);
-    if sem_ctx_on {
-        if let Ok(sem_cfg) = vault_config::load_semantic_merged(canonical_root) {
-            if sem_cfg.enabled {
-                if let (Some(q), Some(paths)) = (last_user_query.as_deref(), embed_cache_bundle.as_ref()) {
-                    let (cache, bundle) = paths;
-                    let kw_paths: Vec<String> = args
-                        .vault_context
-                        .as_ref()
-                        .map(|vc| vc.snippets.iter().map(|s| s.rel_path.clone()).collect())
-                        .unwrap_or_default();
-                    let omit_semantic_docs: Vec<String> = args
-                        .note_context
-                        .as_ref()
-                        .map(|n| vec![n.rel_path.clone()])
-                        .unwrap_or_default();
-                    if let Some(sem_res) = semantic_index::build_semantic_context_for_llm(
-                        canonical_root,
-                        cache,
-                        bundle,
-                        q,
-                        &sem_cfg,
-                        &kw_paths,
-                        &omit_semantic_docs,
-                        embed_cache,
-                    ) {
-                        reply_context_sources.semantic = ReplySemanticSource {
-                            injected: true,
-                            document_paths: sem_res.used.document_paths.clone(),
-                            thought_ids: sem_res.used.thought_ids.clone(),
-                        };
-                        out.push(LlmChatMessage {
-                            role: "system".to_string(),
-                            content: sem_res.block,
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    // 深度模式系统指令（迭代 3）；Auto 在入模前已解析为浅/中/深
     if let Some(depth) = depth_for_prompt {
         let depth_instruction = build_depth_system_instruction(depth);
         out.push(LlmChatMessage {
@@ -589,7 +498,6 @@ fn assemble_messages(
         });
     }
 
-    // 深化子轮次上下文（迭代 3 Phase 4）
     if let Some(invite) = &args.invite_context {
         let mut ctx = format!(
             "The user accepted a deepening question: \"{}\". ",
@@ -613,7 +521,6 @@ fn assemble_messages(
         });
     }
 
-    // 语言匹配指令：确保 LLM 使用用户相同的语言回复
     out.push(LlmChatMessage {
         role: "system".to_string(),
         content: "IMPORTANT: Always respond in the same language the user writes in. \
@@ -624,14 +531,12 @@ fn assemble_messages(
         ..Default::default()
     });
 
-    // 叠词 / 重复词抑制：无笔记上下文时仅靠本条生效；与深度指令互补
     out.push(LlmChatMessage {
         role: "system".to_string(),
         content: CHAT_ANTI_REPETITION_SYSTEM.to_string(),
         ..Default::default()
     });
 
-    // Iter 3.5 P0-2：开启工具调用时,明确告诉 LLM "先发现后读",避免按训练直觉假设文件在根目录。
     let tools_enabled_eff = args.tools_enabled.unwrap_or(ai.tools_enabled);
     if tools_enabled_eff {
         out.push(LlmChatMessage {
@@ -639,8 +544,6 @@ fn assemble_messages(
             content: agent_loop::TOOL_USE_DISCOVERY_HINT.to_string(),
             ..Default::default()
         });
-        // Iter 5 #4: when auto_invocable skills are registered, surface them so
-        // the model can pick `skill.<id>` over recreating the workflow inline.
         if let Some(block) = build_skills_system_block(auto_invocable_skills) {
             out.push(LlmChatMessage {
                 role: "system".to_string(),
@@ -661,12 +564,182 @@ fn assemble_messages(
             ..Default::default()
         });
     }
-    Ok(AssembleOutcome {
+    Ok(AssembleFastOutcome {
         messages: out,
+        context_insert_pos,
         resolved_depth,
         auto_resolve_reason,
         reply_context_sources,
     })
+}
+
+fn inject_context_blocks(outcome: &mut AssembleFastOutcome, blocks: &ContextBlocks) {
+    let pos = outcome.context_insert_pos;
+    if let Some(ref sb) = blocks.semantic_block {
+        outcome.messages.insert(
+            pos,
+            LlmChatMessage {
+                role: "system".to_string(),
+                content: sb.clone(),
+                ..Default::default()
+            },
+        );
+        outcome.reply_context_sources.semantic = blocks.semantic_reply_sources.clone();
+    }
+    if let Some(ref vb) = blocks.vault_block {
+        outcome.messages.insert(
+            pos,
+            LlmChatMessage {
+                role: "system".to_string(),
+                content: vb.clone(),
+                ..Default::default()
+            },
+        );
+        if let Some(ref vs) = blocks.vault_reply_sources {
+            outcome.reply_context_sources.vault_keyword = Some(vs.clone());
+        }
+    }
+}
+
+async fn build_context_pipeline(
+    canonical_root: PathBuf,
+    ai: vault_config::AiConfig,
+    last_user_query: Option<String>,
+    note_context_rel_path: Option<String>,
+    include_vault_context: bool,
+    semantic_enabled: bool,
+    embed_cache: Arc<semantic_index::EmbeddingCache>,
+    cache_dir: PathBuf,
+    bundle_dir: PathBuf,
+    note_chars_count: usize,
+    conversation_chars_count: usize,
+) -> ContextBlocks {
+    let mut blocks = ContextBlocks::default();
+    let query = match last_user_query {
+        Some(q) if !q.trim().is_empty() => q,
+        _ => return blocks,
+    };
+
+    let mut kw_paths: Vec<String> = Vec::new();
+
+    if include_vault_context {
+        let root = canonical_root.clone();
+        let query_clone = query.clone();
+        let exclude = note_context_rel_path
+            .clone()
+            .map(|p| vec![p])
+            .unwrap_or_default();
+
+        let vault_result = tauri::async_runtime::spawn_blocking(move || {
+            vault_context_search::search_workspace_context_blocking(
+                &root,
+                vault_context_search::SearchWorkspaceContextArgs {
+                    query: query_clone,
+                    exclude_rel_paths: exclude,
+                    limits: None,
+                },
+            )
+            .ok()
+        })
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(ref vr) = vault_result {
+            blocks.vault_meta = Some(vr.meta.clone());
+            blocks.vault_snippets = vr.snippets.clone();
+            kw_paths = vr.snippets.iter().map(|s| s.rel_path.clone()).collect();
+
+            let root = canonical_root.clone();
+            let snippets = vr.snippets.clone();
+            let q = query.clone();
+            let ai_for_rebuild = ai.clone();
+            let rebuilt = tauri::async_runtime::spawn_blocking(move || {
+                vault_context_search::rebuild_vault_snippets_for_llm(
+                    &root,
+                    &ai_for_rebuild,
+                    &snippets,
+                    &q,
+                    1200,
+                    96 * 1024,
+                )
+            })
+            .await
+            .unwrap_or_default();
+
+            if !rebuilt.is_empty() {
+                let default_total: usize = 32_000;
+                let total_budget = ai
+                    .request
+                    .max_context_tokens
+                    .map(|m| (m as usize).saturating_mul(4))
+                    .unwrap_or(default_total)
+                    .clamp(4_000, 100_000);
+                let vault_cap = total_budget
+                    .saturating_sub(note_chars_count)
+                    .saturating_sub(conversation_chars_count)
+                    .min(12_000)
+                    .max(400);
+                if let Some((vault_block, truncated, used_rel_paths)) =
+                    vault_context_search::build_vault_context_system_block(&rebuilt, vault_cap)
+                {
+                    let used_set: HashSet<&str> =
+                        used_rel_paths.iter().map(String::as_str).collect();
+                    let entries: Vec<ReplyVaultKeywordEntry> = rebuilt
+                        .iter()
+                        .filter(|s| used_set.contains(s.rel_path.as_str()))
+                        .map(|s| ReplyVaultKeywordEntry {
+                            rel_path: s.rel_path.clone(),
+                            kind: s.kind.clone(),
+                        })
+                        .collect();
+                    blocks.vault_reply_sources = Some(ReplyVaultKeywordSource {
+                        entries,
+                        truncated,
+                    });
+                    blocks.vault_block = Some(vault_block);
+                } else {
+                    blocks.vault_reply_sources = Some(ReplyVaultKeywordSource {
+                        entries: Vec::new(),
+                        truncated: true,
+                    });
+                }
+            }
+        }
+    }
+
+    if semantic_enabled {
+        let root = canonical_root.clone();
+        let q = query.clone();
+        let omit = note_context_rel_path.map(|p| vec![p]).unwrap_or_default();
+        let ec = Arc::clone(&embed_cache);
+        let cd = cache_dir;
+        let bd = bundle_dir;
+
+        let semantic = tauri::async_runtime::spawn_blocking(move || {
+            let sem_cfg = vault_config::load_semantic_merged(&root).ok()?;
+            if !sem_cfg.enabled {
+                return None;
+            }
+            semantic_index::build_semantic_context_for_llm(
+                &root, &cd, &bd, &q, &sem_cfg, &kw_paths, &omit, &ec,
+            )
+        })
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(sem) = semantic {
+            blocks.semantic_block = Some(sem.block);
+            blocks.semantic_reply_sources = ReplySemanticSource {
+                injected: true,
+                document_paths: sem.used.document_paths,
+                thought_ids: sem.used.thought_ids,
+            };
+        }
+    }
+
+    blocks
 }
 
 pub(super) fn emit_error(app: &AppHandle, session_id: &str, code: Option<&str>, message: &str) {
@@ -771,7 +844,6 @@ pub async fn start_chat_stream(
 
     let cache = semantic_index::default_model_cache_dir();
     let bundle = semantic_index::resolve_bundle_model_dir(&app);
-    let embed_paths = Some((cache.clone(), bundle.clone()));
     let tools_enabled = args.tools_enabled.unwrap_or(ai.tools_enabled);
     let skills_for_prompt: Vec<(String, String, Option<String>)> = if tools_enabled {
         skills
@@ -783,13 +855,12 @@ pub async fn start_chat_stream(
     } else {
         Vec::new()
     };
-    let embed_cache_arc = Arc::clone(embed_cache_state.inner());
-    let outcome = assemble_messages(&root, &ai, &args, embed_paths, &skills_for_prompt, &embed_cache_arc)?;
-    let mut messages = outcome.messages;
-    let resolved_depth = outcome.resolved_depth;
-    let reply_context_sources = outcome.reply_context_sources;
 
-    if let (Some(d), Some(reason)) = (resolved_depth, outcome.auto_resolve_reason.as_ref()) {
+    let mut fast_outcome = assemble_messages_fast(&ai, &args, &skills_for_prompt)?;
+    let resolved_depth = fast_outcome.resolved_depth;
+    let reply_context_sources = fast_outcome.reply_context_sources.clone();
+
+    if let (Some(d), Some(reason)) = (resolved_depth, fast_outcome.auto_resolve_reason.as_ref()) {
         if matches!(args.depth_mode, Some(DepthMode::Auto)) {
             let entry = depth_decisions::DepthDecisionEntry {
                 timestamp: Utc::now(),
@@ -830,22 +901,85 @@ pub async fn start_chat_stream(
     let reflection_mode = ai.memory_reflection_mode.clone();
     let ai_for_memory = ai.clone();
 
+    let include_vault_context = args.include_vault_context.unwrap_or(true);
+    let semantic_enabled = args.semantic_context_enabled.unwrap_or(true);
+    let note_context_rel_path = args.note_context.as_ref().map(|nc| nc.rel_path.clone());
+    let last_user_query: Option<String> = args
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role.trim() == "user")
+        .map(|m| m.content.clone());
+    let note_chars_count: usize = fast_outcome
+        .messages
+        .first()
+        .map(|m| m.content.chars().count())
+        .unwrap_or(0);
+    let conversation_chars_count: usize = args
+        .messages
+        .iter()
+        .map(|m| m.content.chars().count() + 8)
+        .sum();
+    let embed_cache_arc = Arc::clone(embed_cache_state.inner());
+
     tokio::spawn(async move {
-        let memory_manager: agent_loop::SharedMemoryManager = if memory_enabled {
-            let extraction_provider = provider::create_provider(&ai_for_memory, None, &http_client_arc).ok();
-            let mgr = memory::MemoryManager::new(workspace_root.clone(), extraction_provider);
+        let (context_blocks, memory_manager) = tokio::join!(
+            build_context_pipeline(
+                workspace_root.clone(),
+                ai.clone(),
+                last_user_query,
+                note_context_rel_path,
+                include_vault_context,
+                semantic_enabled,
+                embed_cache_arc,
+                cache.clone(),
+                bundle.clone(),
+                note_chars_count,
+                conversation_chars_count,
+            ),
+            async {
+                if memory_enabled {
+                    let extraction_provider =
+                        provider::create_provider(&ai_for_memory, None, &http_client_arc).ok();
+                    let mgr =
+                        memory::MemoryManager::new(workspace_root.clone(), extraction_provider);
+                    Some(Arc::new(tokio::sync::Mutex::new(mgr)))
+                } else {
+                    None
+                }
+            },
+        );
+
+        inject_context_blocks(&mut fast_outcome, &context_blocks);
+
+        if let Some(ref mm) = memory_manager {
+            let mgr = mm.lock().await;
             if let Some(mem_msg) = mgr.format_for_injection() {
-                let pos = if messages.is_empty() { 0 } else { 1 };
-                messages.insert(pos, LlmChatMessage {
-                    role: "system".to_string(),
-                    content: mem_msg,
-                    ..Default::default()
-                });
+                let pos = if fast_outcome.messages.is_empty() { 0 } else { 1 };
+                fast_outcome.messages.insert(
+                    pos,
+                    LlmChatMessage {
+                        role: "system".to_string(),
+                        content: mem_msg,
+                        ..Default::default()
+                    },
+                );
             }
-            Some(Arc::new(tokio::sync::Mutex::new(mgr)))
-        } else {
-            None
-        };
+            drop(mgr);
+        }
+
+        let _ = app_h.emit(
+            "llm:context-ready",
+            ContextReadyPayload {
+                session_id: sid.clone(),
+                snippets: context_blocks.vault_snippets,
+                meta: context_blocks.vault_meta,
+                reply_context_sources: fast_outcome.reply_context_sources.clone(),
+            },
+        );
+
+        let messages = fast_outcome.messages;
+        let memory_manager: agent_loop::SharedMemoryManager = memory_manager;
 
         if tools_enabled {
             let manifests = registry_arc.list_for_llm_filtered(&ToolFilter::all());

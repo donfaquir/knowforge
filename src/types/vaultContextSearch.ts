@@ -1,4 +1,4 @@
-/** Aligned with `search_workspace_context` / `start_chat_stream` vaultContext (camelCase) */
+/** Aligned with `llm:context-ready` event payload (camelCase) */
 
 export type VaultSnippetKind = "excerpt" | "privateOmitted";
 
