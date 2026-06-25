@@ -190,7 +190,7 @@ mod tests {
     fn registers_valid_skill() {
         let tools = make_tool_registry_with_time_now();
         let skills = SkillRegistry::new();
-        assert!(skills.register(manifest("demo", vec!["time-now"]), &tools).is_ok());
+        assert!(skills.register(manifest("demo", vec!["time.now"]), &tools).is_ok());
         assert_eq!(skills.list().len(), 1);
         assert!(skills.get("demo").is_some());
     }
@@ -200,7 +200,7 @@ mod tests {
         let tools = make_tool_registry_with_time_now();
         let skills = SkillRegistry::new();
         assert!(matches!(
-            skills.register(manifest("Bad-Id", vec!["time-now"]), &tools),
+            skills.register(manifest("Bad-Id", vec!["time.now"]), &tools),
             Err(SkillRegistryError::InvalidId(_))
         ));
     }
@@ -210,7 +210,7 @@ mod tests {
         let tools = make_tool_registry_with_time_now();
         let skills = SkillRegistry::new();
         assert!(matches!(
-            skills.register(manifest("demo", vec!["nonexistent-tool"]), &tools),
+            skills.register(manifest("demo", vec!["nonexistent.tool"]), &tools),
             Err(SkillRegistryError::UnknownTool { .. })
         ));
     }
@@ -229,9 +229,9 @@ mod tests {
     fn rejects_duplicate() {
         let tools = make_tool_registry_with_time_now();
         let skills = SkillRegistry::new();
-        skills.register(manifest("demo", vec!["time-now"]), &tools).unwrap();
+        skills.register(manifest("demo", vec!["time.now"]), &tools).unwrap();
         assert!(matches!(
-            skills.register(manifest("demo", vec!["time-now"]), &tools),
+            skills.register(manifest("demo", vec!["time.now"]), &tools),
             Err(SkillRegistryError::DuplicateId(_))
         ));
     }
@@ -240,7 +240,7 @@ mod tests {
     fn rejects_invalid_version() {
         let tools = make_tool_registry_with_time_now();
         let skills = SkillRegistry::new();
-        let mut m = manifest("demo", vec!["time-now"]);
+        let mut m = manifest("demo", vec!["time.now"]);
         m.version = "not-semver".to_string();
         assert!(matches!(
             skills.register(m, &tools),

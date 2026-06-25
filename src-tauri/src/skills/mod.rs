@@ -27,7 +27,7 @@ const WRITING_COACH_PROMPT: &str = r#"You are a writing coach helping the user r
 
 Your job:
 1. For a given paragraph or note, raise short follow-up questions about logical chains, terminology definitions, and missing premises (1-3 questions per turn, in the same language as the original text).
-2. When needed, call vault-search_keyword or note-read to find potentially related notes in the vault and suggest connections using wikilink syntax (e.g. [[Note Title]]).
+2. When needed, call vault.search_keyword or note.read to find potentially related notes in the vault and suggest connections using wikilink syntax (e.g. [[Note Title]]).
 
 Hard constraints:
 - Never rewrite the user's original text or suggest specific rewrites.
@@ -38,7 +38,7 @@ Hard constraints:
 const CHALLENGE_REVIEW_PROMPT: &str = r#"You are a learning review coach helping the user revisit past thoughts and notes in their knowledge base {{workspace_name}}.
 
 Your job:
-1. When the user mentions a thought or note, use thought-list / note-list / note-read to retrieve the original content.
+1. When the user mentions a thought or note, use thought.list / note.list / note.read to retrieve the original content.
 2. Choose the most fitting perspective among compare, apply, critique, and transfer, then pose one short review question.
 3. After the user responds, give neutral feedback on whether the core was addressed, and optionally invite a next round by transferring to a new context.
 
@@ -51,11 +51,11 @@ const WEB_RESEARCH_PROMPT: &str = r#"You are a research assistant helping the us
 
 Your workflow:
 1. Analyze the user's research request and break it into 1-3 search keywords (prefer English keywords for broader results).
-2. Call web-search to execute the search and obtain a result list.
-3. Select 2-4 of the most relevant pages from the results and call web-read_page to read their content in detail.
-4. Optionally call vault-search_keyword to check whether related notes already exist in the vault, avoiding duplicates and establishing connections.
+2. Call web.search to execute the search and obtain a result list.
+3. Select 2-4 of the most relevant pages from the results and call web.read_page to read their content in detail.
+4. Optionally call vault.search_keyword to check whether related notes already exist in the vault, avoiding duplicates and establishing connections.
 5. Synthesize all information into a structured research report.
-6. Call note-create to save the report to the vault. Save path format: research/{topic-keyword}.md
+6. Call note.create to save the report to the vault. Save path format: research/{topic-keyword}.md
 
 Report format requirements:
 - Frontmatter tags must include "research".
@@ -77,7 +77,7 @@ fn writing_coach_manifest() -> SkillManifest {
         version: "0.1.0".to_string(),
         description: "对当前笔记或段落提出逻辑追问,并推荐知识库中可能的关联笔记。".to_string(),
         system_prompt_template: WRITING_COACH_PROMPT.to_string(),
-        allowed_tools: vec!["note-read".to_string(), "vault-search_keyword".to_string()],
+        allowed_tools: vec!["note.read".to_string(), "vault.search_keyword".to_string()],
         max_tool_calls: 4,
         timeout_secs: 30,
         ui_entry: SkillUiEntry::EditorPanel,
@@ -99,9 +99,9 @@ fn challenge_review_manifest() -> SkillManifest {
         description: "围绕对比/应用/质疑/迁移四种视角,陪用户复盘过往想法。".to_string(),
         system_prompt_template: CHALLENGE_REVIEW_PROMPT.to_string(),
         allowed_tools: vec![
-            "note-read".to_string(),
-            "note-list".to_string(),
-            "thought-list".to_string(),
+            "note.read".to_string(),
+            "note.list".to_string(),
+            "thought.list".to_string(),
         ],
         max_tool_calls: 6,
         timeout_secs: 45,
@@ -124,11 +124,11 @@ fn web_research_manifest() -> SkillManifest {
         description: "搜索网络信息,精读关键页面,生成调研报告并归档到知识库。".to_string(),
         system_prompt_template: WEB_RESEARCH_PROMPT.to_string(),
         allowed_tools: vec![
-            "web-search".to_string(),
-            "web-read_page".to_string(),
-            "note-create".to_string(),
-            "note-append".to_string(),
-            "vault-search_keyword".to_string(),
+            "web.search".to_string(),
+            "web.read_page".to_string(),
+            "note.create".to_string(),
+            "note.append".to_string(),
+            "vault.search_keyword".to_string(),
         ],
         max_tool_calls: 15,
         timeout_secs: 120,
@@ -195,7 +195,7 @@ pub fn load_custom_skills(
     outcomes
 }
 
-/// Iter 5 #4: register a `skill-<id>` tool wrapper for every auto_invocable
+/// Iter 5 #4: register a `skill.<id>` tool wrapper for every auto_invocable
 /// skill so the main agent loop can call into them. Must be invoked AFTER
 /// [`register_builtin_skills`] (uses the SkillRegistry as the source of truth
 /// for which skills are auto_invocable).
@@ -273,9 +273,9 @@ mod mod_tests {
         assert_eq!(m.id, "web_research");
         assert_eq!(m.ui_entry, SkillUiEntry::ConversationMode);
         assert!(m.system_prompt_template.contains("{{workspace_name}}"));
-        assert!(m.allowed_tools.contains(&"web-search".to_string()));
-        assert!(m.allowed_tools.contains(&"web-read_page".to_string()));
-        assert!(m.allowed_tools.contains(&"note-create".to_string()));
+        assert!(m.allowed_tools.contains(&"web.search".to_string()));
+        assert!(m.allowed_tools.contains(&"web.read_page".to_string()));
+        assert!(m.allowed_tools.contains(&"note.create".to_string()));
         assert_eq!(m.max_tool_calls, 15);
         assert_eq!(m.timeout_secs, 120);
         assert_eq!(m.max_tool_result_chars, 20000);

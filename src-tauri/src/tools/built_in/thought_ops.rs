@@ -18,7 +18,7 @@ impl ThoughtListTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "thought-list".to_string(),
+                name: "thought.list".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "列出工作区中的想法（Thought）条目，支持关键词过滤和分页".to_string(),
@@ -174,7 +174,7 @@ impl ThoughtCreateTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "thought-create".to_string(),
+                name: "thought.create".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "Create a new independent Thought entry. A thought captures the user's thinking, insight, inspiration, or hypothesis about a topic. Do NOT use for behavioral instructions, personal preferences, or memory directives (e.g. \"remember...\", \"always...\", \"never...\") — those belong in memory.save.".to_string(),

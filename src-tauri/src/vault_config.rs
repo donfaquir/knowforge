@@ -217,7 +217,7 @@ pub struct AiConfig {
     pub parameters: AiParameters,
     #[serde(default)]
     pub privacy: AiPrivacy,
-    /// Iter 5 #4: 主对话工具调用总开关。默认 true,使内置 skills (`skill-<id>`) 与
+    /// Iter 5 #4: 主对话工具调用总开关。默认 true,使内置 skills (`skill.<id>`) 与
     /// 其它工具对主 LLM 可见。旧 vault 缺该字段时通过 disk partial 显式默认 true。
     #[serde(default = "default_tools_enabled")]
     pub tools_enabled: bool,

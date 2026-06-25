@@ -17,7 +17,7 @@ impl LinkSuggestRelatedTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "link-suggest_related".to_string(),
+                name: "link.suggest_related".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "基于向量相似度为指定笔记推荐相关笔记链接".to_string(),

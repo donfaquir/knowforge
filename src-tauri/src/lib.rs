@@ -1764,7 +1764,7 @@ pub fn run() {
             skills::register_builtin_skills(&skill_registry, &registry)
                 .expect("failed to register builtin skills");
             // 自定义 Skill 在 open_workspace 命令中加载（setup 阶段 workspace root 尚未设置）
-            // Iter 5 #4: register `skill-<id>` tool wrappers AFTER skills + tools
+            // Iter 5 #4: register `skill.<id>` tool wrappers AFTER skills + tools
             // are populated, so the main agent loop can auto-invoke them.
             let semaphore = app.state::<Arc<tokio::sync::Semaphore>>();
             skills::register_skill_tools(

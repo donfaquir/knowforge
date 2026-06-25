@@ -171,7 +171,7 @@ mod tests {
         let result = build_planning_messages(&msgs, "- note.list: list notes\n");
         assert_eq!(result.len(), 2);
         assert_eq!(result[1].role, "system");
-        assert!(result[1].content.contains("note-list"));
+        assert!(result[1].content.contains("note.list"));
         assert!(result[1].content.contains("Do NOT call any tools"));
     }
 
@@ -186,7 +186,7 @@ mod tests {
         let result = inject_plan_into_messages(&msgs, plan);
         assert_eq!(result.len(), 2);
         assert!(result[1].content.contains("Execute the following plan"));
-        assert!(result[1].content.contains("note-list"));
+        assert!(result[1].content.contains("note.list"));
     }
 
     #[test]
@@ -195,7 +195,7 @@ mod tests {
             json!({
                 "type": "function",
                 "function": {
-                    "name": "note-list",
+                    "name": "note.list",
                     "description": "List notes in the vault",
                     "parameters": {}
                 }
@@ -203,7 +203,7 @@ mod tests {
             json!({
                 "type": "function",
                 "function": {
-                    "name": "web-search",
+                    "name": "web.search",
                     "description": "Search the web",
                     "parameters": {}
                 }

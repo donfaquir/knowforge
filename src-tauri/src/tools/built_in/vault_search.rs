@@ -22,7 +22,7 @@ impl VaultSearchKeywordTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "vault-search_keyword".to_string(),
+                name: "vault.search_keyword".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "在工作区笔记中进行关键词全文扫描搜索，返回相关文本片段".to_string(),
@@ -188,7 +188,7 @@ impl VaultSemanticSearchTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "vault-semantic_search".to_string(),
+                name: "vault.semantic_search".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description: "使用向量嵌入对工作区进行语义相似度搜索（基于 BGE 模型，不调用 LLM）"

@@ -63,7 +63,7 @@ impl WebDownloadTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "web-download".to_string(),
+                name: "web.download".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description:
@@ -301,7 +301,7 @@ impl WebReadPdfTool {
     pub fn new() -> Self {
         Self {
             manifest: ToolManifest {
-                name: "web-read_pdf".to_string(),
+                name: "web.read_pdf".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
                 description:
@@ -616,7 +616,7 @@ mod tests {
     fn test_manifest_download() {
         let tool = WebDownloadTool::new();
         let m = tool.manifest();
-        assert_eq!(m.name, "web-download");
+        assert_eq!(m.name, "web.download");
         assert!(m.effects.contains(&Effect::Network));
         assert!(m.effects.contains(&Effect::Write));
         assert!(m.requires_workspace);
@@ -626,7 +626,7 @@ mod tests {
     fn test_manifest_read_pdf() {
         let tool = WebReadPdfTool::new();
         let m = tool.manifest();
-        assert_eq!(m.name, "web-read_pdf");
+        assert_eq!(m.name, "web.read_pdf");
         assert!(m.effects.contains(&Effect::Network));
         assert!(!m.requires_workspace);
     }
