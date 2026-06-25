@@ -237,6 +237,19 @@ impl LlmProvider for UnifiedProvider {
             }
         }
 
+        let msg_count = messages.len();
+        let est_tokens: usize = messages_json.iter().map(|v| v.to_string().len() / 3).sum();
+        eprintln!(
+            "[provider] session={} chat_stream start: model={} msgs={} est_tokens={} timeout={}ms tools={}",
+            &session_id[..8.min(session_id.len())],
+            self.model,
+            msg_count,
+            est_tokens,
+            self.timeout_ms,
+            tools.as_ref().map_or(0, |t| t.len()),
+        );
+        let request_start = std::time::Instant::now();
+
         let req = self.build_auth_headers(
             self.client
                 .post(&url)
@@ -247,10 +260,23 @@ impl LlmProvider for UnifiedProvider {
             Ok(r) => r,
             Err(e) => {
                 let msg = format!("OpenAI connection error: {e}");
+                eprintln!(
+                    "[provider] session={} connection error after {:.1}s: {}",
+                    &session_id[..8.min(session_id.len())],
+                    request_start.elapsed().as_secs_f64(),
+                    e,
+                );
                 emit_error(app, session_id, Some("connection_error"), &msg);
                 return Err(msg);
             }
         };
+
+        eprintln!(
+            "[provider] session={} HTTP {} after {:.1}s, starting SSE stream",
+            &session_id[..8.min(session_id.len())],
+            resp.status(),
+            request_start.elapsed().as_secs_f64(),
+        );
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -269,21 +295,51 @@ impl LlmProvider for UnifiedProvider {
         let mut accumulated_content = String::new();
         let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
 
+        let mut last_chunk_at = std::time::Instant::now();
+        let mut chunk_count: u64 = 0;
+
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {
+                    eprintln!(
+                        "[provider] session={} SSE cancelled after {:.1}s, {} chunks, content_len={}",
+                        &session_id[..8.min(session_id.len())],
+                        request_start.elapsed().as_secs_f64(),
+                        chunk_count,
+                        accumulated_content.len(),
+                    );
                     emit_error(app, session_id, Some("cancelled"), "Request aborted");
                     return Err("cancelled".to_string());
                 }
                 item = stream.next() => {
                     match item {
-                        None => break,
+                        None => {
+                            eprintln!(
+                                "[provider] session={} SSE stream ended (None): {:.1}s total, {} chunks, content_len={} pending_tools={}",
+                                &session_id[..8.min(session_id.len())],
+                                request_start.elapsed().as_secs_f64(),
+                                chunk_count,
+                                accumulated_content.len(),
+                                pending_tool_calls.len(),
+                            );
+                            break;
+                        }
                         Some(Err(e)) => {
+                            let idle_secs = last_chunk_at.elapsed().as_secs_f64();
                             let msg = format!("OpenAI stream error: {e}");
+                            eprintln!(
+                                "[provider] session={} SSE error after {:.1}s (idle {:.1}s): {}",
+                                &session_id[..8.min(session_id.len())],
+                                request_start.elapsed().as_secs_f64(),
+                                idle_secs,
+                                e,
+                            );
                             emit_error(app, session_id, Some("stream_error"), &msg);
                             return Err(msg);
                         }
                         Some(Ok(bytes)) => {
+                            chunk_count += 1;
+                            last_chunk_at = std::time::Instant::now();
                             line_buf.push_str(&String::from_utf8_lossy(&bytes));
                             if line_buf.len() > MAX_SSE_LINE_BYTES {
                                 let msg = "SSE buffer exceeded 2 MiB; aborting.".to_string();
