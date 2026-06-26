@@ -47,28 +47,71 @@ Hard constraints:
 - Do not judge answers as "good" or "bad"; use descriptive phrases like "this covers..." or "this could extend to..." instead.
 - If no related thoughts or notes are found by the tools, say so honestly; do not fabricate content."#;
 
-const WEB_RESEARCH_PROMPT: &str = r#"You are a research assistant helping the user conduct web research in their knowledge base {{workspace_name}}.
+const WEB_RESEARCH_PROMPT: &str = r#"You are a research analyst helping the user conduct solution research in their knowledge base {{workspace_name}}.
 
-Your workflow:
-1. Analyze the user's research request and break it into 1-3 search keywords (prefer English keywords for broader results).
-2. Call web.search to execute the search and obtain a result list.
-3. Select 2-4 of the most relevant pages from the results and call web.read_page to read their content in detail.
-4. Optionally call vault.search_keyword to check whether related notes already exist in the vault, avoiding duplicates and establishing connections.
-5. Synthesize all information into a structured research report.
-6. Call note.create to save the report to the vault. Save path format: research/{topic-keyword}.md
+Your workflow has four phases:
 
-Report format requirements:
-- Frontmatter tags must include "research".
-- Include these sections: Overview, Key Findings (bulleted), Sources.
-- Annotate each finding with its source URL.
-- End with a `## Sources` section listing all referenced URLs with titles.
-- If related notes exist in the vault, link them using [[wikilink]] syntax.
+Phase 1 — Decompose & Search
+- Analyze the user's topic and break it into 2-4 search angles (e.g. concept overview, mainstream solutions, comparison/benchmark, best practices).
+- For each angle, call web.search with targeted keywords (prefer English keywords for broader coverage).
+- If the topic is narrow, 2 angles suffice; if broad, use up to 4.
+
+Phase 2 — Deep Read
+- From all search results, select 3-6 of the most relevant and authoritative pages and call web.read_page to read each in detail.
+- When you encounter PDF links (papers, whitepapers, technical reports), call web.read_pdf to extract the full text.
+- Prioritize: official documentation > technical blogs with benchmarks > general articles.
+
+Phase 3 — Knowledge Base Cross-reference
+- Call vault.search_keyword to check whether related notes already exist in the vault.
+- If related notes are found, reference them using [[wikilink]] syntax in the report.
+
+Phase 4 — Synthesize & Save
+- Synthesize all gathered information into a structured research report.
+- Call note.create to save the report. Save path format: research/{topic-keyword}.md
+
+Report format:
+```
+---
+tags: [research, <topic-tag>]
+---
+# <Topic> Research Report
+
+## Background & Objectives
+Briefly state the research question, scope, and why it matters.
+
+## Solution Overview
+List and briefly introduce each identified solution/approach.
+
+## Detailed Analysis
+### Solution A: <name>
+Core mechanism, strengths, weaknesses, typical use cases.
+### Solution B: <name>
+(same structure)
+(repeat for each solution)
+
+## Comparison
+| Dimension | Solution A | Solution B | ... |
+|-----------|-----------|-----------|-----|
+| Maturity  |           |           |     |
+| Performance |         |           |     |
+| Ease of use |         |           |     |
+| Cost      |           |           |     |
+| Community/Ecosystem | |          |     |
+(adapt dimensions to the topic)
+
+## Recommendations
+State which solution fits which scenario, with reasoning.
+
+## References
+- [Title](URL) — one-line annotation
+```
 
 Hard constraints:
 - All information must come from actual tool results; never fabricate URLs or facts.
-- If a search returns no results or a page read fails, report it honestly; do not fake information.
-- Every key finding must have at least one supporting source.
-- Write the report in the same language the user used."#;
+- If a search returns no results or a page fails to load, report it honestly.
+- Every claim must cite at least one source.
+- Write the report in the same language the user used.
+- Adapt section depth to the topic: skip the comparison table if only one solution exists; add sub-dimensions if the topic warrants it."#;
 
 fn writing_coach_manifest() -> SkillManifest {
     SkillManifest {
@@ -119,24 +162,25 @@ fn challenge_review_manifest() -> SkillManifest {
 fn web_research_manifest() -> SkillManifest {
     SkillManifest {
         id: "web_research".to_string(),
-        name: "网络调研".to_string(),
-        version: "0.1.0".to_string(),
-        description: "搜索网络信息,精读关键页面,生成调研报告并归档到知识库。".to_string(),
+        name: "方案调研".to_string(),
+        version: "0.2.0".to_string(),
+        description: "围绕指定主题搜索网络信息,对比可选方案,生成结构化调研报告并归档到知识库。".to_string(),
         system_prompt_template: WEB_RESEARCH_PROMPT.to_string(),
         allowed_tools: vec![
             "web.search".to_string(),
             "web.read_page".to_string(),
+            "web.read_pdf".to_string(),
             "note.create".to_string(),
             "note.append".to_string(),
             "vault.search_keyword".to_string(),
         ],
-        max_tool_calls: 15,
-        timeout_secs: 120,
+        max_tool_calls: 25,
+        timeout_secs: 180,
         ui_entry: SkillUiEntry::ConversationMode,
         tags: vec!["research".to_string(), "web".to_string()],
         auto_invocable: true,
         when_to_use: Some(
-            "用户提出调研任务、要求搜索网络信息、或要求就某个主题生成调研报告时".to_string(),
+            "用户提出调研任务、技术选型、方案对比,或要求就某个主题搜索网络信息并生成调研报告时".to_string(),
         ),
         max_tool_result_chars: 20000,
     }
@@ -275,9 +319,10 @@ mod mod_tests {
         assert!(m.system_prompt_template.contains("{{workspace_name}}"));
         assert!(m.allowed_tools.contains(&"web.search".to_string()));
         assert!(m.allowed_tools.contains(&"web.read_page".to_string()));
+        assert!(m.allowed_tools.contains(&"web.read_pdf".to_string()));
         assert!(m.allowed_tools.contains(&"note.create".to_string()));
-        assert_eq!(m.max_tool_calls, 15);
-        assert_eq!(m.timeout_secs, 120);
+        assert_eq!(m.max_tool_calls, 25);
+        assert_eq!(m.timeout_secs, 180);
         assert_eq!(m.max_tool_result_chars, 20000);
         assert!(m.auto_invocable);
     }

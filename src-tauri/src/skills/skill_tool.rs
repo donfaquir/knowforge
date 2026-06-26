@@ -242,6 +242,12 @@ impl Tool for SkillAsTool {
         let overall_timeout = Duration::from_secs(
             (manifest.timeout_secs as u64).saturating_mul(2),
         );
+        eprintln!(
+            "[skill_tool] skill={} session={} starting, timeout={}s max_tool_calls={} max_result_chars={}",
+            self.skill_id, &session_id[..8.min(session_id.len())],
+            overall_timeout.as_secs(), manifest.max_tool_calls, manifest.max_tool_result_chars,
+        );
+        let skill_start = std::time::Instant::now();
         let skill_future = runtime::run_skill_with_depth(
             self.app.clone(),
             session_id.clone(),
@@ -261,8 +267,22 @@ impl Tool for SkillAsTool {
             ai.request.max_context_tokens,
         );
         let summary = match tokio::time::timeout(overall_timeout, skill_future).await {
-            Ok(s) => s,
-            Err(_) => String::new(),
+            Ok(s) => {
+                eprintln!(
+                    "[skill_tool] skill={} session={} completed in {:.1}s summary_len={}",
+                    self.skill_id, &session_id[..8.min(session_id.len())],
+                    skill_start.elapsed().as_secs_f64(), s.len(),
+                );
+                s
+            }
+            Err(_) => {
+                eprintln!(
+                    "[skill_tool] skill={} session={} TIMED OUT after {:.1}s (limit={}s)",
+                    self.skill_id, &session_id[..8.min(session_id.len())],
+                    skill_start.elapsed().as_secs_f64(), overall_timeout.as_secs(),
+                );
+                String::new()
+            }
         };
 
         sessions.remove_session(&session_id);

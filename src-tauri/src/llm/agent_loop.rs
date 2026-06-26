@@ -139,8 +139,25 @@ pub async fn run_agent_stream(
     let mut loop_detector = LoopDetector::new();
     let mut pending_summary: Option<tokio::task::JoinHandle<Option<PrecomputedSummary>>> = None;
 
+    let mut iteration: u32 = 0;
+
     loop {
+        iteration += 1;
+        let est_tokens: usize = messages.iter().map(|m| m.content.len() / 3).sum();
+        eprintln!(
+            "[agent_loop] session={} iter={} msgs={} est_tokens={} tool_calls_so_far={}/{} result_chars={}/{}",
+            &session_id[..8.min(session_id.len())],
+            iteration,
+            messages.len(),
+            est_tokens,
+            tool_call_count,
+            config.max_tool_calls,
+            total_tool_result_chars,
+            config.max_tool_result_chars,
+        );
+
         if cancel.is_cancelled() {
+            eprintln!("[agent_loop] session={} iter={} cancelled before LLM call", &session_id[..8.min(session_id.len())], iteration);
             store_extraction_msgs(&memory_manager, &messages).await;
             return String::new();
         }
@@ -163,6 +180,8 @@ pub async fn run_agent_stream(
         context_guard.trim_with_summary(&mut messages).await;
 
         // 1. 流式请求（携带 tools 字段；本轮文字会通过 emit_chunk/emit_done 推给前端）
+        eprintln!("[agent_loop] session={} iter={} calling chat_stream...", &session_id[..8.min(session_id.len())], iteration);
+        let stream_start = std::time::Instant::now();
         let stream_result = match provider
             .chat_stream(
                 &app,
@@ -173,8 +192,25 @@ pub async fn run_agent_stream(
             )
             .await
         {
-            Ok(r) => r,
-            Err(_) => {
+            Ok(r) => {
+                eprintln!(
+                    "[agent_loop] session={} iter={} chat_stream OK in {:.1}s content_len={} tool_calls={}",
+                    &session_id[..8.min(session_id.len())],
+                    iteration,
+                    stream_start.elapsed().as_secs_f64(),
+                    r.content.len(),
+                    r.tool_calls.as_ref().map_or(0, |tc| tc.len()),
+                );
+                r
+            }
+            Err(e) => {
+                eprintln!(
+                    "[agent_loop] session={} iter={} chat_stream FAILED in {:.1}s error={}",
+                    &session_id[..8.min(session_id.len())],
+                    iteration,
+                    stream_start.elapsed().as_secs_f64(),
+                    e,
+                );
                 store_extraction_msgs(&memory_manager, &messages).await;
                 emit_agent_done(&app, &session_id);
                 return String::new();
@@ -183,8 +219,19 @@ pub async fn run_agent_stream(
 
         // 2. 无工具调用 → agent 循环完成；本轮文本即 final answer
         let normalized_calls = match stream_result.tool_calls {
-            Some(calls) if !calls.is_empty() => calls,
+            Some(calls) if !calls.is_empty() => {
+                let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
+                eprintln!(
+                    "[agent_loop] session={} iter={} tool_calls={:?}",
+                    &session_id[..8.min(session_id.len())], iteration, names,
+                );
+                calls
+            }
             _ => {
+                eprintln!(
+                    "[agent_loop] session={} iter={} no tool_calls, agent done. final_content_len={}",
+                    &session_id[..8.min(session_id.len())], iteration, stream_result.content.len(),
+                );
                 messages.push(LlmChatMessage {
                     role: "assistant".to_string(),
                     content: stream_result.content.clone(),
@@ -273,6 +320,14 @@ pub async fn run_agent_stream(
                     Ok(val) => truncate_str(&val.to_string(), 200),
                     Err(e) => truncate_str(e, 200),
                 };
+                let result_len = match result {
+                    Ok(val) => val.to_string().len(),
+                    Err(e) => e.len(),
+                };
+                eprintln!(
+                    "[agent_loop] session={} iter={} tool={} ok={} duration={}ms result_len={}",
+                    &session_id[..8.min(session_id.len())], iteration, tc.name, success, duration_ms, result_len,
+                );
                 let error_message = result.as_ref().err().map(|e| e.as_str());
                 emit_tool_call_done(&app, &session_id, &tc.id, success, &result_summary, *duration_ms, error_message);
             }
@@ -368,6 +423,15 @@ pub async fn run_agent_stream(
         if tool_call_count >= config.max_tool_calls
             || total_tool_result_chars >= config.max_tool_result_chars
         {
+            let reason = if tool_call_count >= config.max_tool_calls {
+                format!("tool_calls {}/{}", tool_call_count, config.max_tool_calls)
+            } else {
+                format!("result_chars {}/{}", total_tool_result_chars, config.max_tool_result_chars)
+            };
+            eprintln!(
+                "[agent_loop] session={} iter={} BUDGET EXHAUSTED ({}), requesting final summary...",
+                &session_id[..8.min(session_id.len())], iteration, reason,
+            );
             messages.push(LlmChatMessage {
                 role: "system".to_string(),
                 content: "IMPORTANT: Tool call budget exhausted. You MUST now provide \
@@ -379,19 +443,37 @@ pub async fn run_agent_stream(
             // gathered tool results should remain visible to the model.
             // ContextGuard trimming is for future iterations that won't happen.
             store_extraction_msgs(&memory_manager, &messages).await;
+            let final_start = std::time::Instant::now();
+            let est_tokens: usize = messages.iter().map(|m| m.content.len() / 3).sum();
+            eprintln!(
+                "[agent_loop] session={} final summary call: msgs={} est_tokens={}",
+                &session_id[..8.min(session_id.len())], messages.len(), est_tokens,
+            );
             let final_result = provider
                 .chat_stream(&app, &session_id, messages, None, cancel.clone())
                 .await;
+            eprintln!(
+                "[agent_loop] session={} final summary completed in {:.1}s ok={}",
+                &session_id[..8.min(session_id.len())],
+                final_start.elapsed().as_secs_f64(),
+                final_result.is_ok(),
+            );
             emit_agent_done(&app, &session_id);
             return final_result.map(|r| r.content).unwrap_or_default();
         }
 
         if cancel.is_cancelled() {
+            eprintln!("[agent_loop] session={} iter={} cancelled after tool execution", &session_id[..8.min(session_id.len())], iteration);
             store_extraction_msgs(&memory_manager, &messages).await;
             return String::new();
         }
 
-        if context_guard.budget_pressure(&messages) > 0.7 {
+        let pressure = context_guard.budget_pressure(&messages);
+        if pressure > 0.7 {
+            eprintln!(
+                "[agent_loop] session={} iter={} context pressure={:.2}, pre-summarizing",
+                &session_id[..8.min(session_id.len())], iteration, pressure,
+            );
             let msgs_snapshot = messages.clone();
             let guard_clone = context_guard.clone();
             pending_summary = Some(tokio::spawn(async move {

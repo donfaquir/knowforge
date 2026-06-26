@@ -22,6 +22,20 @@ pub struct UnifiedProvider {
     is_remote: bool,
 }
 
+// OpenAI API enforces ^[a-zA-Z0-9_-]+$ for function names — dots are not
+// allowed.  Internal tool names use dots as namespace separators
+// (e.g. "note.read"), so we translate at the API boundary only.
+// Hyphens are safe for round-tripping because the internal naming regex
+// forbids them, making the mapping bijective.
+
+fn to_api_tool_name(internal: &str) -> String {
+    internal.replace('.', "-")
+}
+
+fn from_api_tool_name(api: &str) -> String {
+    api.replace('-', ".")
+}
+
 impl UnifiedProvider {
     pub fn new(
         client: Arc<reqwest::Client>,
@@ -79,8 +93,13 @@ impl UnifiedProvider {
                     return Value::Object(obj);
                 }
 
+                // OpenAI API: content:null is only valid when tool_calls are present.
                 if m.content.is_empty() {
-                    obj.insert("content".into(), Value::Null);
+                    if m.tool_calls.as_ref().map_or(true, |tc| tc.is_empty()) {
+                        obj.insert("content".into(), json!(""));
+                    } else {
+                        obj.insert("content".into(), Value::Null);
+                    }
                 } else {
                     obj.insert("content".into(), json!(m.content));
                 }
@@ -92,7 +111,7 @@ impl UnifiedProvider {
                                 "id": c.id,
                                 "type": "function",
                                 "function": {
-                                    "name": c.function.name,
+                                    "name": to_api_tool_name(&c.function.name),
                                     "arguments": if c.function.arguments.is_object() {
                                         c.function.arguments.to_string()
                                     } else {
@@ -218,6 +237,19 @@ impl LlmProvider for UnifiedProvider {
             }
         }
 
+        let msg_count = messages.len();
+        let est_tokens: usize = messages_json.iter().map(|v| v.to_string().len() / 3).sum();
+        eprintln!(
+            "[provider] session={} chat_stream start: model={} msgs={} est_tokens={} timeout={}ms tools={}",
+            &session_id[..8.min(session_id.len())],
+            self.model,
+            msg_count,
+            est_tokens,
+            self.timeout_ms,
+            tools.as_ref().map_or(0, |t| t.len()),
+        );
+        let request_start = std::time::Instant::now();
+
         let req = self.build_auth_headers(
             self.client
                 .post(&url)
@@ -228,10 +260,23 @@ impl LlmProvider for UnifiedProvider {
             Ok(r) => r,
             Err(e) => {
                 let msg = format!("OpenAI connection error: {e}");
+                eprintln!(
+                    "[provider] session={} connection error after {:.1}s: {}",
+                    &session_id[..8.min(session_id.len())],
+                    request_start.elapsed().as_secs_f64(),
+                    e,
+                );
                 emit_error(app, session_id, Some("connection_error"), &msg);
                 return Err(msg);
             }
         };
+
+        eprintln!(
+            "[provider] session={} HTTP {} after {:.1}s, starting SSE stream",
+            &session_id[..8.min(session_id.len())],
+            resp.status(),
+            request_start.elapsed().as_secs_f64(),
+        );
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -250,21 +295,51 @@ impl LlmProvider for UnifiedProvider {
         let mut accumulated_content = String::new();
         let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
 
+        let mut last_chunk_at = std::time::Instant::now();
+        let mut chunk_count: u64 = 0;
+
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {
+                    eprintln!(
+                        "[provider] session={} SSE cancelled after {:.1}s, {} chunks, content_len={}",
+                        &session_id[..8.min(session_id.len())],
+                        request_start.elapsed().as_secs_f64(),
+                        chunk_count,
+                        accumulated_content.len(),
+                    );
                     emit_error(app, session_id, Some("cancelled"), "Request aborted");
                     return Err("cancelled".to_string());
                 }
                 item = stream.next() => {
                     match item {
-                        None => break,
+                        None => {
+                            eprintln!(
+                                "[provider] session={} SSE stream ended (None): {:.1}s total, {} chunks, content_len={} pending_tools={}",
+                                &session_id[..8.min(session_id.len())],
+                                request_start.elapsed().as_secs_f64(),
+                                chunk_count,
+                                accumulated_content.len(),
+                                pending_tool_calls.len(),
+                            );
+                            break;
+                        }
                         Some(Err(e)) => {
+                            let idle_secs = last_chunk_at.elapsed().as_secs_f64();
                             let msg = format!("OpenAI stream error: {e}");
+                            eprintln!(
+                                "[provider] session={} SSE error after {:.1}s (idle {:.1}s): {}",
+                                &session_id[..8.min(session_id.len())],
+                                request_start.elapsed().as_secs_f64(),
+                                idle_secs,
+                                e,
+                            );
                             emit_error(app, session_id, Some("stream_error"), &msg);
                             return Err(msg);
                         }
                         Some(Ok(bytes)) => {
+                            chunk_count += 1;
+                            last_chunk_at = std::time::Instant::now();
                             line_buf.push_str(&String::from_utf8_lossy(&bytes));
                             if line_buf.len() > MAX_SSE_LINE_BYTES {
                                 let msg = "SSE buffer exceeded 2 MiB; aborting.".to_string();
@@ -356,7 +431,7 @@ impl LlmProvider for UnifiedProvider {
                         } else {
                             p.id
                         },
-                        name: p.name,
+                        name: from_api_tool_name(&p.name),
                         arguments,
                     }
                 })
@@ -469,10 +544,16 @@ impl LlmProvider for UnifiedProvider {
         manifests
             .iter()
             .map(|m| {
+                let api_name = m
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(to_api_tool_name)
+                    .map(Value::String)
+                    .unwrap_or(Value::Null);
                 json!({
                     "type": "function",
                     "function": {
-                        "name": m.get("name").cloned().unwrap_or(Value::Null),
+                        "name": api_name,
                         "description": m.get("description").cloned().unwrap_or(Value::Null),
                         "parameters": m.get("input_schema").cloned().unwrap_or(Value::Null),
                     }
@@ -570,5 +651,74 @@ mod tests {
         assert_eq!(tcs[0]["id"], "call_xyz");
         assert_eq!(tcs[0]["type"], "function");
         assert!(tcs[0]["function"]["arguments"].is_string());
+        assert_eq!(tcs[0]["function"]["name"], "web-search");
+    }
+
+    #[test]
+    fn to_api_tool_name_replaces_dots() {
+        assert_eq!(to_api_tool_name("note.read"), "note-read");
+        assert_eq!(to_api_tool_name("vault.search_keyword"), "vault-search_keyword");
+        assert_eq!(to_api_tool_name("time.now"), "time-now");
+        assert_eq!(to_api_tool_name("skill.writing_coach"), "skill-writing_coach");
+    }
+
+    #[test]
+    fn from_api_tool_name_restores_dots() {
+        assert_eq!(from_api_tool_name("note-read"), "note.read");
+        assert_eq!(from_api_tool_name("vault-search_keyword"), "vault.search_keyword");
+        assert_eq!(from_api_tool_name("time-now"), "time.now");
+        assert_eq!(from_api_tool_name("skill-writing_coach"), "skill.writing_coach");
+    }
+
+    #[test]
+    fn tool_name_round_trip() {
+        let names = [
+            "note.read", "note.list", "note.write_section", "note.create", "note.append",
+            "vault.search_keyword", "vault.semantic_search",
+            "thought.list", "thought.create",
+            "web.search", "web.read_page", "web.download", "web.read_pdf",
+            "graph.query_topic_network", "index.status", "link.suggest_related",
+            "memory.save", "memory.forget", "time.now",
+            "skill.writing_coach", "skill.web_research",
+        ];
+        for name in &names {
+            assert_eq!(&from_api_tool_name(&to_api_tool_name(name)), name);
+        }
+    }
+
+    #[test]
+    fn convert_tools_maps_names() {
+        let provider = UnifiedProvider::new(
+            test_client(),
+            "https://api.openai.com/v1".to_string(),
+            "k".to_string(),
+            "m".to_string(),
+            0.7,
+            None,
+            30000,
+            None,
+            true,
+        );
+        let manifests = vec![json!({
+            "name": "web.search",
+            "description": "Search the web",
+            "input_schema": {"type": "object"}
+        })];
+        let tools = provider.convert_tools(&manifests);
+        assert_eq!(tools[0]["function"]["name"], "web-search");
+    }
+
+    #[test]
+    fn serialize_messages_empty_content_no_tool_calls() {
+        let messages = vec![LlmChatMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            tool_calls: None,
+            tool_name: None,
+            tool_call_id: None,
+        }];
+        let json = UnifiedProvider::serialize_messages(&messages);
+        let obj = json[0].as_object().unwrap();
+        assert_eq!(obj.get("content").unwrap(), "");
     }
 }
