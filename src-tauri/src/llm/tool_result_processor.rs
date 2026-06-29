@@ -2,7 +2,13 @@
 //!
 //! Long tool results (web pages, search hits) are compressed here so that
 //! ContextGuard only has to deal with already-compact messages downstream.
+//!
+//! When a `results_dir` is configured, raw results exceeding the summarize
+//! threshold are persisted to disk before summarization. The summarized marker
+//! then contains a `ref:<id>` that the `tool_result.recall` tool can use to
+//! retrieve the original content on demand.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -17,6 +23,10 @@ const MAX_GOAL_CHARS: usize = 200;
 /// Marker prefix injected into summarized results so that ContextGuard can
 /// recognise them and skip aggressive trimming.
 pub const SUMMARIZED_MARKER: &str = "[summarized from ";
+
+/// Marker used by ContextGuard to detect stored-ref results that can be
+/// recalled via `tool_result.recall`.
+pub const STORED_REF_MARKER: &str = "[tool result stored | ref:";
 
 const SUMMARIZE_SYSTEM: &str = "\
 You are a tool result summarizer. Extract only the information relevant to the user's task.\n\
@@ -37,6 +47,8 @@ const RULE_BASED_SNIPPET_LEN: usize = 200;
 pub struct ToolResultProcessor {
     provider: Arc<dyn LlmProvider>,
     summarize_threshold: usize,
+    results_dir: Option<PathBuf>,
+    session_id: String,
 }
 
 #[derive(Clone)]
@@ -46,22 +58,46 @@ pub struct ProcessedResult {
     pub original_len: usize,
 }
 
+/// Name of the recall tool — used to skip re-summarization of recalled results.
+pub const RECALL_TOOL_NAME: &str = "tool.recall";
+
 impl ToolResultProcessor {
-    pub fn new(provider: Arc<dyn LlmProvider>, summarize_threshold: usize) -> Self {
+    pub fn new(
+        provider: Arc<dyn LlmProvider>,
+        summarize_threshold: usize,
+        results_dir: Option<PathBuf>,
+        session_id: String,
+    ) -> Self {
         Self {
             provider,
             summarize_threshold,
+            results_dir,
+            session_id,
         }
     }
 
     /// Process a single tool result: summarize if long, pass through if short.
+    ///
+    /// When `results_dir` is configured and the result exceeds the threshold,
+    /// the raw content is persisted to disk before summarization. The resulting
+    /// marker includes a `ref:` that `tool_result.recall` can use to retrieve
+    /// the original.
     pub async fn process(
         &self,
         tool_name: &str,
+        call_id: &str,
         raw_content: &str,
         user_goal: Option<&str>,
     ) -> ProcessedResult {
         let original_len = raw_content.len();
+
+        if tool_name == RECALL_TOOL_NAME {
+            return ProcessedResult {
+                content: raw_content.to_string(),
+                was_summarized: false,
+                original_len,
+            };
+        }
 
         if original_len <= self.summarize_threshold {
             return ProcessedResult {
@@ -78,17 +114,84 @@ impl ToolResultProcessor {
         };
 
         match summary {
-            Some(text) => ProcessedResult {
-                content: format!("{}{} chars]\n{}", SUMMARIZED_MARKER, original_len, text),
-                was_summarized: true,
-                original_len,
-            },
+            Some(text) => {
+                let ref_tag = match self.persist_raw(call_id, tool_name, raw_content).await {
+                    Some(short_id) => format!(" | ref:{}", short_id),
+                    None => String::new(),
+                };
+                ProcessedResult {
+                    content: format!(
+                        "{}{} chars{}]\n{}",
+                        SUMMARIZED_MARKER, original_len, ref_tag, text
+                    ),
+                    was_summarized: true,
+                    original_len,
+                }
+            }
             None => ProcessedResult {
                 content: raw_content.to_string(),
                 was_summarized: false,
                 original_len,
             },
         }
+    }
+
+    /// Persist raw tool result to `{results_dir}/{session_id}/{call_id}.json`.
+    /// Returns the short ref ID (first 8 chars of call_id) on success, None on
+    /// failure or if no results_dir is configured.
+    async fn persist_raw(
+        &self,
+        call_id: &str,
+        tool_name: &str,
+        raw_content: &str,
+    ) -> Option<String> {
+        let results_dir = self.results_dir.as_ref()?;
+        let session_dir = results_dir.join(&self.session_id);
+
+        if let Err(e) = tokio::fs::create_dir_all(&session_dir).await {
+            eprintln!(
+                "[tool_result_processor] failed to create dir {}: {}",
+                session_dir.display(),
+                e
+            );
+            return None;
+        }
+
+        let file_path = session_dir.join(format!("{}.json", call_id));
+        let ts = chrono::Utc::now().to_rfc3339();
+        let record = serde_json::json!({
+            "call_id": call_id,
+            "tool_name": tool_name,
+            "ts": ts,
+            "content": raw_content,
+            "len": raw_content.len(),
+        });
+
+        match serde_json::to_string(&record) {
+            Ok(json_str) => {
+                if let Err(e) = tokio::fs::write(&file_path, json_str).await {
+                    eprintln!(
+                        "[tool_result_processor] failed to write {}: {}",
+                        file_path.display(),
+                        e
+                    );
+                    return None;
+                }
+            }
+            Err(e) => {
+                eprintln!("[tool_result_processor] failed to serialize: {}", e);
+                return None;
+            }
+        }
+
+        let short_id = &call_id[..call_id.len().min(8)];
+        eprintln!(
+            "[tool_result_processor] persisted {} ({} chars) → {}",
+            tool_name,
+            raw_content.len(),
+            file_path.display()
+        );
+        Some(short_id.to_string())
     }
 
     async fn llm_summarize(
@@ -239,13 +342,30 @@ fn truncate_at_boundary(s: &str, max: usize) -> &str {
 mod tests {
     use super::*;
 
+    fn make_processor(threshold: usize) -> ToolResultProcessor {
+        ToolResultProcessor::new(
+            Arc::new(FakeProvider),
+            threshold,
+            None,
+            "test-session".to_string(),
+        )
+    }
+
+    fn make_processor_with_dir(threshold: usize, dir: PathBuf) -> ToolResultProcessor {
+        ToolResultProcessor::new(
+            Arc::new(FakeProvider),
+            threshold,
+            Some(dir),
+            "test-session".to_string(),
+        )
+    }
+
     #[test]
     fn short_result_passes_through() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let provider = Arc::new(FakeProvider);
-            let proc = ToolResultProcessor::new(provider, 3000);
-            let result = proc.process("note.read", "short content", None).await;
+            let proc = make_processor(3000);
+            let result = proc.process("note.read", "call-1", "short content", None).await;
             assert_eq!(result.content, "short content");
             assert!(!result.was_summarized);
             assert_eq!(result.original_len, 13);
@@ -256,13 +376,50 @@ mod tests {
     fn long_non_web_non_vault_passes_through() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let provider = Arc::new(FakeProvider);
-            let proc = ToolResultProcessor::new(provider, 100);
+            let proc = make_processor(100);
             let long = "x".repeat(200);
-            let result = proc.process("note.read", &long, None).await;
-            // note.read has no rule-based extraction, fallback = keep raw
+            let result = proc.process("note.read", "call-2", &long, None).await;
             assert_eq!(result.content, long);
             assert!(!result.was_summarized);
+        });
+    }
+
+    #[test]
+    fn recall_tool_result_passes_through() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let proc = make_processor(10);
+            let long = "x".repeat(200);
+            let result = proc
+                .process(RECALL_TOOL_NAME, "call-3", &long, None)
+                .await;
+            assert_eq!(result.content, long);
+            assert!(!result.was_summarized);
+        });
+    }
+
+    #[test]
+    fn persist_raw_writes_file() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let tmp = tempfile::tempdir().unwrap();
+            let proc = make_processor_with_dir(10, tmp.path().to_path_buf());
+            let result = proc
+                .process("web.search", "abcdef12-3456", &"y".repeat(100), None)
+                .await;
+            assert!(result.was_summarized);
+            assert!(result.content.contains("ref:abcdef12"));
+
+            let file = tmp
+                .path()
+                .join("test-session")
+                .join("abcdef12-3456.json");
+            assert!(file.exists());
+            let stored: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+            assert_eq!(stored["call_id"], "abcdef12-3456");
+            assert_eq!(stored["tool_name"], "web.search");
+            assert_eq!(stored["len"], 100);
         });
     }
 

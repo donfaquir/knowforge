@@ -216,26 +216,54 @@ impl ContextGuard {
 
     fn phase1_remove_tool_results(&self, messages: &mut Vec<LlmChatMessage>, budget: usize) {
         let tail_boundary = Self::find_tail_boundary(messages);
+
+        // Pass 1: trim raw (non-summarized) tool results
         let mut i = 0;
         while i < tail_boundary.min(messages.len()) && Self::estimate_total(messages) > budget {
-            if messages[i].role == "system" {
-                i += 1;
-                continue;
-            }
             if messages[i].role == "tool" && messages[i].content.len() > 40 {
-                // Already-summarized results are high-density; skip them.
-                if messages[i].content.starts_with(super::tool_result_processor::SUMMARIZED_MARKER) {
-                    i += 1;
-                    continue;
+                if !messages[i].content.starts_with(super::tool_result_processor::SUMMARIZED_MARKER) {
+                    let orig_len = messages[i].content.len();
+                    messages[i].content = format!(
+                        "[tool result trimmed, was {} chars]",
+                        orig_len
+                    );
                 }
-                let orig_len = messages[i].content.len();
-                messages[i].content = format!(
-                    "[tool result trimmed, was {} chars]",
-                    orig_len
-                );
             }
             i += 1;
         }
+
+        // Pass 2: if still over budget, degrade summarized results that have
+        // a stored ref — the model can still recall them via tool.recall.
+        if Self::estimate_total(messages) > budget {
+            let mut i = 0;
+            while i < tail_boundary.min(messages.len()) && Self::estimate_total(messages) > budget {
+                if messages[i].role == "tool"
+                    && messages[i].content.starts_with(super::tool_result_processor::SUMMARIZED_MARKER)
+                {
+                    if let Some(stored_marker) = Self::extract_stored_ref_marker(&messages[i].content) {
+                        messages[i].content = stored_marker;
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+
+    fn extract_stored_ref_marker(content: &str) -> Option<String> {
+        let ref_start = content.find("| ref:")?;
+        let ref_value_start = ref_start + "| ref:".len();
+        let ref_end = content[ref_value_start..].find(']')?;
+        let ref_id = &content[ref_value_start..ref_value_start + ref_end];
+
+        let chars_start = super::tool_result_processor::SUMMARIZED_MARKER.len();
+        let chars_end = content[chars_start..].find(' ').unwrap_or(0);
+        let orig_chars = &content[chars_start..chars_start + chars_end];
+
+        Some(format!(
+            "{}{}]",
+            super::tool_result_processor::STORED_REF_MARKER,
+            format!("{}, was {} chars", ref_id, orig_chars)
+        ))
     }
 
     async fn phase1_5_summarize(&self, messages: &mut Vec<LlmChatMessage>, budget: usize) {
@@ -517,6 +545,77 @@ mod tests {
         assert!(tool_msgs.iter().any(|m| m.content.contains("Key finding")));
         // The raw tool result should be trimmed
         assert!(tool_msgs.iter().any(|m| m.content.starts_with("[tool result trimmed")));
+    }
+
+    #[test]
+    fn phase1_pass2_degrades_summarized_with_ref_to_stored_marker() {
+        let guard = ContextGuard::new(Some(10000));
+        let summarized_with_ref = format!(
+            "{}12474 chars | ref:019717ab]\n{}",
+            super::super::tool_result_processor::SUMMARIZED_MARKER,
+            "x".repeat(600),
+        );
+        let summarized_no_ref = format!(
+            "{}500 chars]\nAnother finding.",
+            super::super::tool_result_processor::SUMMARIZED_MARKER,
+        );
+        let mut msgs = vec![
+            sys("sys"),
+            user("q1"),
+            assistant("a1"),
+            tool(&summarized_with_ref),
+            tool(&summarized_no_ref),
+            tool(&"r".repeat(500)),
+            user("q2"),
+            assistant("a2"),
+            user("q3"),
+            assistant("a3"),
+        ];
+
+        let total_before = ContextGuard::estimate_total(&msgs);
+        // Budget that pass 1 alone can't satisfy (need pass 2 too).
+        // Pass 1 saves ~120 tokens by trimming the raw 500-char result.
+        // Pass 2 saves ~150 tokens by degrading summarized_with_ref.
+        let budget = total_before - 200;
+        guard.phase1_remove_tool_results(&mut msgs, budget);
+
+        let tool_msgs: Vec<&LlmChatMessage> = msgs.iter().filter(|m| m.role == "tool").collect();
+        assert!(
+            tool_msgs.iter().any(|m| m.content.starts_with("[tool result trimmed")),
+            "pass 1 should have trimmed the raw result"
+        );
+        assert!(
+            tool_msgs.iter().any(|m| m.content.starts_with(
+                super::super::tool_result_processor::STORED_REF_MARKER
+            )),
+            "pass 2 should have degraded summarized-with-ref, got: {:?}",
+            tool_msgs.iter().map(|m| &m.content).collect::<Vec<_>>()
+        );
+        let stored = tool_msgs.iter().find(|m| m.content.contains("019717ab")).unwrap();
+        assert!(stored.content.contains("was 12474 chars"));
+        assert!(
+            tool_msgs.iter().any(|m| m.content.contains("Another finding")),
+            "summarized-without-ref should be preserved"
+        );
+    }
+
+    #[test]
+    fn extract_stored_ref_marker_works() {
+        let content = format!(
+            "{}12474 chars | ref:019717ab]\nKey finding.",
+            super::super::tool_result_processor::SUMMARIZED_MARKER,
+        );
+        let marker = ContextGuard::extract_stored_ref_marker(&content).unwrap();
+        assert_eq!(marker, "[tool result stored | ref:019717ab, was 12474 chars]");
+    }
+
+    #[test]
+    fn extract_stored_ref_marker_returns_none_without_ref() {
+        let content = format!(
+            "{}500 chars]\nSome summary.",
+            super::super::tool_result_processor::SUMMARIZED_MARKER,
+        );
+        assert!(ContextGuard::extract_stored_ref_marker(&content).is_none());
     }
 
     #[test]

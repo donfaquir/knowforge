@@ -41,7 +41,9 @@ WEB: When the user provides a specific URL (http/https link), always use `web.re
 Only use `web.search` when no URL is given and you need to find relevant pages by keyword. \
 PDF: When `web.read_page` results mention a PDF link or the page is an academic paper with a PDF download, \
 immediately call `web.read_pdf` with the PDF URL to extract the full text — do NOT tell the user to download it themselves. \
-RESULT MATCHING: Each tool result is prefixed with [call:ID] to help you match results to calls when the same tool is invoked multiple times.";
+RESULT MATCHING: Each tool result is prefixed with [call:ID] to help you match results to calls when the same tool is invoked multiple times. \
+RECALL: When a tool result shows [summarized from N chars | ref:XXX], the full raw content is stored on disk. \
+If the summary lacks detail you need, call `tool.recall` with that ref ID to retrieve the original content.";
 
 /// Agent Loop 上限配置；任一项达到上限即终止循环并 emit `llm:agent-done`。
 #[allow(dead_code)]
@@ -146,10 +148,17 @@ pub async fn run_agent_stream(
     let mut loop_detector = LoopDetector::new();
     let mut pending_summary: Option<tokio::task::JoinHandle<Option<PrecomputedSummary>>> = None;
 
+    let results_dir = if config.nesting_depth == 0 {
+        Some(workspace_root.join(".knowforge").join("tool-results"))
+    } else {
+        None
+    };
     let result_processor: Option<ToolResultProcessor> = if config.summarize_threshold > 0 {
         Some(ToolResultProcessor::new(
             provider.clone(),
             config.summarize_threshold,
+            results_dir,
+            session_id.clone(),
         ))
     } else {
         None
@@ -397,10 +406,11 @@ pub async fn run_agent_stream(
                     .map(|(i, tc)| {
                         let proc = proc.clone();
                         let name = tc.name.clone();
+                        let id = tc.id.clone();
                         let raw = raw_contents[i].clone();
                         let goal = user_goal.clone();
                         async move {
-                            Some(proc.process(&name, &raw, goal.as_deref()).await)
+                            Some(proc.process(&name, &id, &raw, goal.as_deref()).await)
                         }
                     })
                     .collect();
@@ -632,6 +642,7 @@ pub(crate) async fn execute_tool(
         app_bundle_resource_dir,
         nesting_depth,
     );
+    ctx.session_id = session_id.to_string();
     ctx.call_id = Some(tc.id.clone());
     ctx.provider = provider;
     if let Some(ec) = app.try_state::<Arc<crate::semantic_index::EmbeddingCache>>() {
