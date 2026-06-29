@@ -18,6 +18,7 @@ use super::approval::ToolApprovalState;
 use super::context_guard::{ContextGuard, PrecomputedSummary};
 use super::memory;
 use super::provider::{LlmProvider, NormalizedToolCall};
+use super::tool_result_processor::{self, ToolResultProcessor};
 use super::{LlmChatMessage, LlmToolCall, LlmToolCallFunction};
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::ToolRegistry;
@@ -57,6 +58,9 @@ pub struct AgentLoopConfig {
     pub nesting_depth: u8,
     /// Provider context window size (tokens). Used by ContextGuard to trim history.
     pub max_context_tokens: Option<u64>,
+    /// Tool results longer than this (chars) are summarized before entering
+    /// the message array. Set to 0 to disable front-load summarization.
+    pub summarize_threshold: usize,
 }
 
 impl Default for AgentLoopConfig {
@@ -67,6 +71,7 @@ impl Default for AgentLoopConfig {
             max_single_result_chars: 12_000,
             nesting_depth: 0,
             max_context_tokens: None,
+            summarize_threshold: tool_result_processor::DEFAULT_SUMMARIZE_THRESHOLD,
         }
     }
 }
@@ -140,6 +145,15 @@ pub async fn run_agent_stream(
     };
     let mut loop_detector = LoopDetector::new();
     let mut pending_summary: Option<tokio::task::JoinHandle<Option<PrecomputedSummary>>> = None;
+
+    let result_processor: Option<ToolResultProcessor> = if config.summarize_threshold > 0 {
+        Some(ToolResultProcessor::new(
+            provider.clone(),
+            config.summarize_threshold,
+        ))
+    } else {
+        None
+    };
 
     let mut iteration: u32 = 0;
 
@@ -359,13 +373,59 @@ pub async fn run_agent_stream(
         });
 
         // 6. 把每个 tool 结果以 role=tool 的消息追加到历史
-        for (i, tc) in normalized_calls.iter().enumerate() {
-            let raw_content = match results.get(i) {
+        //    When a result processor is available, long results are summarized
+        //    in parallel before being appended (front-load compression).
+        let user_goal = result_processor
+            .as_ref()
+            .and_then(|_| tool_result_processor::extract_user_goal(&messages));
+
+        let raw_contents: Vec<String> = normalized_calls
+            .iter()
+            .enumerate()
+            .map(|(i, _tc)| match results.get(i) {
                 Some((Ok(val), _)) => val.to_string(),
                 Some((Err(e), _)) => format!("error: {}", e),
                 None => "error: no result".to_string(),
+            })
+            .collect();
+
+        let processed: Vec<Option<tool_result_processor::ProcessedResult>> =
+            if let Some(ref proc) = result_processor {
+                let futs: Vec<_> = normalized_calls
+                    .iter()
+                    .enumerate()
+                    .map(|(i, tc)| {
+                        let proc = proc.clone();
+                        let name = tc.name.clone();
+                        let raw = raw_contents[i].clone();
+                        let goal = user_goal.clone();
+                        async move {
+                            Some(proc.process(&name, &raw, goal.as_deref()).await)
+                        }
+                    })
+                    .collect();
+                join_all(futs).await
+            } else {
+                vec![None; normalized_calls.len()]
             };
-            let fenced = fence_if_external(&tc.name, &raw_content);
+
+        for (i, tc) in normalized_calls.iter().enumerate() {
+            let effective_content = if let Some(Some(pr)) = processed.get(i) {
+                if pr.was_summarized {
+                    eprintln!(
+                        "[agent_loop] session={} tool={} summarized {}->{} chars",
+                        &session_id[..8.min(session_id.len())],
+                        tc.name,
+                        pr.original_len,
+                        pr.content.len(),
+                    );
+                }
+                pr.content.clone()
+            } else {
+                raw_contents[i].clone()
+            };
+
+            let fenced = fence_if_external(&tc.name, &effective_content);
             let prefixed = format!("[call:{}] {}", tc.id, fenced);
             let content = if prefixed.len() > config.max_single_result_chars {
                 let end = find_char_boundary(&prefixed, config.max_single_result_chars);
@@ -464,7 +524,7 @@ pub async fn run_agent_stream(
         }
 
         let pressure = context_guard.budget_pressure(&messages);
-        if pressure > 0.7 {
+        if pressure > 0.5 {
             eprintln!(
                 "[agent_loop] session={} iter={} context pressure={:.2}, pre-summarizing",
                 &session_id[..8.min(session_id.len())], iteration, pressure,

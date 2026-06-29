@@ -239,8 +239,9 @@ impl LlmProvider for UnifiedProvider {
 
         let msg_count = messages.len();
         let est_tokens: usize = messages_json.iter().map(|v| v.to_string().len() / 3).sum();
+        let idle_timeout = std::time::Duration::from_millis(self.timeout_ms);
         eprintln!(
-            "[provider] session={} chat_stream start: model={} msgs={} est_tokens={} timeout={}ms tools={}",
+            "[provider] session={} chat_stream start: model={} msgs={} est_tokens={} idle_timeout={}ms tools={}",
             &session_id[..8.min(session_id.len())],
             self.model,
             msg_count,
@@ -250,12 +251,10 @@ impl LlmProvider for UnifiedProvider {
         );
         let request_start = std::time::Instant::now();
 
-        let req = self.build_auth_headers(
-            self.client
-                .post(&url)
-                .timeout(std::time::Duration::from_millis(self.timeout_ms)),
-        )
-        .json(&body);
+        // No request-level timeout — use idle detection in the SSE loop instead.
+        // The connect timeout on the shared client (15s) still protects against
+        // unreachable hosts.
+        let req = self.build_auth_headers(self.client.post(&url)).json(&body);
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
@@ -294,6 +293,7 @@ impl LlmProvider for UnifiedProvider {
         let mut line_buf = String::new();
         let mut accumulated_content = String::new();
         let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
+        let tools_provided = tools.as_ref().map_or(false, |t| !t.is_empty());
 
         let mut last_chunk_at = std::time::Instant::now();
         let mut chunk_count: u64 = 0;
@@ -310,6 +310,23 @@ impl LlmProvider for UnifiedProvider {
                     );
                     emit_error(app, session_id, Some("cancelled"), "Request aborted");
                     return Err("cancelled".to_string());
+                }
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(last_chunk_at + idle_timeout)) => {
+                    let idle_secs = last_chunk_at.elapsed().as_secs_f64();
+                    let msg = format!(
+                        "SSE idle timeout: no data received for {:.0}s",
+                        idle_secs,
+                    );
+                    eprintln!(
+                        "[provider] session={} {} after {:.1}s total, {} chunks, content_len={}",
+                        &session_id[..8.min(session_id.len())],
+                        msg,
+                        request_start.elapsed().as_secs_f64(),
+                        chunk_count,
+                        accumulated_content.len(),
+                    );
+                    emit_error(app, session_id, Some("idle_timeout"), &msg);
+                    return Err(msg);
                 }
                 item = stream.next() => {
                     match item {
@@ -378,25 +395,36 @@ impl LlmProvider for UnifiedProvider {
                                                 emit_chunk(app, session_id, &text);
                                             }
                                             if let Some(tc_deltas) = delta.tool_calls {
-                                                for tc_delta in tc_deltas {
-                                                    let idx = tc_delta.index;
-                                                    while pending_tool_calls.len() <= idx {
-                                                        pending_tool_calls.push(PendingToolCall {
-                                                            id: String::new(),
-                                                            name: String::new(),
-                                                            arguments_buf: String::new(),
-                                                        });
-                                                    }
-                                                    let pending = &mut pending_tool_calls[idx];
-                                                    if let Some(id) = tc_delta.id {
-                                                        pending.id = id;
-                                                    }
-                                                    if let Some(func) = tc_delta.function {
-                                                        if let Some(name) = func.name {
-                                                            pending.name = name;
+                                                if tools_provided {
+                                                    for tc_delta in tc_deltas {
+                                                        let idx = tc_delta.index;
+                                                        while pending_tool_calls.len() <= idx {
+                                                            pending_tool_calls.push(PendingToolCall {
+                                                                id: String::new(),
+                                                                name: String::new(),
+                                                                arguments_buf: String::new(),
+                                                            });
                                                         }
-                                                        if let Some(args) = func.arguments {
-                                                            pending.arguments_buf.push_str(&args);
+                                                        let pending = &mut pending_tool_calls[idx];
+                                                        if let Some(id) = tc_delta.id {
+                                                            pending.id = id;
+                                                        }
+                                                        if let Some(func) = tc_delta.function {
+                                                            if let Some(name) = func.name {
+                                                                pending.name = name;
+                                                            }
+                                                            if let Some(args) = func.arguments {
+                                                                pending.arguments_buf.push_str(&args);
+                                                            }
+                                                        }
+                                                    }
+                                                } else {
+                                                    for tc_delta in tc_deltas {
+                                                        if let Some(func) = tc_delta.function {
+                                                            if let Some(args) = func.arguments {
+                                                                accumulated_content.push_str(&args);
+                                                                emit_chunk(app, session_id, &args);
+                                                            }
                                                         }
                                                     }
                                                 }

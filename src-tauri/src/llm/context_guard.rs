@@ -12,9 +12,21 @@ const MAX_SUMMARY_INPUT_CHARS: usize = 6000;
 const MAX_CONTENT_PER_MESSAGE: usize = 500;
 
 const SUMMARY_SYSTEM: &str = "\
-Summarize the following conversation excerpt in 2-3 concise sentences. \
-Focus on: what the user asked, what tools were called, and key findings. \
-Output only the summary, nothing else.";
+Summarize the following conversation into a structured summary.\n\
+You MUST preserve:\n\
+- What the user wants to accomplish (goal)\n\
+- Any constraints the user specified\n\
+- What tools were called and their key findings\n\
+- Decisions made so far\n\
+- Open questions or unresolved issues\n\
+- What should happen next\n\n\
+Format:\n\
+[Goal] ...\n\
+[Findings] ...\n\
+[Decisions] ...\n\
+[Open] ...\n\
+[Next] ...\n\n\
+Be concise. Each section 1-2 sentences max. Output only the summary.";
 
 #[derive(Clone)]
 pub struct ContextGuard {
@@ -211,6 +223,11 @@ impl ContextGuard {
                 continue;
             }
             if messages[i].role == "tool" && messages[i].content.len() > 40 {
+                // Already-summarized results are high-density; skip them.
+                if messages[i].content.starts_with(super::tool_result_processor::SUMMARIZED_MARKER) {
+                    i += 1;
+                    continue;
+                }
                 let orig_len = messages[i].content.len();
                 messages[i].content = format!(
                     "[tool result trimmed, was {} chars]",
@@ -471,6 +488,35 @@ mod tests {
         guard.trim_if_needed(&mut msgs);
         let tool_msg = msgs.iter().find(|m| m.role == "tool").unwrap();
         assert_eq!(tool_msg.content, small_content);
+    }
+
+    #[test]
+    fn phase1_skips_already_summarized_tool_result() {
+        // Budget very tight: 580 - 512 = 68 token budget.
+        // Two tool results compete for space. The summarized one (with
+        // SUMMARIZED_MARKER) should survive; the raw one should be trimmed.
+        let guard = ContextGuard::new(Some(580));
+        let summarized = format!(
+            "{}500 chars]\nKey finding: X is important.",
+            super::super::tool_result_processor::SUMMARIZED_MARKER,
+        );
+        let mut msgs = vec![
+            sys("sys"),
+            user("q1"),
+            assistant("a1"),
+            tool(&summarized),
+            tool(&"x".repeat(300)),
+            user("q2"),
+            assistant("a2"),
+            user("q3"),
+            assistant("a3"),
+        ];
+        guard.trim_if_needed(&mut msgs);
+        let tool_msgs: Vec<&LlmChatMessage> = msgs.iter().filter(|m| m.role == "tool").collect();
+        // The summarized tool result should be preserved as-is
+        assert!(tool_msgs.iter().any(|m| m.content.contains("Key finding")));
+        // The raw tool result should be trimmed
+        assert!(tool_msgs.iter().any(|m| m.content.starts_with("[tool result trimmed")));
     }
 
     #[test]

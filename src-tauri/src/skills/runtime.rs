@@ -166,6 +166,7 @@ pub async fn run_skill_with_depth(
         max_single_result_chars: manifest.max_tool_result_chars as usize,
         nesting_depth,
         max_context_tokens,
+        summarize_threshold: crate::llm::tool_result_processor::DEFAULT_SUMMARIZE_THRESHOLD,
     };
 
     let conv_id = skill_conversation_id(&manifest.id, &parent_conversation_id);

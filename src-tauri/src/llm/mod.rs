@@ -6,6 +6,7 @@ pub(crate) mod context_guard;
 pub(crate) mod planning;
 pub(crate) mod provider;
 pub(crate) mod provider_impl;
+pub(crate) mod tool_result_processor;
 pub mod memory;
 
 pub use provider::{
