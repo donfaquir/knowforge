@@ -243,7 +243,7 @@ impl Tool for SkillAsTool {
             (manifest.timeout_secs as u64).saturating_mul(2),
         );
         eprintln!(
-            "[skill_tool] skill={} session={} starting, timeout={}s max_tool_calls={} max_result_chars={}",
+            "[skill_tool] skill={} session={} starting, timeout={}s max_tool_calls={} max_single_result_chars={}",
             self.skill_id, &session_id[..8.min(session_id.len())],
             overall_timeout.as_secs(), manifest.max_tool_calls, manifest.max_tool_result_chars,
         );

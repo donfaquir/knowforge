@@ -584,6 +584,60 @@ impl LlmProvider for UnifiedProvider {
     fn is_remote(&self) -> bool {
         self.is_remote
     }
+
+    fn model_context_window(&self) -> Option<usize> {
+        infer_context_window(&self.model)
+    }
+}
+
+const MAX_INFERRED_CONTEXT: usize = 524_288;
+
+fn infer_context_window(model: &str) -> Option<usize> {
+    let m = model.to_lowercase();
+
+    let raw = if m.contains("qwen-long") {
+        10_000_000
+    } else if m.contains("qwen-max") || m.contains("qwen-plus") {
+        131_072
+    } else if m.contains("qwen-turbo") {
+        131_072
+    } else if m.contains("qwen2") || m.contains("qwen3") {
+        131_072
+    } else if m.contains("qwen") {
+        32_768
+    } else if m.contains("gpt-4o") || m.contains("gpt-4-turbo") {
+        128_000
+    } else if m.contains("gpt-4") {
+        8_192
+    } else if m.contains("gpt-3.5") {
+        16_385
+    } else if m.contains("llama-4") || m.contains("llama4") {
+        if m.contains("scout") {
+            10_000_000
+        } else {
+            1_000_000
+        }
+    } else if m.contains("llama-3") || m.contains("llama3") {
+        if m.contains("3.1") || m.contains("3.2") || m.contains("3.3") {
+            128_000
+        } else {
+            8_192
+        }
+    } else if m.contains("llama2") || m.contains("llama-2") {
+        4_096
+    } else if m.contains("deepseek") {
+        128_000
+    } else if m.contains("gemma4") || m.contains("gemma-4") {
+        262_144
+    } else if m.contains("gemma3") || m.contains("gemma-3") {
+        128_000
+    } else if m.contains("gemma") {
+        8_192
+    } else {
+        return None;
+    };
+
+    Some(raw.min(MAX_INFERRED_CONTEXT))
 }
 
 #[cfg(test)]
@@ -706,6 +760,34 @@ mod tests {
         })];
         let tools = provider.convert_tools(&manifests);
         assert_eq!(tools[0]["function"]["name"], "web-search");
+    }
+
+    #[test]
+    fn infer_context_window_known_models() {
+        assert_eq!(infer_context_window("qwen-plus"), Some(131_072));
+        assert_eq!(infer_context_window("qwen-turbo-latest"), Some(131_072));
+        assert_eq!(infer_context_window("qwen3-235b-a22b"), Some(131_072));
+        assert_eq!(infer_context_window("gpt-4o"), Some(128_000));
+        assert_eq!(infer_context_window("gpt-4"), Some(8_192));
+        assert_eq!(infer_context_window("gpt-3.5-turbo"), Some(16_385));
+        assert_eq!(infer_context_window("deepseek-chat"), Some(128_000));
+        assert_eq!(infer_context_window("llama3.3-70b"), Some(128_000));
+        assert_eq!(infer_context_window("llama3-8b"), Some(8_192));
+        assert_eq!(infer_context_window("gemma3-27b"), Some(128_000));
+    }
+
+    #[test]
+    fn infer_context_window_clamped_to_max() {
+        // qwen-long has 10M native window but should be clamped to 512K
+        assert_eq!(infer_context_window("qwen-long"), Some(MAX_INFERRED_CONTEXT));
+        assert_eq!(infer_context_window("llama4-scout"), Some(MAX_INFERRED_CONTEXT));
+        assert_eq!(MAX_INFERRED_CONTEXT, 524_288);
+    }
+
+    #[test]
+    fn infer_context_window_unknown_returns_none() {
+        assert_eq!(infer_context_window("my-custom-model"), None);
+        assert_eq!(infer_context_window("some-random-name"), None);
     }
 
     #[test]
