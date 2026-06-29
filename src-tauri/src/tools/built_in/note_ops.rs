@@ -571,7 +571,11 @@ impl NoteCreateTool {
                 name: "note.create".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
-                description: "在工作区创建一篇新的 Markdown 笔记文件（含 frontmatter）".to_string(),
+                description: "Create a new Markdown note file in the workspace. Use for \
+                              structured, long-form content: research reports, meeting notes, \
+                              technical analyses, tutorials, or any document that deserves its \
+                              own file and path. NOT for short fleeting ideas (use thought.create \
+                              for those).".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "required": ["rel_path", "title"],

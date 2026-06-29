@@ -177,7 +177,12 @@ impl ThoughtCreateTool {
                 name: "thought.create".to_string(),
                 version: "1.0.0".to_string(),
                 protocol_version: "1.0".to_string(),
-                description: "Create a new independent Thought entry. A thought captures the user's thinking, insight, inspiration, or hypothesis about a topic. Do NOT use for behavioral instructions, personal preferences, or memory directives (e.g. \"remember...\", \"always...\", \"never...\") — those belong in memory.save.".to_string(),
+                description: "Create a short, independent Thought entry (a few sentences). \
+                              A thought captures a fleeting idea, spark of inspiration, or \
+                              quick hypothesis — content too small to warrant its own note \
+                              file. Do NOT use for structured documents, research reports, \
+                              or long-form content (use note.create for those). Do NOT use \
+                              for behavioral instructions or preferences (use memory.save).".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "required": ["content"],
