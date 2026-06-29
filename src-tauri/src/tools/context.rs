@@ -12,6 +12,9 @@ use crate::semantic_index::EmbeddingCache;
 pub struct ToolContext {
     pub workspace_root: PathBuf,
     pub conversation_id: String,
+    /// The agent_loop's session ID — unique per stream call. Used for
+    /// tool-result externalization: `{workspace}/.knowforge/tool-results/{session_id}/`.
+    pub session_id: String,
     /// agent_loop 分配的工具调用追踪 ID；默认 None，由 execute_tool / invoke_tool 设置。
     pub call_id: Option<String>,
     pub audit_sink: Arc<dyn AuditSink>,
@@ -102,6 +105,7 @@ impl ToolContextFactory {
         ToolContext {
             workspace_root,
             conversation_id: conversation_id.to_string(),
+            session_id: String::new(),
             call_id: None,
             audit_sink: self.audit_sink.clone(),
             privacy_filter: self.privacy_filter.clone(),

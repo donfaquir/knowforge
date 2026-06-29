@@ -18,6 +18,7 @@ use super::approval::ToolApprovalState;
 use super::context_guard::{ContextGuard, PrecomputedSummary};
 use super::memory;
 use super::provider::{LlmProvider, NormalizedToolCall};
+use super::tool_result_processor::{self, ToolResultProcessor};
 use super::{LlmChatMessage, LlmToolCall, LlmToolCallFunction};
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::ToolRegistry;
@@ -40,7 +41,9 @@ WEB: When the user provides a specific URL (http/https link), always use `web.re
 Only use `web.search` when no URL is given and you need to find relevant pages by keyword. \
 PDF: When `web.read_page` results mention a PDF link or the page is an academic paper with a PDF download, \
 immediately call `web.read_pdf` with the PDF URL to extract the full text — do NOT tell the user to download it themselves. \
-RESULT MATCHING: Each tool result is prefixed with [call:ID] to help you match results to calls when the same tool is invoked multiple times.";
+RESULT MATCHING: Each tool result is prefixed with [call:ID] to help you match results to calls when the same tool is invoked multiple times. \
+RECALL: When a tool result shows [summarized from N chars | ref:XXX], the full raw content is stored on disk. \
+If the summary lacks detail you need, call `tool.recall` with that ref ID to retrieve the original content.";
 
 /// Agent Loop 上限配置；任一项达到上限即终止循环并 emit `llm:agent-done`。
 #[allow(dead_code)]
@@ -49,13 +52,17 @@ pub struct AgentLoopConfig {
     pub max_tool_calls: u16,
     /// 每轮模型流式请求的默认超时（毫秒）；现代码从调用点的 ai.request.timeout_ms 传入。
     pub timeout_ms: u64,
-    /// 整轮中累计追加给模型的 tool 结果总字符数上限（防止上下文爆炸）。
-    pub max_tool_result_chars: usize,
+    /// Per-result truncation threshold (chars). Results exceeding this are
+    /// truncated with a marker. Not used as a loop termination condition.
+    pub max_single_result_chars: usize,
     /// Iter 5 #4: 本轮 agent loop 内 ToolContext.nesting_depth 的赋值。
     /// 主对话默认 0；skill 子轮次为 1（由 [`crate::skills::runtime::run_skill_with_depth`] 设置）。
     pub nesting_depth: u8,
     /// Provider context window size (tokens). Used by ContextGuard to trim history.
     pub max_context_tokens: Option<u64>,
+    /// Tool results longer than this (chars) are summarized before entering
+    /// the message array. Set to 0 to disable front-load summarization.
+    pub summarize_threshold: usize,
 }
 
 impl Default for AgentLoopConfig {
@@ -63,9 +70,10 @@ impl Default for AgentLoopConfig {
         Self {
             max_tool_calls: 25,
             timeout_ms: 60_000,
-            max_tool_result_chars: 24_000,
+            max_single_result_chars: 12_000,
             nesting_depth: 0,
             max_context_tokens: None,
+            summarize_threshold: tool_result_processor::DEFAULT_SUMMARIZE_THRESHOLD,
         }
     }
 }
@@ -129,15 +137,32 @@ pub async fn run_agent_stream(
     memory_manager: SharedMemoryManager,
 ) -> String {
     let mut messages = initial_messages;
-    let mut total_tool_result_chars: usize = 0;
     let mut tool_call_count: u16 = 0;
+    let effective_context_tokens = config.max_context_tokens
+        .or_else(|| provider.model_context_window().map(|w| w as u64));
     let context_guard = if config.nesting_depth > 0 {
-        ContextGuard::new(config.max_context_tokens)
+        ContextGuard::new(effective_context_tokens)
     } else {
-        ContextGuard::with_provider(config.max_context_tokens, provider.clone())
+        ContextGuard::with_provider(effective_context_tokens, provider.clone())
     };
     let mut loop_detector = LoopDetector::new();
     let mut pending_summary: Option<tokio::task::JoinHandle<Option<PrecomputedSummary>>> = None;
+
+    let results_dir = if config.nesting_depth == 0 {
+        Some(workspace_root.join(".knowforge").join("tool-results"))
+    } else {
+        None
+    };
+    let result_processor: Option<ToolResultProcessor> = if config.summarize_threshold > 0 {
+        Some(ToolResultProcessor::new(
+            provider.clone(),
+            config.summarize_threshold,
+            results_dir,
+            session_id.clone(),
+        ))
+    } else {
+        None
+    };
 
     let mut iteration: u32 = 0;
 
@@ -145,15 +170,13 @@ pub async fn run_agent_stream(
         iteration += 1;
         let est_tokens: usize = messages.iter().map(|m| m.content.len() / 3).sum();
         eprintln!(
-            "[agent_loop] session={} iter={} msgs={} est_tokens={} tool_calls_so_far={}/{} result_chars={}/{}",
+            "[agent_loop] session={} iter={} msgs={} est_tokens={} tool_calls_so_far={}/{}",
             &session_id[..8.min(session_id.len())],
             iteration,
             messages.len(),
             est_tokens,
             tool_call_count,
             config.max_tool_calls,
-            total_tool_result_chars,
-            config.max_tool_result_chars,
         );
 
         if cancel.is_cancelled() {
@@ -261,7 +284,7 @@ pub async fn run_agent_stream(
         }
 
         // 5. 并行执行工具（跳过循环调用；每个工具有独立超时，支持取消）
-        let tool_timeout = Duration::from_millis(config.timeout_ms);
+        let default_tool_timeout = Duration::from_millis(config.timeout_ms);
         let results = join_all(normalized_calls.iter().enumerate().map(|(idx, tc)| {
             let skip = looped.get(idx).copied().unwrap_or(false);
             let cancel = cancel.clone();
@@ -280,6 +303,11 @@ pub async fn run_agent_stream(
                 if skip {
                     return (Err(format!("loop detected: '{}' called too many times with same arguments", tc.name)), 0u64);
                 }
+                let tool_timeout = registry
+                    .get(&tc.name)
+                    .and_then(|t| t.timeout_ms())
+                    .map(Duration::from_millis)
+                    .unwrap_or(default_tool_timeout);
                 let nesting_depth = config.nesting_depth;
                 let exec_start = std::time::Instant::now();
                 let result = tokio::select! {
@@ -354,27 +382,70 @@ pub async fn run_agent_stream(
         });
 
         // 6. 把每个 tool 结果以 role=tool 的消息追加到历史
-        for (i, tc) in normalized_calls.iter().enumerate() {
-            let raw_content = match results.get(i) {
+        //    When a result processor is available, long results are summarized
+        //    in parallel before being appended (front-load compression).
+        let user_goal = result_processor
+            .as_ref()
+            .and_then(|_| tool_result_processor::extract_user_goal(&messages));
+
+        let raw_contents: Vec<String> = normalized_calls
+            .iter()
+            .enumerate()
+            .map(|(i, _tc)| match results.get(i) {
                 Some((Ok(val), _)) => val.to_string(),
                 Some((Err(e), _)) => format!("error: {}", e),
                 None => "error: no result".to_string(),
+            })
+            .collect();
+
+        let processed: Vec<Option<tool_result_processor::ProcessedResult>> =
+            if let Some(ref proc) = result_processor {
+                let futs: Vec<_> = normalized_calls
+                    .iter()
+                    .enumerate()
+                    .map(|(i, tc)| {
+                        let proc = proc.clone();
+                        let name = tc.name.clone();
+                        let id = tc.id.clone();
+                        let raw = raw_contents[i].clone();
+                        let goal = user_goal.clone();
+                        async move {
+                            Some(proc.process(&name, &id, &raw, goal.as_deref()).await)
+                        }
+                    })
+                    .collect();
+                join_all(futs).await
+            } else {
+                vec![None; normalized_calls.len()]
             };
-            let fenced = fence_if_external(&tc.name, &raw_content);
-            let prefixed = format!("[call:{}] {}", tc.id, fenced);
-            let remaining = config
-                .max_tool_result_chars
-                .saturating_sub(total_tool_result_chars);
-            let content = if prefixed.len() > remaining {
-                let mut end = remaining;
-                while end > 0 && !prefixed.is_char_boundary(end) {
-                    end -= 1;
+
+        for (i, tc) in normalized_calls.iter().enumerate() {
+            let effective_content = if let Some(Some(pr)) = processed.get(i) {
+                if pr.was_summarized {
+                    eprintln!(
+                        "[agent_loop] session={} tool={} summarized {}->{} chars",
+                        &session_id[..8.min(session_id.len())],
+                        tc.name,
+                        pr.original_len,
+                        pr.content.len(),
+                    );
                 }
-                prefixed[..end].to_string()
+                pr.content.clone()
+            } else {
+                raw_contents[i].clone()
+            };
+
+            let fenced = fence_if_external(&tc.name, &effective_content);
+            let prefixed = format!("[call:{}] {}", tc.id, fenced);
+            let content = if prefixed.len() > config.max_single_result_chars {
+                let end = find_char_boundary(&prefixed, config.max_single_result_chars);
+                format!(
+                    "{}\n[… truncated, showing first {} of {} chars]",
+                    &prefixed[..end], end, prefixed.len()
+                )
             } else {
                 prefixed
             };
-            total_tool_result_chars = total_tool_result_chars.saturating_add(content.len());
 
             let mut tool_msg =
                 provider.build_tool_result_message(&tc.id, &tc.name, &content);
@@ -420,14 +491,8 @@ pub async fn run_agent_stream(
         }
 
         // 7b. Budget exhausted → graceful summary instead of silent truncation
-        if tool_call_count >= config.max_tool_calls
-            || total_tool_result_chars >= config.max_tool_result_chars
-        {
-            let reason = if tool_call_count >= config.max_tool_calls {
-                format!("tool_calls {}/{}", tool_call_count, config.max_tool_calls)
-            } else {
-                format!("result_chars {}/{}", total_tool_result_chars, config.max_tool_result_chars)
-            };
+        if tool_call_count >= config.max_tool_calls {
+            let reason = format!("tool_calls {}/{}", tool_call_count, config.max_tool_calls);
             eprintln!(
                 "[agent_loop] session={} iter={} BUDGET EXHAUSTED ({}), requesting final summary...",
                 &session_id[..8.min(session_id.len())], iteration, reason,
@@ -469,7 +534,7 @@ pub async fn run_agent_stream(
         }
 
         let pressure = context_guard.budget_pressure(&messages);
-        if pressure > 0.7 {
+        if pressure > 0.5 {
             eprintln!(
                 "[agent_loop] session={} iter={} context pressure={:.2}, pre-summarizing",
                 &session_id[..8.min(session_id.len())], iteration, pressure,
@@ -577,6 +642,7 @@ pub(crate) async fn execute_tool(
         app_bundle_resource_dir,
         nesting_depth,
     );
+    ctx.session_id = session_id.to_string();
     ctx.call_id = Some(tc.id.clone());
     ctx.provider = provider;
     if let Some(ec) = app.try_state::<Arc<crate::semantic_index::EmbeddingCache>>() {
@@ -659,6 +725,14 @@ fn fence_if_external(tool_name: &str, content: &str) -> String {
     } else {
         content.to_string()
     }
+}
+
+fn find_char_boundary(s: &str, target: usize) -> usize {
+    let mut end = target.min(s.len());
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
 }
 
 #[allow(dead_code)]
@@ -882,6 +956,69 @@ mod fence_tests {
         assert_eq!(fence_if_external("note.read", "content"), "content");
         assert_eq!(fence_if_external("vault.search_keyword", "x"), "x");
         assert_eq!(fence_if_external("thought.create", "y"), "y");
+    }
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::*;
+
+    #[test]
+    fn single_result_truncation_adds_marker() {
+        let long = "x".repeat(15_000);
+        let config = AgentLoopConfig {
+            max_single_result_chars: 12_000,
+            ..Default::default()
+        };
+        let prefixed = format!("[call:abc] {}", long);
+        let content = if prefixed.len() > config.max_single_result_chars {
+            let end = find_char_boundary(&prefixed, config.max_single_result_chars);
+            format!(
+                "{}\n[… truncated, showing first {} of {} chars]",
+                &prefixed[..end], end, prefixed.len()
+            )
+        } else {
+            prefixed.clone()
+        };
+        assert!(content.contains("[… truncated, showing first 12000 of"));
+        assert!(content.len() < prefixed.len());
+    }
+
+    #[test]
+    fn short_result_passes_through() {
+        let short = "hello world";
+        let config = AgentLoopConfig {
+            max_single_result_chars: 12_000,
+            ..Default::default()
+        };
+        let prefixed = format!("[call:abc] {}", short);
+        let content = if prefixed.len() > config.max_single_result_chars {
+            let end = find_char_boundary(&prefixed, config.max_single_result_chars);
+            format!(
+                "{}\n[… truncated, showing first {} of {} chars]",
+                &prefixed[..end], end, prefixed.len()
+            )
+        } else {
+            prefixed.clone()
+        };
+        assert_eq!(content, prefixed);
+        assert!(!content.contains("truncated"));
+    }
+
+    #[test]
+    fn find_char_boundary_respects_utf8() {
+        let s = "你好世界测试数据"; // 8 CJK chars, 24 bytes
+        // target=5 falls in the middle of a 3-byte char
+        let boundary = find_char_boundary(s, 5);
+        assert!(s.is_char_boundary(boundary));
+        assert!(boundary <= 5);
+        assert_eq!(boundary, 3); // first char is 3 bytes
+
+        // target=0
+        assert_eq!(find_char_boundary(s, 0), 0);
+
+        // target beyond length
+        assert_eq!(find_char_boundary(s, 100), s.len());
     }
 }
 

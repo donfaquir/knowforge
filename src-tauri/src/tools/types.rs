@@ -184,4 +184,8 @@ pub trait Tool: Send + Sync {
     fn category(&self) -> ToolCategory {
         ToolCategory::NoteRead
     }
+
+    fn timeout_ms(&self) -> Option<u64> {
+        None
+    }
 }

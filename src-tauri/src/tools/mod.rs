@@ -117,6 +117,9 @@ pub fn register_builtin_tools(
     registry.register(Arc::new(built_in::web_download::WebDownloadTool::new()))?;
     registry.register(Arc::new(built_in::web_download::WebReadPdfTool::new()))?;
 
+    // Tool result recall
+    registry.register(Arc::new(built_in::tool_result_recall::ToolResultRecallTool::new()))?;
+
     Ok(())
 }
 
@@ -136,9 +139,9 @@ mod mod_tests {
             "register_builtin_tools failed: {:?}",
             result.err()
         );
-        // 确认工具总数：1(time.now) + 8(P1) + 4(P3 写操作) + 2(memory) + 4(P4 网络) = 19
+        // 确认工具总数：1(time.now) + 8(P1) + 4(P3 写操作) + 2(memory) + 4(P4 网络) + 1(recall) = 20
         let tools = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
-        assert_eq!(tools.len(), 19, "expected 19 registered tools, got {}", tools.len());
+        assert_eq!(tools.len(), 20, "expected 20 registered tools, got {}", tools.len());
     }
 
     #[test]
@@ -148,8 +151,8 @@ mod mod_tests {
         let all = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
         let core = registry.list_for_llm_filtered(&crate::tools::registry::ToolFilter::core());
         assert!(core.len() < all.len(), "core ({}) should be less than all ({})", core.len(), all.len());
-        // NoteRead(5) + Utility(1 time.now + 2 memory) = 8
-        assert_eq!(core.len(), 8, "core should have 8 tools (5 NoteRead + 3 Utility)");
+        // NoteRead(5) + Utility(1 time.now + 2 memory + 1 recall) = 9
+        assert_eq!(core.len(), 9, "core should have 9 tools (5 NoteRead + 4 Utility)");
     }
 
     #[test]
@@ -185,5 +188,6 @@ mod mod_tests {
         check("time.now", ToolCategory::Utility);
         check("memory.save", ToolCategory::Utility);
         check("memory.forget", ToolCategory::Utility);
+        check("tool.recall", ToolCategory::Utility);
     }
 }

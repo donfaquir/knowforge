@@ -174,8 +174,8 @@ fn web_research_manifest() -> SkillManifest {
             "note.append".to_string(),
             "vault.search_keyword".to_string(),
         ],
-        max_tool_calls: 25,
-        timeout_secs: 180,
+        max_tool_calls: 50,
+        timeout_secs: 300,
         ui_entry: SkillUiEntry::ConversationMode,
         tags: vec!["research".to_string(), "web".to_string()],
         auto_invocable: true,
@@ -321,8 +321,8 @@ mod mod_tests {
         assert!(m.allowed_tools.contains(&"web.read_page".to_string()));
         assert!(m.allowed_tools.contains(&"web.read_pdf".to_string()));
         assert!(m.allowed_tools.contains(&"note.create".to_string()));
-        assert_eq!(m.max_tool_calls, 25);
-        assert_eq!(m.timeout_secs, 180);
+        assert_eq!(m.max_tool_calls, 50);
+        assert_eq!(m.timeout_secs, 300);
         assert_eq!(m.max_tool_result_chars, 20000);
         assert!(m.auto_invocable);
     }

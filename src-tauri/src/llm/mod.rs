@@ -6,6 +6,7 @@ pub(crate) mod context_guard;
 pub(crate) mod planning;
 pub(crate) mod provider;
 pub(crate) mod provider_impl;
+pub(crate) mod tool_result_processor;
 pub mod memory;
 
 pub use provider::{
@@ -997,6 +998,7 @@ pub async fn start_chat_stream(
             }
             let tools_json = provider.convert_tools(&manifests);
             let loop_config = agent_loop::AgentLoopConfig {
+                timeout_ms: ai.request.timeout_ms,
                 max_context_tokens: ai.request.max_context_tokens,
                 ..Default::default()
             };

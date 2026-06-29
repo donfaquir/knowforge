@@ -239,8 +239,9 @@ impl LlmProvider for UnifiedProvider {
 
         let msg_count = messages.len();
         let est_tokens: usize = messages_json.iter().map(|v| v.to_string().len() / 3).sum();
+        let idle_timeout = std::time::Duration::from_millis(self.timeout_ms);
         eprintln!(
-            "[provider] session={} chat_stream start: model={} msgs={} est_tokens={} timeout={}ms tools={}",
+            "[provider] session={} chat_stream start: model={} msgs={} est_tokens={} idle_timeout={}ms tools={}",
             &session_id[..8.min(session_id.len())],
             self.model,
             msg_count,
@@ -250,12 +251,10 @@ impl LlmProvider for UnifiedProvider {
         );
         let request_start = std::time::Instant::now();
 
-        let req = self.build_auth_headers(
-            self.client
-                .post(&url)
-                .timeout(std::time::Duration::from_millis(self.timeout_ms)),
-        )
-        .json(&body);
+        // No request-level timeout — use idle detection in the SSE loop instead.
+        // The connect timeout on the shared client (15s) still protects against
+        // unreachable hosts.
+        let req = self.build_auth_headers(self.client.post(&url)).json(&body);
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
@@ -294,6 +293,7 @@ impl LlmProvider for UnifiedProvider {
         let mut line_buf = String::new();
         let mut accumulated_content = String::new();
         let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
+        let tools_provided = tools.as_ref().map_or(false, |t| !t.is_empty());
 
         let mut last_chunk_at = std::time::Instant::now();
         let mut chunk_count: u64 = 0;
@@ -310,6 +310,23 @@ impl LlmProvider for UnifiedProvider {
                     );
                     emit_error(app, session_id, Some("cancelled"), "Request aborted");
                     return Err("cancelled".to_string());
+                }
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(last_chunk_at + idle_timeout)) => {
+                    let idle_secs = last_chunk_at.elapsed().as_secs_f64();
+                    let msg = format!(
+                        "SSE idle timeout: no data received for {:.0}s",
+                        idle_secs,
+                    );
+                    eprintln!(
+                        "[provider] session={} {} after {:.1}s total, {} chunks, content_len={}",
+                        &session_id[..8.min(session_id.len())],
+                        msg,
+                        request_start.elapsed().as_secs_f64(),
+                        chunk_count,
+                        accumulated_content.len(),
+                    );
+                    emit_error(app, session_id, Some("idle_timeout"), &msg);
+                    return Err(msg);
                 }
                 item = stream.next() => {
                     match item {
@@ -378,25 +395,36 @@ impl LlmProvider for UnifiedProvider {
                                                 emit_chunk(app, session_id, &text);
                                             }
                                             if let Some(tc_deltas) = delta.tool_calls {
-                                                for tc_delta in tc_deltas {
-                                                    let idx = tc_delta.index;
-                                                    while pending_tool_calls.len() <= idx {
-                                                        pending_tool_calls.push(PendingToolCall {
-                                                            id: String::new(),
-                                                            name: String::new(),
-                                                            arguments_buf: String::new(),
-                                                        });
-                                                    }
-                                                    let pending = &mut pending_tool_calls[idx];
-                                                    if let Some(id) = tc_delta.id {
-                                                        pending.id = id;
-                                                    }
-                                                    if let Some(func) = tc_delta.function {
-                                                        if let Some(name) = func.name {
-                                                            pending.name = name;
+                                                if tools_provided {
+                                                    for tc_delta in tc_deltas {
+                                                        let idx = tc_delta.index;
+                                                        while pending_tool_calls.len() <= idx {
+                                                            pending_tool_calls.push(PendingToolCall {
+                                                                id: String::new(),
+                                                                name: String::new(),
+                                                                arguments_buf: String::new(),
+                                                            });
                                                         }
-                                                        if let Some(args) = func.arguments {
-                                                            pending.arguments_buf.push_str(&args);
+                                                        let pending = &mut pending_tool_calls[idx];
+                                                        if let Some(id) = tc_delta.id {
+                                                            pending.id = id;
+                                                        }
+                                                        if let Some(func) = tc_delta.function {
+                                                            if let Some(name) = func.name {
+                                                                pending.name = name;
+                                                            }
+                                                            if let Some(args) = func.arguments {
+                                                                pending.arguments_buf.push_str(&args);
+                                                            }
+                                                        }
+                                                    }
+                                                } else {
+                                                    for tc_delta in tc_deltas {
+                                                        if let Some(func) = tc_delta.function {
+                                                            if let Some(args) = func.arguments {
+                                                                accumulated_content.push_str(&args);
+                                                                emit_chunk(app, session_id, &args);
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -584,6 +612,60 @@ impl LlmProvider for UnifiedProvider {
     fn is_remote(&self) -> bool {
         self.is_remote
     }
+
+    fn model_context_window(&self) -> Option<usize> {
+        infer_context_window(&self.model)
+    }
+}
+
+const MAX_INFERRED_CONTEXT: usize = 524_288;
+
+fn infer_context_window(model: &str) -> Option<usize> {
+    let m = model.to_lowercase();
+
+    let raw = if m.contains("qwen-long") {
+        10_000_000
+    } else if m.contains("qwen-max") || m.contains("qwen-plus") {
+        131_072
+    } else if m.contains("qwen-turbo") {
+        131_072
+    } else if m.contains("qwen2") || m.contains("qwen3") {
+        131_072
+    } else if m.contains("qwen") {
+        32_768
+    } else if m.contains("gpt-4o") || m.contains("gpt-4-turbo") {
+        128_000
+    } else if m.contains("gpt-4") {
+        8_192
+    } else if m.contains("gpt-3.5") {
+        16_385
+    } else if m.contains("llama-4") || m.contains("llama4") {
+        if m.contains("scout") {
+            10_000_000
+        } else {
+            1_000_000
+        }
+    } else if m.contains("llama-3") || m.contains("llama3") {
+        if m.contains("3.1") || m.contains("3.2") || m.contains("3.3") {
+            128_000
+        } else {
+            8_192
+        }
+    } else if m.contains("llama2") || m.contains("llama-2") {
+        4_096
+    } else if m.contains("deepseek") {
+        128_000
+    } else if m.contains("gemma4") || m.contains("gemma-4") {
+        262_144
+    } else if m.contains("gemma3") || m.contains("gemma-3") {
+        128_000
+    } else if m.contains("gemma") {
+        8_192
+    } else {
+        return None;
+    };
+
+    Some(raw.min(MAX_INFERRED_CONTEXT))
 }
 
 #[cfg(test)]
@@ -706,6 +788,34 @@ mod tests {
         })];
         let tools = provider.convert_tools(&manifests);
         assert_eq!(tools[0]["function"]["name"], "web-search");
+    }
+
+    #[test]
+    fn infer_context_window_known_models() {
+        assert_eq!(infer_context_window("qwen-plus"), Some(131_072));
+        assert_eq!(infer_context_window("qwen-turbo-latest"), Some(131_072));
+        assert_eq!(infer_context_window("qwen3-235b-a22b"), Some(131_072));
+        assert_eq!(infer_context_window("gpt-4o"), Some(128_000));
+        assert_eq!(infer_context_window("gpt-4"), Some(8_192));
+        assert_eq!(infer_context_window("gpt-3.5-turbo"), Some(16_385));
+        assert_eq!(infer_context_window("deepseek-chat"), Some(128_000));
+        assert_eq!(infer_context_window("llama3.3-70b"), Some(128_000));
+        assert_eq!(infer_context_window("llama3-8b"), Some(8_192));
+        assert_eq!(infer_context_window("gemma3-27b"), Some(128_000));
+    }
+
+    #[test]
+    fn infer_context_window_clamped_to_max() {
+        // qwen-long has 10M native window but should be clamped to 512K
+        assert_eq!(infer_context_window("qwen-long"), Some(MAX_INFERRED_CONTEXT));
+        assert_eq!(infer_context_window("llama4-scout"), Some(MAX_INFERRED_CONTEXT));
+        assert_eq!(MAX_INFERRED_CONTEXT, 524_288);
+    }
+
+    #[test]
+    fn infer_context_window_unknown_returns_none() {
+        assert_eq!(infer_context_window("my-custom-model"), None);
+        assert_eq!(infer_context_window("some-random-name"), None);
     }
 
     #[test]

@@ -61,6 +61,12 @@ pub trait LlmProvider: Send + Sync {
     fn provider_name(&self) -> &'static str;
 
     fn is_remote(&self) -> bool;
+
+    /// Return the model's context window size in tokens, if known.
+    /// Used by ContextGuard as fallback when user doesn't configure max_context_tokens.
+    fn model_context_window(&self) -> Option<usize> {
+        None
+    }
 }
 
 pub fn resolve_model_name(last_used: Option<&str>, default_model: &str) -> Option<String> {

@@ -227,6 +227,47 @@ fn lock_workspace_root(state: &tauri::State<'_, WorkspaceState>) -> Result<PathB
         .ok_or_else(|| "workspace is not initialized".to_string())
 }
 
+async fn cleanup_expired_tool_results(workspace_root: &Path) {
+    let results_dir = workspace_root.join(".knowforge").join("tool-results");
+    let mut entries = match tokio::fs::read_dir(&results_dir).await {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    let cutoff = std::time::SystemTime::now() - Duration::from_secs(7 * 24 * 3600);
+    let mut removed = 0u32;
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let meta = match entry.metadata().await {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !meta.is_dir() {
+            continue;
+        }
+        let modified = meta.modified().unwrap_or(UNIX_EPOCH);
+        if modified < cutoff {
+            if let Err(e) = tokio::fs::remove_dir_all(entry.path()).await {
+                eprintln!(
+                    "[cleanup] failed to remove expired tool-results dir {}: {}",
+                    entry.path().display(),
+                    e
+                );
+            } else {
+                removed += 1;
+            }
+        }
+    }
+
+    if removed > 0 {
+        eprintln!(
+            "[cleanup] removed {} expired tool-results session dir(s) from {}",
+            removed,
+            results_dir.display()
+        );
+    }
+}
+
 #[tauri::command]
 async fn open_workspace(
     root: String,
@@ -327,6 +368,12 @@ async fn open_workspace(
             eprintln!("[thought_reconcile] skipped: {e}");
         }
     });
+
+    let cleanup_root = canonical_root.clone();
+    tokio::spawn(async move {
+        cleanup_expired_tool_results(&cleanup_root).await;
+    });
+
     Ok(nodes)
 }
 
