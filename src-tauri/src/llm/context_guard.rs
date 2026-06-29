@@ -25,7 +25,7 @@ pub struct ContextGuard {
 
 pub struct PrecomputedSummary {
     pub summary_text: String,
-    pub original_msg_count: usize,
+    pub summarized_up_to: usize,
 }
 
 impl ContextGuard {
@@ -120,7 +120,7 @@ impl ContextGuard {
 
         Some(PrecomputedSummary {
             summary_text,
-            original_msg_count: messages.len(),
+            summarized_up_to: tail_boundary,
         })
     }
 
@@ -129,12 +129,11 @@ impl ContextGuard {
         messages: &mut Vec<LlmChatMessage>,
         cached: &PrecomputedSummary,
     ) -> bool {
-        if messages.len() != cached.original_msg_count {
+        if messages.len() < cached.summarized_up_to {
             return false;
         }
 
-        let tail_boundary = Self::find_tail_boundary(messages);
-        let removable_indices: Vec<usize> = (0..tail_boundary.min(messages.len()))
+        let removable_indices: Vec<usize> = (0..cached.summarized_up_to.min(messages.len()))
             .filter(|&i| messages[i].role != "system")
             .collect();
 
@@ -606,5 +605,80 @@ mod tests {
         guard.trim_with_summary(&mut msgs).await;
         let degraded = msgs.iter().any(|m| m.content == "[content trimmed]");
         assert!(degraded);
+    }
+
+    #[test]
+    fn cached_summary_applies_when_messages_grew() {
+        let guard = ContextGuard::new(Some(4096));
+        // Simulate a cached summary that covered messages 0..5
+        // (tail_boundary was 5 when pre_summarize ran).
+        let cached = PrecomputedSummary {
+            summary_text: "User asked about X, tool returned Y.".to_string(),
+            summarized_up_to: 5,
+        };
+        let mut msgs = vec![
+            sys("system prompt"),     // 0: system, skipped
+            user("q1"),              // 1: removed
+            assistant("a1"),         // 2: removed
+            tool("result1"),         // 3: removed
+            user("q2"),              // 4: removed
+            // --- summarized_up_to = 5 ---
+            assistant("a2"),         // 5: kept (after boundary)
+            user("q3"),              // 6: kept (new since snapshot)
+            assistant("a3"),         // 7: kept (new since snapshot)
+        ];
+        let applied = guard.apply_cached_summary(&mut msgs, &cached);
+        assert!(applied);
+        // system prompt preserved, 4 non-system removed, summary inserted, 3 tail kept
+        assert!(msgs.iter().any(|m| m.content.contains("User asked about X")));
+        assert!(msgs.iter().any(|m| m.content == "system prompt"));
+        assert!(msgs.iter().any(|m| m.content == "a3"));
+        assert!(!msgs.iter().any(|m| m.content == "q1"));
+    }
+
+    #[test]
+    fn cached_summary_rejects_when_messages_shrunk() {
+        let guard = ContextGuard::new(Some(4096));
+        let cached = PrecomputedSummary {
+            summary_text: "summary".to_string(),
+            summarized_up_to: 10,
+        };
+        // Only 5 messages — fewer than summarized_up_to
+        let mut msgs = vec![
+            sys("sys"),
+            user("q1"),
+            assistant("a1"),
+            user("q2"),
+            assistant("a2"),
+        ];
+        let applied = guard.apply_cached_summary(&mut msgs, &cached);
+        assert!(!applied);
+        assert_eq!(msgs.len(), 5);
+    }
+
+    #[test]
+    fn cached_summary_preserves_system_messages() {
+        let guard = ContextGuard::new(Some(4096));
+        let cached = PrecomputedSummary {
+            summary_text: "conversation summary".to_string(),
+            summarized_up_to: 4,
+        };
+        let mut msgs = vec![
+            sys("core system prompt"),  // 0: system, preserved
+            sys("extra system"),        // 1: system, preserved
+            user("q1"),                 // 2: removed
+            assistant("a1"),            // 3: removed
+            // --- summarized_up_to = 4 ---
+            user("q2"),                 // 4: kept
+            assistant("a2"),            // 5: kept
+        ];
+        let applied = guard.apply_cached_summary(&mut msgs, &cached);
+        assert!(applied);
+        let system_count = msgs.iter().filter(|m| m.role == "system").count();
+        // 2 original system msgs + 1 summary system msg = 3
+        assert_eq!(system_count, 3);
+        assert!(msgs.iter().any(|m| m.content == "core system prompt"));
+        assert!(msgs.iter().any(|m| m.content == "extra system"));
+        assert!(msgs.iter().any(|m| m.content.contains("conversation summary")));
     }
 }
