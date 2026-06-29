@@ -997,6 +997,7 @@ pub async fn start_chat_stream(
             }
             let tools_json = provider.convert_tools(&manifests);
             let loop_config = agent_loop::AgentLoopConfig {
+                timeout_ms: ai.request.timeout_ms,
                 max_context_tokens: ai.request.max_context_tokens,
                 ..Default::default()
             };

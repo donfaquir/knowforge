@@ -47,6 +47,7 @@ pub struct SkillAsTool {
     manifest: ToolManifest,
     skill_id: String,
     skill_name: String,
+    overall_timeout_ms: u64,
     app: AppHandle,
     semaphore: Arc<Semaphore>,
 }
@@ -104,10 +105,12 @@ impl SkillAsTool {
             tags: vec!["skill".to_string()],
             deprecated: None,
         };
+        let overall_timeout_ms = (skill.timeout_secs as u64).saturating_mul(2000);
         Arc::new(Self {
             manifest,
             skill_id: skill.id.clone(),
             skill_name: skill.name.clone(),
+            overall_timeout_ms,
             app,
             semaphore,
         })
@@ -122,6 +125,10 @@ impl Tool for SkillAsTool {
 
     fn category(&self) -> ToolCategory {
         ToolCategory::Skill
+    }
+
+    fn timeout_ms(&self) -> Option<u64> {
+        Some(self.overall_timeout_ms)
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: Value) -> ToolResult {

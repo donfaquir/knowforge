@@ -261,7 +261,7 @@ pub async fn run_agent_stream(
         }
 
         // 5. 并行执行工具（跳过循环调用；每个工具有独立超时，支持取消）
-        let tool_timeout = Duration::from_millis(config.timeout_ms);
+        let default_tool_timeout = Duration::from_millis(config.timeout_ms);
         let results = join_all(normalized_calls.iter().enumerate().map(|(idx, tc)| {
             let skip = looped.get(idx).copied().unwrap_or(false);
             let cancel = cancel.clone();
@@ -280,6 +280,11 @@ pub async fn run_agent_stream(
                 if skip {
                     return (Err(format!("loop detected: '{}' called too many times with same arguments", tc.name)), 0u64);
                 }
+                let tool_timeout = registry
+                    .get(&tc.name)
+                    .and_then(|t| t.timeout_ms())
+                    .map(Duration::from_millis)
+                    .unwrap_or(default_tool_timeout);
                 let nesting_depth = config.nesting_depth;
                 let exec_start = std::time::Instant::now();
                 let result = tokio::select! {
