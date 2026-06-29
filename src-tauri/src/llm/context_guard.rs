@@ -211,9 +211,12 @@ impl ContextGuard {
                 i += 1;
                 continue;
             }
-            if messages[i].role == "tool" {
-                messages.remove(i);
-                continue;
+            if messages[i].role == "tool" && messages[i].content.len() > 40 {
+                let orig_len = messages[i].content.len();
+                messages[i].content = format!(
+                    "[tool result trimmed, was {} chars]",
+                    orig_len
+                );
             }
             i += 1;
         }
@@ -397,8 +400,12 @@ mod tests {
     }
 
     #[test]
-    fn removes_old_tool_results_first() {
-        let guard = ContextGuard::new(Some(50));
+    fn degrades_old_tool_results_first() {
+        // budget = max_tokens(692) - RESERVE(512) = 180.
+        // Total before trim ≈ 206 > 180 → triggers Phase 1.
+        // After degrading 300-char tool results to ~36-char placeholders, total ≈ 140 < 180.
+        // Phase 2 does not kick in.
+        let guard = ContextGuard::new(Some(692));
         let mut msgs = vec![
             sys("system prompt"),
             user("q1"),
@@ -411,9 +418,60 @@ mod tests {
             assistant("a3"),
             tool(&"z".repeat(30)),
         ];
+        let original_len = msgs.len();
         guard.trim_if_needed(&mut msgs);
         assert!(msgs.iter().any(|m| m.role == "system"));
         assert!(msgs.iter().any(|m| m.content == "a3"));
+        // tool messages are degraded, not removed
+        let tool_count = msgs.iter().filter(|m| m.role == "tool").count();
+        assert!(tool_count > 0, "tool messages should be degraded, not deleted");
+        // at least one tool result should be trimmed to placeholder
+        let has_placeholder = msgs.iter().any(|m| m.role == "tool" && m.content.starts_with("[tool result trimmed"));
+        assert!(has_placeholder);
+        // message count stays the same (degrade, not delete)
+        assert_eq!(msgs.len(), original_len);
+    }
+
+    #[test]
+    fn degraded_tool_result_preserves_structure() {
+        // budget = 620 - 512 = 108. Total with 500-char tool ≈ 164 > 108 → triggers trim.
+        // After degrading to placeholder (~36 chars), total ≈ 48 < 108. Phase 2 skipped.
+        let guard = ContextGuard::new(Some(620));
+        let mut msgs = vec![
+            sys("sys"),
+            user("q1"),
+            assistant("a1"),
+            tool(&"r".repeat(500)),
+            user("q2"),
+            assistant("a2"),
+            user("q3"),
+            assistant("a3"),
+        ];
+        guard.trim_if_needed(&mut msgs);
+        // tool message still present
+        assert!(msgs.iter().any(|m| m.role == "tool"));
+        // its content is a placeholder
+        let tool_msg = msgs.iter().find(|m| m.role == "tool").unwrap();
+        assert!(tool_msg.content.starts_with("[tool result trimmed, was 500 chars]"));
+    }
+
+    #[test]
+    fn small_tool_result_not_degraded() {
+        // Budget tight but tool result is tiny (2 chars < 40 threshold).
+        // Phase 1 skips it, Phase 2 degrades user/assistant content instead.
+        let guard = ContextGuard::new(Some(30));
+        let small_content = "ok";
+        let mut msgs = vec![
+            sys("sys"),
+            user(&"long ".repeat(50)),
+            assistant("a1"),
+            tool(small_content),
+            user("q2"),
+            assistant("a2"),
+        ];
+        guard.trim_if_needed(&mut msgs);
+        let tool_msg = msgs.iter().find(|m| m.role == "tool").unwrap();
+        assert_eq!(tool_msg.content, small_content);
     }
 
     #[test]
