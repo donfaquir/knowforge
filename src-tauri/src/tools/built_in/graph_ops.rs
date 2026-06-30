@@ -1,5 +1,10 @@
+use std::collections::HashSet;
+use std::path::Path;
+
 use async_trait::async_trait;
 use serde_json::Value;
+
+use crate::topic_network::TopicNetworkForUi;
 
 use crate::tools::context::ToolContext;
 use crate::tools::types::{
@@ -63,14 +68,15 @@ impl Tool for GraphQueryTopicNetworkTool {
     async fn invoke(&self, ctx: &ToolContext, _input: Value) -> ToolResult {
         let start = std::time::Instant::now();
         let root = ctx.workspace_root.clone();
+        let root_for_blocking = root.clone();
 
         let result = tauri::async_runtime::spawn_blocking(move || {
-            let conn = crate::topic_network::open_topic_db(&root)?;
-            crate::topic_network::load_topic_network_graph(&root, &conn)
+            let conn = crate::topic_network::open_topic_db(&root_for_blocking)?;
+            crate::topic_network::load_topic_network_graph(&root_for_blocking, &conn)
         })
         .await;
 
-        let network = match result {
+        let mut network = match result {
             Ok(Ok(n)) => n,
             Ok(Err(e)) => {
                 return ToolResult::Err {
@@ -94,12 +100,14 @@ impl Tool for GraphQueryTopicNetworkTool {
             }
         };
 
+        let redacted = filter_private_nodes(&mut network, &root);
+
         let duration_ms = start.elapsed().as_millis() as u64;
         let data = serde_json::to_value(&network).unwrap_or(serde_json::json!({}));
 
         ToolResult::Ok {
             data,
-            redacted_count: 0,
+            redacted_count: redacted as u32,
             warnings: vec![],
             metrics: ToolMetrics {
                 duration_ms,
@@ -238,5 +246,127 @@ impl Tool for IndexStatusTool {
                 ..Default::default()
             },
         }
+    }
+}
+
+// ─── Privacy filtering ──────────────────────────────────────────────────────
+
+fn filter_private_nodes(network: &mut TopicNetworkForUi, workspace_root: &Path) -> u32 {
+    let private_paths: HashSet<String> = network
+        .doc_nodes
+        .iter()
+        .filter(|n| {
+            let full = workspace_root.join(&n.rel_path);
+            crate::note_privacy::peek_kf_private_from_md_file(&full)
+        })
+        .map(|n| n.rel_path.clone())
+        .collect();
+
+    let redacted = private_paths.len() as u32;
+    network
+        .doc_nodes
+        .retain(|n| !private_paths.contains(&n.rel_path));
+    network
+        .topic_doc_edges
+        .retain(|e| !private_paths.contains(&e.doc_rel_path));
+    redacted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::topic_network::{DocNode, TopicDocEdge, TopicNetworkMeta, TopicNode};
+    use std::io::Write;
+
+    fn make_network(doc_paths: &[&str], edges: &[(&str, &str)]) -> TopicNetworkForUi {
+        TopicNetworkForUi {
+            topic_nodes: vec![TopicNode {
+                id: "t1".into(),
+                name: "rust".into(),
+                doc_count: doc_paths.len(),
+                related_topic_count: 0,
+            }],
+            doc_nodes: doc_paths
+                .iter()
+                .map(|p| DocNode {
+                    rel_path: p.to_string(),
+                    topic_count: 1,
+                    thought_count: 0,
+                    max_maturity: "seed".into(),
+                })
+                .collect(),
+            topic_doc_edges: edges
+                .iter()
+                .map(|(tid, dp)| TopicDocEdge {
+                    topic_id: tid.to_string(),
+                    doc_rel_path: dp.to_string(),
+                })
+                .collect(),
+            topic_topic_edges: vec![],
+            meta: TopicNetworkMeta {
+                topic_node_cap: 50,
+                doc_node_cap: 50,
+                truncated_topic_count: 0,
+                truncated_doc_count: 0,
+                extract_skipped_no_llm: false,
+            },
+        }
+    }
+
+    #[test]
+    fn private_doc_nodes_and_edges_filtered() {
+        let dir = tempfile::tempdir().unwrap();
+        let private_path = dir.path().join("secret.md");
+        let mut f = std::fs::File::create(&private_path).unwrap();
+        writeln!(f, "---\nkf-private: true\n---\nSecret content").unwrap();
+
+        let public_path = dir.path().join("public.md");
+        let mut f2 = std::fs::File::create(&public_path).unwrap();
+        writeln!(f2, "---\ntitle: Public\n---\nPublic content").unwrap();
+
+        let mut network = make_network(
+            &["secret.md", "public.md"],
+            &[("t1", "secret.md"), ("t1", "public.md")],
+        );
+
+        let redacted = filter_private_nodes(&mut network, dir.path());
+
+        assert_eq!(redacted, 1);
+        assert_eq!(network.doc_nodes.len(), 1);
+        assert_eq!(network.doc_nodes[0].rel_path, "public.md");
+        assert_eq!(network.topic_doc_edges.len(), 1);
+        assert_eq!(network.topic_doc_edges[0].doc_rel_path, "public.md");
+    }
+
+    #[test]
+    fn no_private_docs_returns_zero_redacted() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("note.md");
+        let mut f = std::fs::File::create(&p).unwrap();
+        writeln!(f, "---\ntitle: Note\n---\nContent").unwrap();
+
+        let mut network = make_network(&["note.md"], &[("t1", "note.md")]);
+
+        let redacted = filter_private_nodes(&mut network, dir.path());
+
+        assert_eq!(redacted, 0);
+        assert_eq!(network.doc_nodes.len(), 1);
+        assert_eq!(network.topic_doc_edges.len(), 1);
+    }
+
+    #[test]
+    fn topic_nodes_preserved_when_doc_filtered() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secret.md");
+        let mut f = std::fs::File::create(&p).unwrap();
+        writeln!(f, "---\nkf-private: true\n---\nSecret").unwrap();
+
+        let mut network = make_network(&["secret.md"], &[("t1", "secret.md")]);
+
+        filter_private_nodes(&mut network, dir.path());
+
+        assert!(network.doc_nodes.is_empty());
+        assert!(network.topic_doc_edges.is_empty());
+        assert_eq!(network.topic_nodes.len(), 1, "topic node must not be removed");
     }
 }
