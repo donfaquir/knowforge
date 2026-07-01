@@ -325,7 +325,7 @@ pub fn extract_user_goal(messages: &[LlmChatMessage]) -> Option<String> {
         .map(|m| truncate_at_boundary(&m.content, MAX_GOAL_CHARS).to_string())
 }
 
-fn truncate_at_boundary(s: &str, max: usize) -> &str {
+pub(crate) fn truncate_at_boundary(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;
     }
