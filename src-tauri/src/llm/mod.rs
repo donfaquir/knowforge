@@ -415,7 +415,9 @@ fn build_skills_system_block(
         }
     }
     s.push_str(
-        "Skills cannot invoke other skills. The skill streams its own output to the user;\n\
+        "Prefer skills over raw tools when a skill covers the task — skills handle multi-step \
+         workflows (search → analyze → save) in one call and auto-archive results to the knowledge base.\n\
+         Skills cannot invoke other skills. The skill streams its own output to the user;\n\
          after `skill.<id>` returns, acknowledge briefly without repeating the skill's content.",
     );
     Some(s)
