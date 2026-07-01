@@ -551,9 +551,5 @@ mod tests {
         fn provider_name(&self) -> &'static str {
             "fake"
         }
-
-        fn is_remote(&self) -> bool {
-            false
-        }
     }
 }

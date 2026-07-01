@@ -10,7 +10,7 @@ pub(crate) mod tool_result_processor;
 pub mod memory;
 
 pub use provider::{
-    build_shared_http_client, create_provider, create_provider_by_id, CompletionOverrides,
+    build_shared_http_client, create_provider, CompletionOverrides,
     LlmProvider,
 };
 
@@ -797,7 +797,6 @@ pub async fn list_models(
         ai.parameters.top_p,
         ai.request.timeout_ms,
         profile.and_then(|p| p.organization_id.clone()),
-        profile.map(|p| p.is_remote).unwrap_or(true),
     );
     provider.list_models().await
 }
