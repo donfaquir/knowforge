@@ -36,6 +36,7 @@ pub(crate) type SharedMemoryManager =
 pub(crate) const TOOL_USE_DISCOVERY_HINT: &str = "TOOL USE: When the user references a file by partial name or unclear location, \
 FIRST call `note.list` or `vault.search_keyword` to locate the actual rel_path, \
 THEN call `note.read`. Never assume a file lives at the workspace root. \
+THOUGHTS: Use `thought.list` to discover thought IDs, then `thought.read` to retrieve full body and metadata. \
 When a read or write tool returns NotFound, immediately try discovery (list/search) before guessing another path. \
 WEB: When the user provides a specific URL (http/https link), always use `web.read_page` with that URL. \
 Only use `web.search` when no URL is given and you need to find relevant pages by keyword. \

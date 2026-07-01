@@ -95,6 +95,7 @@ pub fn register_builtin_tools(
     registry.register(Arc::new(built_in::note_ops::NoteListTool::new()))?;
     registry.register(Arc::new(built_in::note_ops::NoteReadTool::new()))?;
     registry.register(Arc::new(built_in::thought_ops::ThoughtListTool::new()))?;
+    registry.register(Arc::new(built_in::thought_ops::ThoughtReadTool::new()))?;
     registry.register(Arc::new(built_in::link_ops::LinkSuggestRelatedTool::new()))?;
     registry.register(Arc::new(built_in::graph_ops::GraphQueryTopicNetworkTool::new()))?;
     registry.register(Arc::new(built_in::graph_ops::IndexStatusTool::new()))?;
@@ -139,9 +140,9 @@ mod mod_tests {
             "register_builtin_tools failed: {:?}",
             result.err()
         );
-        // 确认工具总数：1(time.now) + 8(P1) + 4(P3 写操作) + 2(memory) + 4(P4 网络) + 1(recall) = 20
+        // 确认工具总数：1(time.now) + 9(P1) + 4(P3 写操作) + 2(memory) + 4(P4 网络) + 1(recall) = 21
         let tools = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
-        assert_eq!(tools.len(), 20, "expected 20 registered tools, got {}", tools.len());
+        assert_eq!(tools.len(), 21, "expected 21 registered tools, got {}", tools.len());
     }
 
     #[test]
@@ -151,8 +152,8 @@ mod mod_tests {
         let all = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
         let core = registry.list_for_llm_filtered(&crate::tools::registry::ToolFilter::core());
         assert!(core.len() < all.len(), "core ({}) should be less than all ({})", core.len(), all.len());
-        // NoteRead(5) + Utility(1 time.now + 2 memory + 1 recall) = 9
-        assert_eq!(core.len(), 9, "core should have 9 tools (5 NoteRead + 4 Utility)");
+        // NoteRead(6) + Utility(1 time.now + 2 memory + 1 recall) = 10
+        assert_eq!(core.len(), 10, "core should have 10 tools (6 NoteRead + 4 Utility)");
     }
 
     #[test]
@@ -170,6 +171,7 @@ mod mod_tests {
         check("vault.search_keyword", ToolCategory::NoteRead);
         check("vault.semantic_search", ToolCategory::NoteRead);
         check("thought.list", ToolCategory::NoteRead);
+        check("thought.read", ToolCategory::NoteRead);
 
         check("note.write_section", ToolCategory::NoteWrite);
         check("note.append", ToolCategory::NoteWrite);
