@@ -42,10 +42,12 @@ WEB: When the user provides a specific URL (http/https link), always use `web.re
 Only use `web.search` when no URL is given and you need to find relevant pages by keyword. \
 PDF: When `web.read_page` results mention a PDF link or the page is an academic paper with a PDF download, \
 immediately call `web.read_pdf` with the PDF URL to extract the full text — do NOT tell the user to download it themselves. \
-RESEARCH: When performing research that involves multiple web searches (technology comparison, topic investigation, \
-solution analysis), prefer `skill.web_research` — it produces a structured report and auto-saves to the knowledge base. \
-If you already used `web.search` / `web.read_page` directly for research (2+ calls), you MUST call `note.create` to save \
-a structured summary of your findings to `research/{topic-keyword}.md` before reporting results to the user. \
+RESEARCH: When the user explicitly asks for research, investigation, technology comparison, or solution analysis \
+(not a quick lookup or fact check), use `skill.web_research` — it produces a structured report and auto-saves to the \
+knowledge base. For simple queries (check a URL, verify a fact, find one piece of info), use raw tools directly. \
+If you used `web.search` / `web.read_page` directly for a substantial research task (4+ calls), call `note.create` to \
+save the complete research findings (full details, sources, and analysis — not a condensed summary) to \
+`research/{topic-keyword}.md` before reporting results. \
 RESULT MATCHING: Each tool result is prefixed with [call:ID] to help you match results to calls when the same tool is invoked multiple times. \
 RECALL: When a tool result shows [summarized from N chars | ref:XXX], the full raw content is stored on disk. \
 If the summary lacks detail you need, call `tool.recall` with that ref ID to retrieve the original content.";
