@@ -539,12 +539,26 @@ pub async fn run_agent_stream(
         }
 
         if any_looped {
+            let mut warning = String::from(
+                "WARNING: One or more tool calls were skipped because the same tool \
+                 was called repeatedly with identical arguments. Vary your approach \
+                 or use a different tool."
+            );
+            if let Some(goal_msg) = messages.iter().find(
+                |m| m.role == "system" && m.content.starts_with(TASK_CONTEXT_HEADER)
+            ) {
+                let goal_body = goal_msg.content
+                    .strip_prefix(TASK_CONTEXT_HEADER)
+                    .unwrap_or(&goal_msg.content)
+                    .trim();
+                if !goal_body.is_empty() {
+                    warning.push_str("\n\nReminder — your original task:\n");
+                    warning.push_str(goal_body);
+                }
+            }
             messages.push(LlmChatMessage {
                 role: "system".to_string(),
-                content: "WARNING: One or more tool calls were skipped because the same tool \
-                          was called repeatedly with identical arguments. Vary your approach \
-                          or use a different tool."
-                    .to_string(),
+                content: warning,
                 ..Default::default()
             });
         }
@@ -1414,5 +1428,76 @@ mod goal_extract_tests {
             .join("\n");
         assert_eq!(conversation, "[user]: Find papers about RAG");
         assert!(!conversation.contains("[assistant]:"));
+    }
+
+    #[test]
+    fn loop_warning_includes_goal_when_present() {
+        let mut msgs = vec![
+            sys("core system prompt"),
+            sys("# Task Context\nGOAL: Find papers about RAG\nCONSTRAINTS: none"),
+            user("hello"),
+        ];
+        let any_looped = true;
+        if any_looped {
+            let mut warning = String::from(
+                "WARNING: One or more tool calls were skipped because the same tool \
+                 was called repeatedly with identical arguments. Vary your approach \
+                 or use a different tool."
+            );
+            if let Some(goal_msg) = msgs.iter().find(
+                |m| m.role == "system" && m.content.starts_with(TASK_CONTEXT_HEADER)
+            ) {
+                let goal_body = goal_msg.content
+                    .strip_prefix(TASK_CONTEXT_HEADER)
+                    .unwrap_or(&goal_msg.content)
+                    .trim();
+                if !goal_body.is_empty() {
+                    warning.push_str("\n\nReminder — your original task:\n");
+                    warning.push_str(goal_body);
+                }
+            }
+            msgs.push(LlmChatMessage {
+                role: "system".to_string(),
+                content: warning,
+                ..Default::default()
+            });
+        }
+        let warning_msg = msgs.last().unwrap();
+        assert!(warning_msg.content.contains("Reminder — your original task:"));
+        assert!(warning_msg.content.contains("GOAL: Find papers about RAG"));
+    }
+
+    #[test]
+    fn loop_warning_no_goal_no_reminder() {
+        let mut msgs = vec![
+            sys("core system prompt"),
+            user("hello"),
+        ];
+        let any_looped = true;
+        if any_looped {
+            let mut warning = String::from(
+                "WARNING: One or more tool calls were skipped."
+            );
+            if let Some(goal_msg) = msgs.iter().find(
+                |m| m.role == "system" && m.content.starts_with(TASK_CONTEXT_HEADER)
+            ) {
+                let goal_body = goal_msg.content
+                    .strip_prefix(TASK_CONTEXT_HEADER)
+                    .unwrap_or(&goal_msg.content)
+                    .trim();
+                if !goal_body.is_empty() {
+                    warning.push_str("\n\nReminder — your original task:\n");
+                    warning.push_str(goal_body);
+                }
+            }
+            msgs.push(LlmChatMessage {
+                role: "system".to_string(),
+                content: warning,
+                ..Default::default()
+            });
+        }
+        let warning_msg = msgs.last().unwrap();
+        assert!(!warning_msg.content.contains("Reminder"));
+        assert_eq!(warning_msg.content, "WARNING: One or more tool calls were skipped.");
     }
 }
