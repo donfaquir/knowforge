@@ -549,6 +549,35 @@ pub async fn run_agent_stream(
     }
 }
 
+async fn retry_with_backoff<F, Fut>(
+    mut result: crate::tools::types::ToolResult,
+    cancel: &CancellationToken,
+    mut invoke: F,
+) -> crate::tools::types::ToolResult
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = crate::tools::types::ToolResult>,
+{
+    if let crate::tools::types::ToolResult::Err { ref error } = result {
+        if error.retryable {
+            for delay in [2u64, 4] {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
+                    _ = cancel.cancelled() => {}
+                }
+                if cancel.is_cancelled() {
+                    break;
+                }
+                result = invoke().await;
+                if !matches!(&result, crate::tools::types::ToolResult::Err { error } if error.retryable) {
+                    break;
+                }
+            }
+        }
+    }
+    result
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_tool(
     app: &AppHandle,
@@ -655,12 +684,7 @@ pub(crate) async fn execute_tool(
 
     let mut result = tool.invoke(&ctx, tc.arguments.clone()).await;
 
-    if let crate::tools::types::ToolResult::Err { ref error } = result {
-        if error.retryable {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            result = tool.invoke(&ctx, tc.arguments.clone()).await;
-        }
-    }
+    result = retry_with_backoff(result, cancel, || tool.invoke(&ctx, tc.arguments.clone())).await;
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -1065,5 +1089,106 @@ mod loop_detector_tests {
         }
         // Now the old entries are evicted, so this starts fresh
         assert!(!ld.check("t", &args));
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use crate::tools::types::{ToolError, ToolErrorCode, ToolMetrics, ToolResult as TR};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    fn ok_result() -> TR {
+        TR::Ok {
+            data: json!("ok"),
+            redacted_count: 0,
+            warnings: vec![],
+            metrics: ToolMetrics::default(),
+        }
+    }
+
+    fn retryable_err() -> TR {
+        TR::Err {
+            error: ToolError {
+                code: ToolErrorCode::Timeout,
+                message: "timed out".to_string(),
+                retryable: true,
+                cause: None,
+            },
+        }
+    }
+
+    fn non_retryable_err() -> TR {
+        TR::Err {
+            error: ToolError {
+                code: ToolErrorCode::NotFound,
+                message: "not found".to_string(),
+                retryable: false,
+                cause: None,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn retries_until_success() {
+        let cancel = CancellationToken::new();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let cc = call_count.clone();
+
+        let result = retry_with_backoff(retryable_err(), &cancel, || {
+            let cc = cc.clone();
+            async move {
+                let n = cc.fetch_add(1, Ordering::SeqCst);
+                if n < 1 {
+                    retryable_err()
+                } else {
+                    ok_result()
+                }
+            }
+        })
+        .await;
+
+        assert!(matches!(result, TR::Ok { .. }));
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn cancel_stops_retry() {
+        let cancel = CancellationToken::new();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let cc = call_count.clone();
+
+        cancel.cancel();
+
+        let result = retry_with_backoff(retryable_err(), &cancel, || {
+            let cc = cc.clone();
+            async move {
+                cc.fetch_add(1, Ordering::SeqCst);
+                retryable_err()
+            }
+        })
+        .await;
+
+        assert!(matches!(result, TR::Err { .. }));
+        assert_eq!(call_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn non_retryable_skips_retry() {
+        let cancel = CancellationToken::new();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let cc = call_count.clone();
+
+        let result = retry_with_backoff(non_retryable_err(), &cancel, || {
+            let cc = cc.clone();
+            async move {
+                cc.fetch_add(1, Ordering::SeqCst);
+                ok_result()
+            }
+        })
+        .await;
+
+        assert!(matches!(result, TR::Err { .. }));
+        assert_eq!(call_count.load(Ordering::SeqCst), 0);
     }
 }
