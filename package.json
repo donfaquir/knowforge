@@ -23,7 +23,7 @@
     "@milkdown/crepe": "^7.20.0",
     "@milkdown/ctx": "^7.20.0",
     "@milkdown/preset-commonmark": "^7.20.0",
-    "@milkdown/react": "^7.20.0",
+    "@milkdown/react": "^7.21.1",
     "@milkdown/utils": "^7.20.0",
     "@tauri-apps/api": "~2.11.0",
     "@tauri-apps/plugin-dialog": "~2.7.0",
