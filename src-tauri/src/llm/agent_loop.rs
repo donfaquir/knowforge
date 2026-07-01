@@ -535,7 +535,7 @@ pub async fn run_agent_stream(
         }
 
         let pressure = context_guard.budget_pressure(&messages);
-        if pressure > 0.5 {
+        if pressure > 0.4 {
             eprintln!(
                 "[agent_loop] session={} iter={} context pressure={:.2}, pre-summarizing",
                 &session_id[..8.min(session_id.len())], iteration, pressure,
