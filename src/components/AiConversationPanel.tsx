@@ -304,6 +304,8 @@ export function AiConversationPanel() {
 
   const activeSessionRef = useRef<string | null>(null);
   const listEndRef = useRef<HTMLDivElement>(null);
+  /** 是否吸附在底部：用户向上滚动查看历史时置 false，避免流式刷新强制拉回底部 */
+  const stickToBottomRef = useRef(true);
 
   /** Iter 5 #4：工具调用总开关从 vault config 读取（默认 true,旧 vault 缺字段时取 true）。
    *  通过 VAULT_CONFIG_UPDATED_EVENT 在设置保存后实时同步,无需重开会话。 */
@@ -497,6 +499,8 @@ export function AiConversationPanel() {
     setSelToolbar(null);
     setPrivacyChangeWarning(null);
     sharedDocPathsRef.current = new Set();
+    // 切换会话时恢复底部吸附，新会话默认展示最新消息
+    stickToBottomRef.current = true;
   }, [conversationId, setAutoResolved, setEnoughForThisChat]);
 
   /** 被动高亮门控横幅：展示 5 秒后自动收起（手动关闭见横幅按钮） */
@@ -563,14 +567,32 @@ export function AiConversationPanel() {
     return () => document.removeEventListener("selectionchange", onSelChange);
   }, []);
 
-  const scrollToBottom = useCallback(() => {
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    stickToBottomRef.current = true;
     requestAnimationFrame(() => {
-      listEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+      listEndRef.current?.scrollIntoView({ block: "end", behavior });
     });
   }, []);
 
+  /** 监听消息容器滚动：用户滚离底部超阈值即取消吸附，回到底部附近恢复吸附 */
   useEffect(() => {
-    scrollToBottom();
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const onScroll = () => {
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      stickToBottomRef.current = distanceFromBottom < 80;
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    // 用户刚发出的消息始终滚到底部；否则仅在仍吸附底部时跟随，向上翻阅历史时不打断
+    const last = messages[messages.length - 1];
+    if (last?.role === "user" || stickToBottomRef.current) {
+      scrollToBottom();
+    }
   }, [messages, scrollToBottom]);
 
   useEffect(() => {

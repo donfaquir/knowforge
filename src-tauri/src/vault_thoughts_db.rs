@@ -569,6 +569,52 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn get_thought_detail_returns_full_metadata() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let conn = open_thoughts_db(root).unwrap();
+
+        upsert_thought_body(
+            &conn,
+            "t-001",
+            "note-abc",
+            "notes/rust.md",
+            "Ownership in Rust prevents data races at compile time.",
+            Some("Rust ownership"),
+            "budding",
+            false,
+            false,
+            "2026-06-01T10:00:00Z",
+            "2026-06-15T12:00:00Z",
+            3,
+            Some("2026-06-14T09:00:00Z"),
+        )
+        .unwrap();
+
+        let detail = get_thought_detail(&conn, "t-001").unwrap().unwrap();
+        assert_eq!(detail.thought_id, "t-001");
+        assert_eq!(detail.note_stable_id, "note-abc");
+        assert_eq!(detail.note_rel_path, "notes/rust.md");
+        assert_eq!(detail.body, "Ownership in Rust prevents data races at compile time.");
+        assert_eq!(detail.summary.as_deref(), Some("Rust ownership"));
+        assert_eq!(detail.maturity, "budding");
+        assert!(!detail.temporary);
+        assert!(!detail.standalone);
+        assert_eq!(detail.created_at, "2026-06-01T10:00:00Z");
+        assert_eq!(detail.updated_at, "2026-06-15T12:00:00Z");
+        assert_eq!(detail.challenge_pass_count, 3);
+        assert_eq!(detail.last_reviewed_at.as_deref(), Some("2026-06-14T09:00:00Z"));
+    }
+
+    #[test]
+    fn get_thought_detail_returns_none_for_missing() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let conn = open_thoughts_db(root).unwrap();
+        assert!(get_thought_detail(&conn, "nonexistent").unwrap().is_none());
+    }
+
+    #[test]
     fn migrate_idempotent() {
         let dir = tempdir().unwrap();
         let root = dir.path();

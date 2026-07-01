@@ -226,29 +226,22 @@ impl Tool for NoteReadTool {
             }
         };
 
-        // 路径安全性校验
-        if let Err(e) = crate::note_privacy::validate_workspace_rel_path(&rel_path) {
-            return ToolResult::Err {
-                error: ToolError {
-                    code: ToolErrorCode::InvalidInput,
-                    message: e,
-                    retryable: false,
-                    cause: None,
-                },
-            };
-        }
-
         let root = ctx.workspace_root.clone();
         let rel = rel_path.clone();
 
         let result =
             tauri::async_runtime::spawn_blocking(move || -> Result<(String, usize), String> {
-                let full_path = root.join(&rel);
-
-                // 确认文件存在
-                if !full_path.exists() {
-                    return Err("note not found".to_string());
-                }
+                let full_path =
+                    crate::tools::path_safety::resolve_existing_under_root(&root, &rel).map_err(
+                        |e| {
+                            use crate::tools::path_safety::PathSafetyError::*;
+                            match &e {
+                                NotFound(_) => "note not found".to_string(),
+                                OutsideWorkspace => "__OUTSIDE_WORKSPACE__".to_string(),
+                                _ => e.to_string(),
+                            }
+                        },
+                    )?;
 
                 // 检查是否私密
                 if crate::note_privacy::peek_kf_private_from_md_file(&full_path) {
@@ -274,7 +267,7 @@ impl Tool for NoteReadTool {
                     },
                 }
             }
-            Ok(Err(e)) if e == "note not found" => {
+            Ok(Err(e)) if e == "__OUTSIDE_WORKSPACE__" || e == "note not found" => {
                 return ToolResult::Err {
                     error: ToolError {
                         code: ToolErrorCode::NotFound,
@@ -957,6 +950,38 @@ fn err_invalid_input(msg: &str) -> ToolResult {
             retryable: false,
             cause: None,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tools::path_safety::{resolve_existing_under_root, PathSafetyError};
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.md");
+        std::fs::write(&secret, "leak").unwrap();
+        symlink(&secret, root.join("link.md")).unwrap();
+
+        let err = resolve_existing_under_root(&root, "link.md").unwrap_err();
+        assert!(matches!(err, PathSafetyError::OutsideWorkspace));
+    }
+
+    #[test]
+    fn resolve_allows_normal_file() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        std::fs::write(root.join("note.md"), "hello").unwrap();
+
+        let resolved = resolve_existing_under_root(&root, "note.md").unwrap();
+        assert!(resolved.starts_with(&root));
+        assert!(resolved.ends_with("note.md"));
     }
 }
 

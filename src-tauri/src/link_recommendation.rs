@@ -406,9 +406,10 @@ fn read_note_markdown_for_overlap(vault_root: &Path, rel_key: &str, chunks: &[Do
     if let Ok(abs) = crate::join_under_root(vault_root, &norm) {
         if abs.is_file() {
             if let Ok(s) = fs::read_to_string(&abs) {
-                if !note_privacy::markdown_treat_as_kf_private(&s) {
-                    return s;
+                if note_privacy::markdown_treat_as_kf_private(&s) {
+                    return String::new();
                 }
+                return s;
             }
         }
     }
@@ -507,6 +508,10 @@ pub fn suggest_related_notes(
 
     let mut out: Vec<LinkRecommendation> = Vec::new();
     for (target_rel_path, sim) in scored.into_iter().take(max_results) {
+        let target_abs = vault_root.join(&target_rel_path);
+        if note_privacy::peek_kf_private_from_md_file(&target_abs) {
+            continue;
+        }
         let target_md = read_note_markdown_for_overlap(vault_root, &target_rel_path, &all_chunks);
         let target_plain = prepare_plain_for_overlap(&target_md);
         let target_tf = term_frequencies(&target_plain);
@@ -945,5 +950,53 @@ mod tests {
             .await
             .unwrap();
         assert!(c[0].reason.is_none());
+    }
+
+    #[test]
+    fn suggest_related_filters_private_candidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("cur.md"), "x\n").unwrap();
+        fs::write(
+            root.join("private.md"),
+            "---\nkf-private: true\n---\nsecret\n",
+        )
+        .unwrap();
+        fs::write(root.join("public.md"), "p\n").unwrap();
+
+        let conn = semantic_index::open_embedding_db(root).expect("open embedding db");
+        let hi = vec![1.0_f32, 0.0, 0.0];
+        let near = vec![0.95_f32, 0.05, 0.0];
+        semantic_index::upsert_doc_chunk(&conn, "cur.md#0", "cur.md", 0, "t", &hi, "m").unwrap();
+        semantic_index::upsert_doc_chunk(&conn, "private.md#0", "private.md", 0, "t", &near, "m")
+            .unwrap();
+        semantic_index::upsert_doc_chunk(&conn, "public.md#0", "public.md", 0, "t", &near, "m")
+            .unwrap();
+
+        let tconn = Connection::open_in_memory().unwrap();
+        let ec = semantic_index::EmbeddingCache::new();
+        let rec = suggest_related_notes(root, "cur.md", &conn, &tconn, 5, None, &ec).unwrap();
+        assert!(
+            rec.iter().all(|r| r.target_rel_path != "private.md"),
+            "private candidate must not appear: {rec:?}"
+        );
+        assert!(rec.iter().any(|r| r.target_rel_path == "public.md"));
+    }
+
+    #[test]
+    fn read_note_markdown_for_overlap_returns_empty_for_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("secret.md"),
+            "---\nkf-private: true\n---\nContent that must not leak\n",
+        )
+        .unwrap();
+
+        let result = super::read_note_markdown_for_overlap(root, "secret.md", &[]);
+        assert!(
+            result.is_empty(),
+            "private note must return empty string, got: {result}"
+        );
     }
 }

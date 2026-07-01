@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use super::approval::ToolApprovalState;
 use super::context_guard::{ContextGuard, PrecomputedSummary};
 use super::memory;
-use super::provider::{LlmProvider, NormalizedToolCall};
+use super::provider::{CompletionOverrides, LlmProvider, NormalizedToolCall};
 use super::tool_result_processor::{self, ToolResultProcessor};
 use super::{LlmChatMessage, LlmToolCall, LlmToolCallFunction};
 use crate::tools::context::ToolContextFactory;
@@ -36,11 +36,18 @@ pub(crate) type SharedMemoryManager =
 pub(crate) const TOOL_USE_DISCOVERY_HINT: &str = "TOOL USE: When the user references a file by partial name or unclear location, \
 FIRST call `note.list` or `vault.search_keyword` to locate the actual rel_path, \
 THEN call `note.read`. Never assume a file lives at the workspace root. \
+THOUGHTS: Use `thought.list` to discover thought IDs, then `thought.read` to retrieve full body and metadata. \
 When a read or write tool returns NotFound, immediately try discovery (list/search) before guessing another path. \
 WEB: When the user provides a specific URL (http/https link), always use `web.read_page` with that URL. \
 Only use `web.search` when no URL is given and you need to find relevant pages by keyword. \
 PDF: When `web.read_page` results mention a PDF link or the page is an academic paper with a PDF download, \
 immediately call `web.read_pdf` with the PDF URL to extract the full text — do NOT tell the user to download it themselves. \
+RESEARCH: When the user explicitly asks for research, investigation, technology comparison, or solution analysis \
+(not a quick lookup or fact check), use `skill.web_research` — it produces a structured report and auto-saves to the \
+knowledge base. For simple queries (check a URL, verify a fact, find one piece of info), use raw tools directly. \
+If you used `web.search` / `web.read_page` directly for a substantial research task (4+ calls), call `note.create` to \
+save the complete research findings (full details, sources, and analysis — not a condensed summary) to \
+`research/{topic-keyword}.md` before reporting results. \
 RESULT MATCHING: Each tool result is prefixed with [call:ID] to help you match results to calls when the same tool is invoked multiple times. \
 RECALL: When a tool result shows [summarized from N chars | ref:XXX], the full raw content is stored on disk. \
 If the summary lacks detail you need, call `tool.recall` with that ref ID to retrieve the original content.";
@@ -113,6 +120,59 @@ pub(crate) async fn store_extraction_msgs(mm: &SharedMemoryManager, msgs: &[LlmC
     }
 }
 
+async fn extract_task_context(
+    provider: &Arc<dyn LlmProvider>,
+    messages: &[LlmChatMessage],
+) -> Option<String> {
+    let conversation: String = messages
+        .iter()
+        .rev()
+        .filter(|m| {
+            (m.role == "user" || m.role == "assistant") && !m.content.is_empty()
+        })
+        .take(6)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|m| {
+            let truncated = tool_result_processor::truncate_at_boundary(&m.content, 500);
+            format!("[{}]: {}", m.role, truncated)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if conversation.is_empty() {
+        return None;
+    }
+
+    let extraction_messages = vec![
+        LlmChatMessage {
+            role: "system".to_string(),
+            content: TASK_EXTRACT_PROMPT.to_string(),
+            ..Default::default()
+        },
+        LlmChatMessage {
+            role: "user".to_string(),
+            content: conversation,
+            ..Default::default()
+        },
+    ];
+
+    let overrides = CompletionOverrides {
+        temperature: Some(0.0),
+        ..Default::default()
+    };
+
+    match provider.chat_completion(&extraction_messages, Some(&overrides)).await {
+        Ok(text) if text.trim().len() >= 10 => Some(text.trim().to_string()),
+        Ok(_) => None,
+        Err(e) => {
+            eprintln!("[agent_loop] task context extraction failed: {}", e);
+            None
+        }
+    }
+}
+
 /// 启动 Tool Calling Loop。当 LLM 不再返回 tool_calls 时正常结束并 emit `llm:agent-done`。
 ///
 /// Returns the **final assistant text** — the content from the iteration that ended without
@@ -147,6 +207,8 @@ pub async fn run_agent_stream(
     };
     let mut loop_detector = LoopDetector::new();
     let mut pending_summary: Option<tokio::task::JoinHandle<Option<PrecomputedSummary>>> = None;
+    let mut goal_extracted = false;
+    let mut pending_goal: Option<tokio::task::JoinHandle<Option<String>>> = None;
 
     let results_dir = if config.nesting_depth == 0 {
         Some(workspace_root.join(".knowforge").join("tool-results"))
@@ -192,6 +254,35 @@ pub async fn run_agent_stream(
                     replace_or_insert_memory_message(&mut messages, &mem_msg);
                 }
                 mgr.reset_dirty();
+            }
+        }
+
+        if let Some(handle) = pending_goal.take() {
+            match handle.await {
+                Ok(Some(extracted)) => {
+                    let content = format!("{}\n{}", TASK_CONTEXT_HEADER, extracted);
+                    replace_or_insert_task_context(&mut messages, &content);
+                    eprintln!(
+                        "[agent_loop] session={} task context injected ({} chars)",
+                        &session_id[..8.min(session_id.len())], extracted.len(),
+                    );
+                }
+                Ok(None) => {
+                    if let Some(raw) = tool_result_processor::extract_user_goal(&messages) {
+                        let content = format!("{}\nGOAL: {}", TASK_CONTEXT_HEADER, raw);
+                        replace_or_insert_task_context(&mut messages, &content);
+                        eprintln!(
+                            "[agent_loop] session={} task context fallback (raw goal)",
+                            &session_id[..8.min(session_id.len())],
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[agent_loop] session={} goal extraction task panicked: {}",
+                        &session_id[..8.min(session_id.len())], e,
+                    );
+                }
             }
         }
 
@@ -454,14 +545,41 @@ pub async fn run_agent_stream(
         }
 
         if any_looped {
+            let mut warning = String::from(
+                "WARNING: One or more tool calls were skipped because the same tool \
+                 was called repeatedly with identical arguments. Vary your approach \
+                 or use a different tool."
+            );
+            if let Some(goal_msg) = messages.iter().find(
+                |m| m.role == "system" && m.content.starts_with(TASK_CONTEXT_HEADER)
+            ) {
+                let goal_body = goal_msg.content
+                    .strip_prefix(TASK_CONTEXT_HEADER)
+                    .unwrap_or(&goal_msg.content)
+                    .trim();
+                if !goal_body.is_empty() {
+                    warning.push_str("\n\nReminder — your original task:\n");
+                    warning.push_str(goal_body);
+                }
+            }
             messages.push(LlmChatMessage {
                 role: "system".to_string(),
-                content: "WARNING: One or more tool calls were skipped because the same tool \
-                          was called repeatedly with identical arguments. Vary your approach \
-                          or use a different tool."
-                    .to_string(),
+                content: warning,
                 ..Default::default()
             });
+        }
+
+        if !goal_extracted && config.nesting_depth == 0 {
+            goal_extracted = true;
+            let provider_clone = provider.clone();
+            let msgs_snapshot = messages.clone();
+            pending_goal = Some(tokio::spawn(async move {
+                extract_task_context(&provider_clone, &msgs_snapshot).await
+            }));
+            eprintln!(
+                "[agent_loop] session={} iter={} goal extraction spawned",
+                &session_id[..8.min(session_id.len())], iteration,
+            );
         }
 
         // 6b. Reload memory if any memory.* tool was called
@@ -534,7 +652,7 @@ pub async fn run_agent_stream(
         }
 
         let pressure = context_guard.budget_pressure(&messages);
-        if pressure > 0.5 {
+        if pressure > 0.4 {
             eprintln!(
                 "[agent_loop] session={} iter={} context pressure={:.2}, pre-summarizing",
                 &session_id[..8.min(session_id.len())], iteration, pressure,
@@ -546,6 +664,35 @@ pub async fn run_agent_stream(
             }));
         }
     }
+}
+
+async fn retry_with_backoff<F, Fut>(
+    mut result: crate::tools::types::ToolResult,
+    cancel: &CancellationToken,
+    mut invoke: F,
+) -> crate::tools::types::ToolResult
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = crate::tools::types::ToolResult>,
+{
+    if let crate::tools::types::ToolResult::Err { ref error } = result {
+        if error.retryable {
+            for delay in [2u64, 4] {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
+                    _ = cancel.cancelled() => {}
+                }
+                if cancel.is_cancelled() {
+                    break;
+                }
+                result = invoke().await;
+                if !matches!(&result, crate::tools::types::ToolResult::Err { error } if error.retryable) {
+                    break;
+                }
+            }
+        }
+    }
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -654,12 +801,7 @@ pub(crate) async fn execute_tool(
 
     let mut result = tool.invoke(&ctx, tc.arguments.clone()).await;
 
-    if let crate::tools::types::ToolResult::Err { ref error } = result {
-        if error.retryable {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            result = tool.invoke(&ctx, tc.arguments.clone()).await;
-        }
-    }
+    result = retry_with_backoff(result, cancel, || tool.invoke(&ctx, tc.arguments.clone())).await;
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -850,6 +992,30 @@ fn summarize_tool_input(args: &Value) -> String {
     s
 }
 
+const TASK_CONTEXT_HEADER: &str = "# Task Context";
+
+const TASK_EXTRACT_PROMPT: &str = "\
+From the conversation below, extract the user's task:
+
+GOAL: What the user wants to accomplish (one sentence, imperative form)
+CONSTRAINTS: Any restrictions, requirements, or preferences the user specified (bullet list, or 'none')
+
+Examples:
+
+Input: 'Help me find papers about attention mechanisms in transformers, focusing on efficient variants published after 2023'
+Output:
+GOAL: Find papers about efficient attention mechanisms in transformers published after 2023
+CONSTRAINTS:
+- Focus on efficient variants (linear attention, sparse attention, etc.)
+- Published after 2023
+
+Input: 'Summarize my notes on distributed systems'
+Output:
+GOAL: Summarize the user's notes on distributed systems
+CONSTRAINTS: none
+
+Now extract from the actual conversation. Output ONLY the GOAL and CONSTRAINTS lines.";
+
 const MEMORY_HEADER: &str = "# User Model";
 
 fn replace_or_insert_memory_message(messages: &mut Vec<LlmChatMessage>, content: &str) {
@@ -868,6 +1034,26 @@ fn replace_or_insert_memory_message(messages: &mut Vec<LlmChatMessage>, content:
                 ..Default::default()
             },
         );
+    }
+}
+
+fn replace_or_insert_task_context(messages: &mut Vec<LlmChatMessage>, content: &str) {
+    if let Some(msg) = messages
+        .iter_mut()
+        .find(|m| m.role == "system" && m.content.starts_with(TASK_CONTEXT_HEADER))
+    {
+        msg.content = content.to_string();
+    } else {
+        let pos = messages
+            .iter()
+            .position(|m| m.role == "system" && m.content.starts_with(MEMORY_HEADER))
+            .map(|i| i + 1)
+            .unwrap_or_else(|| if messages.is_empty() { 0 } else { 1 });
+        messages.insert(pos, LlmChatMessage {
+            role: "system".to_string(),
+            content: content.to_string(),
+            ..Default::default()
+        });
     }
 }
 
@@ -1064,5 +1250,260 @@ mod loop_detector_tests {
         }
         // Now the old entries are evicted, so this starts fresh
         assert!(!ld.check("t", &args));
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use crate::tools::types::{ToolError, ToolErrorCode, ToolMetrics, ToolResult as TR};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    fn ok_result() -> TR {
+        TR::Ok {
+            data: json!("ok"),
+            redacted_count: 0,
+            warnings: vec![],
+            metrics: ToolMetrics::default(),
+        }
+    }
+
+    fn retryable_err() -> TR {
+        TR::Err {
+            error: ToolError {
+                code: ToolErrorCode::Timeout,
+                message: "timed out".to_string(),
+                retryable: true,
+                cause: None,
+            },
+        }
+    }
+
+    fn non_retryable_err() -> TR {
+        TR::Err {
+            error: ToolError {
+                code: ToolErrorCode::NotFound,
+                message: "not found".to_string(),
+                retryable: false,
+                cause: None,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn retries_until_success() {
+        let cancel = CancellationToken::new();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let cc = call_count.clone();
+
+        let result = retry_with_backoff(retryable_err(), &cancel, || {
+            let cc = cc.clone();
+            async move {
+                let n = cc.fetch_add(1, Ordering::SeqCst);
+                if n < 1 {
+                    retryable_err()
+                } else {
+                    ok_result()
+                }
+            }
+        })
+        .await;
+
+        assert!(matches!(result, TR::Ok { .. }));
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn cancel_stops_retry() {
+        let cancel = CancellationToken::new();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let cc = call_count.clone();
+
+        cancel.cancel();
+
+        let result = retry_with_backoff(retryable_err(), &cancel, || {
+            let cc = cc.clone();
+            async move {
+                cc.fetch_add(1, Ordering::SeqCst);
+                retryable_err()
+            }
+        })
+        .await;
+
+        assert!(matches!(result, TR::Err { .. }));
+        assert_eq!(call_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn non_retryable_skips_retry() {
+        let cancel = CancellationToken::new();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let cc = call_count.clone();
+
+        let result = retry_with_backoff(non_retryable_err(), &cancel, || {
+            let cc = cc.clone();
+            async move {
+                cc.fetch_add(1, Ordering::SeqCst);
+                ok_result()
+            }
+        })
+        .await;
+
+        assert!(matches!(result, TR::Err { .. }));
+        assert_eq!(call_count.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[cfg(test)]
+mod goal_extract_tests {
+    use super::*;
+
+    fn sys(content: &str) -> LlmChatMessage {
+        LlmChatMessage { role: "system".to_string(), content: content.to_string(), ..Default::default() }
+    }
+    fn user(content: &str) -> LlmChatMessage {
+        LlmChatMessage { role: "user".to_string(), content: content.to_string(), ..Default::default() }
+    }
+    fn assistant(content: &str) -> LlmChatMessage {
+        LlmChatMessage { role: "assistant".to_string(), content: content.to_string(), ..Default::default() }
+    }
+
+    #[test]
+    fn insert_after_memory() {
+        let mut msgs = vec![
+            sys("core system prompt"),
+            sys("# User Model\nsome memory"),
+            user("hello"),
+        ];
+        replace_or_insert_task_context(&mut msgs, "# Task Context\nGOAL: test");
+        assert_eq!(msgs.len(), 4);
+        assert!(msgs[2].content.starts_with(TASK_CONTEXT_HEADER));
+        assert!(msgs[1].content.starts_with(MEMORY_HEADER));
+    }
+
+    #[test]
+    fn insert_no_memory() {
+        let mut msgs = vec![
+            sys("core system prompt"),
+            user("hello"),
+        ];
+        replace_or_insert_task_context(&mut msgs, "# Task Context\nGOAL: test");
+        assert_eq!(msgs.len(), 3);
+        assert!(msgs[1].content.starts_with(TASK_CONTEXT_HEADER));
+    }
+
+    #[test]
+    fn update_existing() {
+        let mut msgs = vec![
+            sys("core system prompt"),
+            sys("# User Model\nsome memory"),
+            sys("# Task Context\nGOAL: old goal"),
+            user("hello"),
+        ];
+        replace_or_insert_task_context(&mut msgs, "# Task Context\nGOAL: new goal");
+        assert_eq!(msgs.len(), 4);
+        assert_eq!(msgs[2].content, "# Task Context\nGOAL: new goal");
+    }
+
+    #[test]
+    fn insert_empty_messages() {
+        let mut msgs: Vec<LlmChatMessage> = vec![];
+        replace_or_insert_task_context(&mut msgs, "# Task Context\nGOAL: test");
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].content.starts_with(TASK_CONTEXT_HEADER));
+    }
+
+    #[test]
+    fn extract_filters_empty_assistant() {
+        let msgs = vec![
+            sys("system"),
+            user("Find papers about RAG"),
+            assistant(""),
+            LlmChatMessage { role: "tool".to_string(), content: "results...".to_string(), ..Default::default() },
+        ];
+        let conversation: String = msgs
+            .iter()
+            .rev()
+            .filter(|m| (m.role == "user" || m.role == "assistant") && !m.content.is_empty())
+            .take(6)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|m| format!("[{}]: {}", m.role, &m.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(conversation, "[user]: Find papers about RAG");
+        assert!(!conversation.contains("[assistant]:"));
+    }
+
+    #[test]
+    fn loop_warning_includes_goal_when_present() {
+        let mut msgs = vec![
+            sys("core system prompt"),
+            sys("# Task Context\nGOAL: Find papers about RAG\nCONSTRAINTS: none"),
+            user("hello"),
+        ];
+        let any_looped = true;
+        if any_looped {
+            let mut warning = String::from(
+                "WARNING: One or more tool calls were skipped because the same tool \
+                 was called repeatedly with identical arguments. Vary your approach \
+                 or use a different tool."
+            );
+            if let Some(goal_msg) = msgs.iter().find(
+                |m| m.role == "system" && m.content.starts_with(TASK_CONTEXT_HEADER)
+            ) {
+                let goal_body = goal_msg.content
+                    .strip_prefix(TASK_CONTEXT_HEADER)
+                    .unwrap_or(&goal_msg.content)
+                    .trim();
+                if !goal_body.is_empty() {
+                    warning.push_str("\n\nReminder — your original task:\n");
+                    warning.push_str(goal_body);
+                }
+            }
+            msgs.push(LlmChatMessage {
+                role: "system".to_string(),
+                content: warning,
+                ..Default::default()
+            });
+        }
+        let warning_msg = msgs.last().unwrap();
+        assert!(warning_msg.content.contains("Reminder — your original task:"));
+        assert!(warning_msg.content.contains("GOAL: Find papers about RAG"));
+    }
+
+    #[test]
+    fn loop_warning_no_goal_no_reminder() {
+        let mut msgs = vec![
+            sys("core system prompt"),
+            user("hello"),
+        ];
+        let any_looped = true;
+        if any_looped {
+            let mut warning = String::from(
+                "WARNING: One or more tool calls were skipped."
+            );
+            if let Some(goal_msg) = msgs.iter().find(
+                |m| m.role == "system" && m.content.starts_with(TASK_CONTEXT_HEADER)
+            ) {
+                let goal_body = goal_msg.content
+                    .strip_prefix(TASK_CONTEXT_HEADER)
+                    .unwrap_or(&goal_msg.content)
+                    .trim();
+                if !goal_body.is_empty() {
+                    warning.push_str("\n\nReminder — your original task:\n");
+                    warning.push_str(goal_body);
+                }
+            }
+            msgs.push(LlmChatMessage {
+                role: "system".to_string(),
+                content: warning,
+                ..Default::default()
+            });
+        }
+        let warning_msg = msgs.last().unwrap();
+        assert!(!warning_msg.content.contains("Reminder"));
+        assert_eq!(warning_msg.content, "WARNING: One or more tool calls were skipped.");
     }
 }

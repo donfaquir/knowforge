@@ -19,7 +19,6 @@ pub struct UnifiedProvider {
     top_p: Option<f64>,
     timeout_ms: u64,
     organization_id: Option<String>,
-    is_remote: bool,
 }
 
 // OpenAI API enforces ^[a-zA-Z0-9_-]+$ for function names — dots are not
@@ -46,7 +45,6 @@ impl UnifiedProvider {
         top_p: Option<f64>,
         timeout_ms: u64,
         organization_id: Option<String>,
-        is_remote: bool,
     ) -> Self {
         Self {
             client,
@@ -57,7 +55,6 @@ impl UnifiedProvider {
             top_p,
             timeout_ms,
             organization_id,
-            is_remote,
         }
     }
 
@@ -609,10 +606,6 @@ impl LlmProvider for UnifiedProvider {
         "openai-compatible"
     }
 
-    fn is_remote(&self) -> bool {
-        self.is_remote
-    }
-
     fn model_context_window(&self) -> Option<usize> {
         infer_context_window(&self.model)
     }
@@ -687,7 +680,6 @@ mod tests {
             None,
             30000,
             None,
-            true,
         );
         let msg = provider.build_tool_result_message("call_123", "web.search", "some result");
         assert_eq!(msg.role, "tool");
@@ -779,7 +771,6 @@ mod tests {
             None,
             30000,
             None,
-            true,
         );
         let manifests = vec![json!({
             "name": "web.search",

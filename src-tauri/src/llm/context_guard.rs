@@ -9,7 +9,7 @@ const MIN_KEEP_ROUNDS: usize = 2;
 
 const MIN_MESSAGES_FOR_SUMMARY: usize = 4;
 const MAX_SUMMARY_INPUT_CHARS: usize = 6000;
-const MAX_CONTENT_PER_MESSAGE: usize = 500;
+const MAX_CONTENT_PER_MESSAGE: usize = 1000;
 
 const SUMMARY_SYSTEM: &str = "\
 Summarize the following conversation into a structured summary.\n\
@@ -20,13 +20,15 @@ You MUST preserve:\n\
 - Decisions made so far\n\
 - Open questions or unresolved issues\n\
 - What should happen next\n\n\
+If a previous summary is provided, merge its information into the new summary — \
+keep still-relevant items, drop outdated ones, and add new discoveries.\n\n\
 Format:\n\
 [Goal] ...\n\
 [Findings] ...\n\
 [Decisions] ...\n\
 [Open] ...\n\
 [Next] ...\n\n\
-Be concise. Each section 1-2 sentences max. Output only the summary.";
+Be concise. Each section 1-3 sentences max. Output only the summary.";
 
 #[derive(Clone)]
 pub struct ContextGuard {
@@ -118,7 +120,8 @@ impl ContextGuard {
         let removable_msgs: Vec<&LlmChatMessage> =
             removable_indices.iter().map(|&i| &messages[i]).collect();
 
-        let summary_input = build_summary_input(&removable_msgs);
+        let previous_summary = find_previous_summary(messages);
+        let summary_input = build_summary_input(&removable_msgs, previous_summary.as_deref());
         let overrides = CompletionOverrides {
             temperature: Some(0.0),
             ..Default::default()
@@ -286,7 +289,8 @@ impl ContextGuard {
         let removable_msgs: Vec<&LlmChatMessage> =
             removable_indices.iter().map(|&i| &messages[i]).collect();
 
-        let summary_input = build_summary_input(&removable_msgs);
+        let previous_summary = find_previous_summary(messages);
+        let summary_input = build_summary_input(&removable_msgs, previous_summary.as_deref());
 
         let overrides = CompletionOverrides {
             temperature: Some(0.0),
@@ -359,9 +363,29 @@ impl ContextGuard {
     }
 }
 
-fn build_summary_input(messages: &[&LlmChatMessage]) -> Vec<LlmChatMessage> {
+const EARLIER_SUMMARY_PREFIX: &str = "[Earlier conversation summary]";
+
+fn find_previous_summary(messages: &[LlmChatMessage]) -> Option<String> {
+    messages
+        .iter()
+        .filter(|m| m.role == "system" && m.content.starts_with(EARLIER_SUMMARY_PREFIX))
+        .last()
+        .map(|m| m.content[EARLIER_SUMMARY_PREFIX.len()..].trim().to_string())
+}
+
+fn build_summary_input(
+    messages: &[&LlmChatMessage],
+    previous_summary: Option<&str>,
+) -> Vec<LlmChatMessage> {
     let mut content = String::new();
-    let mut char_count = 0;
+
+    if let Some(prev) = previous_summary {
+        content.push_str("[Previous summary]:\n");
+        content.push_str(prev);
+        content.push_str("\n\n[New messages]:\n");
+    }
+
+    let mut char_count = content.len();
 
     for m in messages {
         let truncated = truncate_for_summary(&m.content, MAX_CONTENT_PER_MESSAGE);
@@ -690,13 +714,13 @@ mod tests {
 
     #[test]
     fn build_summary_input_truncates_long_messages() {
-        let long_msg = user(&"x".repeat(1000));
+        let long_msg = user(&"x".repeat(2000));
         let msgs: Vec<&LlmChatMessage> = vec![&long_msg];
-        let result = build_summary_input(&msgs);
+        let result = build_summary_input(&msgs, None);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].role, "system");
         assert!(result[0].content.contains("Summarize"));
-        assert!(result[1].content.len() < 1000);
+        assert!(result[1].content.len() < 2000);
     }
 
     #[test]
@@ -705,8 +729,40 @@ mod tests {
             .map(|i| user(&format!("message {}: {}", i, "x".repeat(400))))
             .collect();
         let refs: Vec<&LlmChatMessage> = big_msgs.iter().collect();
-        let result = build_summary_input(&refs);
+        let result = build_summary_input(&refs, None);
         assert!(result[1].content.len() <= MAX_SUMMARY_INPUT_CHARS + MAX_CONTENT_PER_MESSAGE + 50);
+    }
+
+    #[test]
+    fn build_summary_input_includes_previous_summary() {
+        let msg = user("new message");
+        let msgs: Vec<&LlmChatMessage> = vec![&msg];
+        let result = build_summary_input(&msgs, Some("User wanted to find bugs."));
+        let user_content = &result[1].content;
+        assert!(user_content.contains("[Previous summary]:"));
+        assert!(user_content.contains("User wanted to find bugs."));
+        assert!(user_content.contains("[New messages]:"));
+        assert!(user_content.contains("new message"));
+    }
+
+    #[test]
+    fn find_previous_summary_extracts_content() {
+        let msgs = vec![
+            sys("core prompt"),
+            sys(&format!("{}\n[Goal] Fix auth bug\n[Findings] Token expired", EARLIER_SUMMARY_PREFIX)),
+            user("next question"),
+        ];
+        let prev = find_previous_summary(&msgs);
+        assert!(prev.is_some());
+        let text = prev.unwrap();
+        assert!(text.contains("[Goal] Fix auth bug"));
+        assert!(text.contains("[Findings] Token expired"));
+    }
+
+    #[test]
+    fn find_previous_summary_returns_none_without_summary() {
+        let msgs = vec![sys("core prompt"), user("question")];
+        assert!(find_previous_summary(&msgs).is_none());
     }
 
     #[test]

@@ -76,18 +76,6 @@ impl Tool for LinkSuggestRelatedTool {
             }
         };
 
-        // 路径安全性校验
-        if let Err(e) = crate::note_privacy::validate_workspace_rel_path(&rel_path) {
-            return ToolResult::Err {
-                error: ToolError {
-                    code: ToolErrorCode::InvalidInput,
-                    message: e,
-                    retryable: false,
-                    cause: None,
-                },
-            };
-        }
-
         let max_results = input
             .get("max_results")
             .and_then(|v| v.as_u64())
@@ -100,11 +88,17 @@ impl Tool for LinkSuggestRelatedTool {
 
         let result = tauri::async_runtime::spawn_blocking(
             move || -> Result<Vec<crate::link_recommendation::LinkRecommendation>, String> {
-                let full_path = root.join(&rel);
-
-                if !full_path.exists() {
-                    return Err("__NOT_FOUND__".to_string());
-                }
+                let full_path =
+                    crate::tools::path_safety::resolve_existing_under_root(&root, &rel).map_err(
+                        |e| {
+                            use crate::tools::path_safety::PathSafetyError::*;
+                            match &e {
+                                NotFound(_) => "__NOT_FOUND__".to_string(),
+                                OutsideWorkspace => "__OUTSIDE_WORKSPACE__".to_string(),
+                                _ => e.to_string(),
+                            }
+                        },
+                    )?;
 
                 if crate::note_privacy::peek_kf_private_from_md_file(&full_path) {
                     return Err("__PRIVACY_BLOCKED__".to_string());
@@ -135,7 +129,7 @@ impl Tool for LinkSuggestRelatedTool {
 
         let recommendations = match result {
             Ok(Ok(r)) => r,
-            Ok(Err(e)) if e == "__NOT_FOUND__" => {
+            Ok(Err(e)) if e == "__NOT_FOUND__" || e == "__OUTSIDE_WORKSPACE__" => {
                 return ToolResult::Err {
                     error: ToolError {
                         code: ToolErrorCode::NotFound,

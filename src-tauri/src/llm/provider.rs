@@ -60,8 +60,6 @@ pub trait LlmProvider: Send + Sync {
     #[allow(dead_code)]
     fn provider_name(&self) -> &'static str;
 
-    fn is_remote(&self) -> bool;
-
     /// Return the model's context window size in tokens, if known.
     /// Used by ContextGuard as fallback when user doesn't configure max_context_tokens.
     fn model_context_window(&self) -> Option<usize> {
@@ -107,21 +105,6 @@ pub fn create_provider(
     create_provider_from_profile(profile, config, model_override, http_client)
 }
 
-/// Create a provider for a specific profile identified by `provider_id`.
-pub fn create_provider_by_id(
-    config: &AiConfig,
-    provider_id: &str,
-    model_override: Option<&str>,
-    http_client: &Arc<reqwest::Client>,
-) -> Result<Arc<dyn LlmProvider>, String> {
-    let profile = config
-        .providers
-        .iter()
-        .find(|p| p.id == provider_id)
-        .ok_or_else(|| format!("Provider '{}' not found in config.", provider_id))?;
-    create_provider_from_profile(profile, config, model_override, http_client)
-}
-
 fn create_provider_from_profile(
     profile: &ProviderProfile,
     config: &AiConfig,
@@ -145,7 +128,6 @@ fn create_provider_from_profile(
             config.parameters.top_p,
             config.request.timeout_ms,
             profile.organization_id.clone(),
-            profile.is_remote,
         ),
     ))
 }
