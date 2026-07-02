@@ -21,8 +21,9 @@ import { VAULT_CONFIG_UPDATED_EVENT } from "../utils/vaultConfigBroadcast";
 import { markdownTreatAsKfPrivateForUi } from "../utils/kfPrivateMarkdown";
 import { PrivacyChangeOverlay } from "./PrivacyChangeOverlay";
 import { AiToolApprovalDialog } from "./AiToolApprovalDialog";
-import type { ApprovalRequest } from "../types/toolTypes";
-import { respondToolApproval } from "../utils/toolInvoke";
+import { AiPlanApprovalDialog } from "./AiPlanApprovalDialog";
+import type { ApprovalRequest, PlanApprovalRequest } from "../types/toolTypes";
+import { respondPlanApproval, respondToolApproval } from "../utils/toolInvoke";
 import { listSkills, invokeSkill } from "../utils/skillInvoke";
 import type { SkillManifestJson } from "../types/skillTypes";
 import { parseSlashCommand } from "../utils/parseSlashCommand";
@@ -417,6 +418,38 @@ export function AiConversationPanel() {
   useEffect(() => {
     approvalQueueRef.current = [];
     setActiveApproval(null);
+  }, [conversationId]);
+
+  /** 计划审批：Planning 模式每个 run 只有一份计划，无需队列 */
+  const [activePlanApproval, setActivePlanApproval] =
+    useState<PlanApprovalRequest | null>(null);
+  const handlePlanApprove = useCallback((approvalId: string) => {
+    void respondPlanApproval(approvalId, "approve").catch(() => {});
+    setActivePlanApproval(null);
+  }, []);
+  const handlePlanReject = useCallback((approvalId: string) => {
+    void respondPlanApproval(approvalId, "reject").catch(() => {});
+    setActivePlanApproval(null);
+    // 拒绝后把触发本次的提示词回填到输入框，方便用户修改后重发
+    // （提示词是唯一意图来源，改提示词而非改计划）。
+    setMessages((prev) => {
+      for (let i = prev.length - 1; i >= 0; i--) {
+        if (prev[i].role === "user") {
+          const lastUser = prev[i].content;
+          if (lastUser.length > 0) {
+            queueMicrotask(() => {
+              setInput(lastUser);
+              composerRef.current?.focus();
+            });
+          }
+          break;
+        }
+      }
+      return prev;
+    });
+  }, []);
+  useEffect(() => {
+    setActivePlanApproval(null);
   }, [conversationId]);
 
   /** invite-after-answer 状态 */
@@ -1085,6 +1118,17 @@ export function AiConversationPanel() {
           }
           return next;
         });
+      }),
+      listen<PlanApprovalRequest>("llm:plan-approval-request", (e) => {
+        if (e.payload.sessionId !== activeSessionRef.current) return;
+        setActivePlanApproval(e.payload);
+      }),
+      // Gate resolved by any means (approve/reject/timeout/cancel) — dismiss the
+      // card. Covers non-interactive paths (timeout auto-execute) where the user
+      // never clicked, so the card would otherwise linger over the output.
+      listen<{ sessionId: string }>("llm:plan-approval-resolved", (e) => {
+        if (e.payload.sessionId !== activeSessionRef.current) return;
+        setActivePlanApproval(null);
       }),
       listen<{ sessionId: string }>("llm:planning-start", (e) => {
         if (e.payload.sessionId !== activeSessionRef.current) return;
@@ -2657,6 +2701,11 @@ export function AiConversationPanel() {
       ) : null}
 
       <AiToolApprovalDialog request={activeApproval} onResolve={handleApprovalResolve} />
+      <AiPlanApprovalDialog
+        request={activePlanApproval}
+        onApprove={handlePlanApprove}
+        onReject={handlePlanReject}
+      />
     </section>
   );
 }

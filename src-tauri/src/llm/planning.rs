@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
@@ -7,10 +8,16 @@ use tokio_util::sync::CancellationToken;
 
 use super::agent_loop::{self, AgentLoopConfig, SharedMemoryManager};
 use super::approval::ToolApprovalState;
+use super::plan_approval::{PlanApprovalState, PlanDecision};
 use super::provider::LlmProvider;
 use super::LlmChatMessage;
 use crate::tools::context::ToolContextFactory;
 use crate::tools::registry::ToolRegistry;
+
+/// How long to wait for the user to act on a plan-approval request before
+/// degrading to auto-execution. Longer than the per-tool approval timeout
+/// (120s) since reviewing/editing a full plan takes more time.
+const PLAN_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 const PLANNING_SYSTEM_PROMPT: &str = "\
 Analyze the user's request carefully. Output a numbered plan listing the exact tool calls \
@@ -85,6 +92,65 @@ pub(crate) fn emit_planning_done(app: &AppHandle, session_id: &str, plan_text: &
     );
 }
 
+/// Emit `llm:agent-done` when we short-circuit before the agent loop runs
+/// (e.g. the user rejected the plan), so the frontend clears its streaming state.
+fn emit_agent_done(app: &AppHandle, session_id: &str) {
+    let _ = app.emit("llm:agent-done", json!({ "sessionId": session_id }));
+}
+
+/// Emit when the approval gate concludes by ANY means (approve / reject / timeout /
+/// cancel), so the frontend dismisses the approval card. Interactive resolutions
+/// (button clicks) also clear it optimistically on the frontend; this covers the
+/// non-interactive paths (timeout auto-execute, cancel) where no click happens.
+fn emit_plan_approval_resolved(app: &AppHandle, session_id: &str) {
+    let _ = app.emit("llm:plan-approval-resolved", json!({ "sessionId": session_id }));
+}
+
+/// Outcome of the plan-approval gate between Phase A and Phase B.
+enum PlanGateOutcome {
+    /// Proceed to execution with the original plan.
+    Proceed,
+    /// User rejected the plan; abandon the request.
+    Reject,
+    /// Cancelled while waiting.
+    Cancelled,
+}
+
+/// Emit `llm:plan-approval-request` and wait for the user's decision.
+/// Timeout or a closed channel degrades to executing the plan —
+/// rejecting on timeout would silently drop the whole user request.
+async fn wait_for_plan_approval(
+    app: &AppHandle,
+    session_id: &str,
+    conversation_id: &str,
+    state: &Arc<PlanApprovalState>,
+    plan_text: &str,
+    cancel: &CancellationToken,
+) -> PlanGateOutcome {
+    let (approval_id, rx, _guard) = state.register();
+    let _ = app.emit(
+        "llm:plan-approval-request",
+        json!({
+            "sessionId": session_id,
+            "conversationId": conversation_id,
+            "approvalId": approval_id,
+            "planText": plan_text,
+        }),
+    );
+
+    let decision = tokio::select! {
+        res = tokio::time::timeout(PLAN_APPROVAL_TIMEOUT, rx) => res,
+        _ = cancel.cancelled() => return PlanGateOutcome::Cancelled,
+    };
+
+    match decision {
+        Ok(Ok(PlanDecision::Approve)) => PlanGateOutcome::Proceed,
+        Ok(Ok(PlanDecision::Reject)) => PlanGateOutcome::Reject,
+        // Elapsed (Err) or sender dropped (Ok(Err)): degrade to auto-execute.
+        Ok(Err(_)) | Err(_) => PlanGateOutcome::Proceed,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_planned_agent(
     app: AppHandle,
@@ -101,6 +167,8 @@ pub async fn run_planned_agent(
     config: AgentLoopConfig,
     conversation_id: String,
     approval_state: Arc<ToolApprovalState>,
+    plan_approval_state: Arc<PlanApprovalState>,
+    planning_approval_enabled: bool,
     memory_manager: SharedMemoryManager,
 ) -> String {
     // Phase A: Planning (no tools, text-only output)
@@ -130,7 +198,42 @@ pub async fn run_planned_agent(
         return String::new();
     }
 
+    // Plan-approval gate (between Phase A and Phase B). Skipped when disabled or
+    // when there is no real plan to review (too short → Phase A likely failed).
+    if planning_approval_enabled && plan_text.trim().len() >= MIN_PLAN_LENGTH {
+        let outcome = wait_for_plan_approval(
+            &app,
+            &session_id,
+            &conversation_id,
+            &plan_approval_state,
+            &plan_text,
+            &cancel,
+        )
+        .await;
+
+        // Dismiss the approval card no matter how the gate resolved — including
+        // timeout/cancel, where the user never clicked and the frontend would
+        // otherwise leave the card up covering the execution output.
+        emit_plan_approval_resolved(&app, &session_id);
+
+        match outcome {
+            PlanGateOutcome::Proceed => {}
+            PlanGateOutcome::Reject => {
+                emit_agent_done(&app, &session_id);
+                return String::new();
+            }
+            PlanGateOutcome::Cancelled => return String::new(),
+        }
+    }
+
     // Phase B: Execution (inject plan, normal agent loop)
+    if std::env::var("KNOWFORGE_DEBUG_PLANNING").is_ok() {
+        eprintln!(
+            "[planning] Phase B plan_text ({} chars):\n{}\n[planning] --- end plan ---",
+            plan_text.trim().len(),
+            plan_text.trim()
+        );
+    }
     let exec_messages = if plan_text.trim().len() >= MIN_PLAN_LENGTH {
         inject_plan_into_messages(&initial_messages, &plan_text)
     } else {

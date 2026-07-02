@@ -1712,6 +1712,7 @@ pub fn run() {
         .manage(Arc::new(semantic_index::EmbeddingCache::new()))
         .manage(Arc::new(llm::LlmSessionState::default()))
         .manage(Arc::new(llm::approval::ToolApprovalState::new()))
+        .manage(Arc::new(llm::plan_approval::PlanApprovalState::new()))
         .manage(Arc::new(tools::ToolRegistry::new()))
         .manage(Arc::new(skills::SkillRegistry::new()))
         .manage(Arc::new(tokio::sync::Semaphore::new(skills::SKILL_CONCURRENCY)))
@@ -1747,6 +1748,7 @@ pub fn run() {
             llm::start_chat_stream,
             llm::abort_llm_stream,
             llm::respond_tool_approval,
+            llm::respond_plan_approval,
             llm::clear_conversation_approvals,
             list_ai_conversations,
             create_ai_conversation,

@@ -3,6 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  PlanApprovalDecision,
   ToolManifestJson,
   ToolResultErr,
   ToolResultJson,
@@ -60,6 +61,18 @@ export async function respondToolApproval(
   decision: boolean,
 ): Promise<void> {
   return invoke<void>("respond_tool_approval", { args: { approvalId, decision } });
+}
+
+/**
+ * 回送计划审批结果（执行 / 拒绝）。
+ */
+export async function respondPlanApproval(
+  approvalId: string,
+  decision: PlanApprovalDecision,
+): Promise<void> {
+  return invoke<void>("respond_plan_approval", {
+    args: { approvalId, decision },
+  });
 }
 
 /**

@@ -144,6 +144,7 @@ type FormState = {
   allowPrivateContentInLocalLlm: boolean;
   toolsEnabled: boolean;
   planningEnabled: boolean;
+  planningApprovalEnabled: boolean;
   memoryEnabled: boolean;
   memoryReflectionMode: string;
   passiveHighlightEnabled: boolean;
@@ -252,6 +253,7 @@ function defaultForm(): FormState {
     allowPrivateContentInLocalLlm: false,
     toolsEnabled: true,
     planningEnabled: false,
+    planningApprovalEnabled: true,
     memoryEnabled: true,
     memoryReflectionMode: "confirm",
     passiveHighlightEnabled: true,
@@ -302,6 +304,7 @@ function aiFormEqualsPersisted(a: FormState, b: FormState): boolean {
     "allowPrivateContentInLocalLlm",
     "toolsEnabled",
     "planningEnabled",
+    "planningApprovalEnabled",
     "memoryEnabled",
     "memoryReflectionMode",
     "passiveHighlightEnabled",
@@ -364,6 +367,7 @@ function vaultConfigToForm(cfg: VaultConfigForUi): FormState {
     allowPrivateContentInLocalLlm: ai.privacy.allowPrivateContentInLocalLlm,
     toolsEnabled: ai.toolsEnabled !== false,
     planningEnabled: ai.planningEnabled === true,
+    planningApprovalEnabled: ai.planningApprovalEnabled !== false,
     memoryEnabled: ai.memoryEnabled !== false,
     memoryReflectionMode: ai.memoryReflectionMode ?? "confirm",
     passiveHighlightEnabled: cognitive.passiveHighlightEnabled !== false,
@@ -781,6 +785,7 @@ export function AiLlmSettingsModal({
         },
         toolsEnabled: form.toolsEnabled,
         planningEnabled: form.planningEnabled,
+        planningApprovalEnabled: form.planningApprovalEnabled,
         memoryEnabled: form.memoryEnabled,
         memoryReflectionMode: form.memoryReflectionMode,
       },
@@ -1299,6 +1304,29 @@ export function AiLlmSettingsModal({
                 {t("settings.planningEnabled")}
               </label>
               <p className="app-modal__hint">{t("settings.planningEnabledHint")}</p>
+              {form.planningEnabled && (
+                <>
+                  <label
+                    className="ai-settings__check"
+                    title={t("settings.planningApprovalEnabledHint")}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={form.planningApprovalEnabled}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          planningApprovalEnabled: e.target.checked,
+                        }))
+                      }
+                    />
+                    {t("settings.planningApprovalEnabled")}
+                  </label>
+                  <p className="app-modal__hint">
+                    {t("settings.planningApprovalEnabledHint")}
+                  </p>
+                </>
+              )}
               <label className="ai-settings__check" title={t("settings.memoryEnabledHint")}>
                 <input
                   type="checkbox"
