@@ -394,12 +394,29 @@ pub async fn run_agent_stream(
                 if skip {
                     return (Err(format!("loop detected: '{}' called too many times with same arguments", tc.name)), 0u64);
                 }
+                // Human-in-the-loop approval runs first, OUTSIDE tool_timeout — the
+                // time the user spends deciding must not count against the tool's
+                // execution budget (it has its own 30-min backstop + cancel).
+                if let Err(e) = await_tool_approval(
+                    &app,
+                    &session_id,
+                    &registry,
+                    &conversation_id,
+                    &tc,
+                    &approval_state,
+                    &cancel,
+                )
+                .await
+                {
+                    return (Err(e), 0u64);
+                }
                 let tool_timeout = registry
                     .get(&tc.name)
                     .and_then(|t| t.timeout_ms())
                     .map(Duration::from_millis)
                     .unwrap_or(default_tool_timeout);
                 let nesting_depth = config.nesting_depth;
+                // Measured after approval so the duration reflects execution only.
                 let exec_start = std::time::Instant::now();
                 let result = tokio::select! {
                     res = tokio::time::timeout(tool_timeout, execute_tool(
@@ -412,7 +429,6 @@ pub async fn run_agent_stream(
                         app_bundle_resource_dir,
                         &conversation_id,
                         &tc,
-                        &approval_state,
                         &cancel,
                         nesting_depth,
                         Some(provider),
@@ -695,22 +711,21 @@ where
     result
 }
 
+/// Human-in-the-loop approval gate for a tool call. Runs BEFORE and OUTSIDE the
+/// tool-execution timeout, so time the user spends deciding is not charged against
+/// the tool's execution budget (that timeout must only bound the actual invocation).
+/// Returns Ok(()) to proceed, or Err to abort (forbidden / denied / cancelled /
+/// approval backstop expired).
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn execute_tool(
+pub(crate) async fn await_tool_approval(
     app: &AppHandle,
     session_id: &str,
     registry: &Arc<ToolRegistry>,
-    ctx_factory: &Arc<ToolContextFactory>,
-    workspace_root: &PathBuf,
-    app_cache_dir: Option<PathBuf>,
-    app_bundle_resource_dir: Option<PathBuf>,
     conversation_id: &str,
     tc: &NormalizedToolCall,
     approval_state: &Arc<ToolApprovalState>,
     cancel: &CancellationToken,
-    nesting_depth: u8,
-    provider: Option<Arc<dyn LlmProvider>>,
-) -> Result<Value, String> {
+) -> Result<(), String> {
     let tool = registry
         .get(&tc.name)
         .ok_or_else(|| format!("tool not found: {}", tc.name))?;
@@ -723,14 +738,13 @@ pub(crate) async fn execute_tool(
         manifest_policy
     };
     match &policy {
-        ApprovalPolicy::Auto => { /* 直接放行 */ }
-        ApprovalPolicy::Forbidden => {
-            return Err(format!("tool '{}' is forbidden", tc.name));
-        }
+        ApprovalPolicy::Auto => Ok(()),
+        ApprovalPolicy::Forbidden => Err(format!("tool '{}' is forbidden", tc.name)),
         ApprovalPolicy::ConfirmOncePerSession
             if approval_state.is_pre_approved(conversation_id, &tc.name) =>
         {
             // 会话级缓存命中,放行
+            Ok(())
         }
         ApprovalPolicy::ConfirmEach | ApprovalPolicy::ConfirmOncePerSession => {
             let (approval_id, rx, _guard) = approval_state.register();
@@ -751,7 +765,7 @@ pub(crate) async fn execute_tool(
             );
 
             let decision = tokio::select! {
-                res = tokio::time::timeout(Duration::from_secs(120), rx) => res,
+                res = tokio::time::timeout(TOOL_APPROVAL_TIMEOUT, rx) => res,
                 _ = cancel.cancelled() => {
                     return Err("cancelled".to_string());
                 }
@@ -762,22 +776,34 @@ pub(crate) async fn execute_tool(
                     if matches!(policy, ApprovalPolicy::ConfirmOncePerSession) {
                         approval_state.remember_approval(conversation_id, &tc.name);
                     }
+                    Ok(())
                 }
-                Ok(Ok(false)) => {
-                    return Err(format!("user denied approval for tool '{}'", tc.name));
-                }
-                Ok(Err(_)) => {
-                    return Err("approval channel closed unexpectedly".to_string());
-                }
-                Err(_) => {
-                    return Err(format!(
-                        "approval timed out for tool '{}'",
-                        tc.name
-                    ));
-                }
+                Ok(Ok(false)) => Err(format!("user denied approval for tool '{}'", tc.name)),
+                Ok(Err(_)) => Err("approval channel closed unexpectedly".to_string()),
+                Err(_) => Err(format!("approval timed out for tool '{}'", tc.name)),
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn execute_tool(
+    app: &AppHandle,
+    session_id: &str,
+    registry: &Arc<ToolRegistry>,
+    ctx_factory: &Arc<ToolContextFactory>,
+    workspace_root: &PathBuf,
+    app_cache_dir: Option<PathBuf>,
+    app_bundle_resource_dir: Option<PathBuf>,
+    conversation_id: &str,
+    tc: &NormalizedToolCall,
+    cancel: &CancellationToken,
+    nesting_depth: u8,
+    provider: Option<Arc<dyn LlmProvider>>,
+) -> Result<Value, String> {
+    let tool = registry
+        .get(&tc.name)
+        .ok_or_else(|| format!("tool not found: {}", tc.name))?;
 
     tool.validate_input(&tc.arguments)
         .map_err(|e| format!("validation failed: {}", e.message))?;
@@ -993,6 +1019,12 @@ fn summarize_tool_input(args: &Value) -> String {
 }
 
 const TASK_CONTEXT_HEADER: &str = "# Task Context";
+
+/// Backstop timeout for tool-call approval. Approval is human-in-the-loop, so we
+/// wait patiently for the user; this only guards against a request that is
+/// abandoned entirely (never answered, never cancelled) holding the run open
+/// forever. On expiry the tool is denied.
+const TOOL_APPROVAL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 const TASK_EXTRACT_PROMPT: &str = "\
 From the conversation below, extract the user's task:
