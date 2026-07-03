@@ -40,6 +40,7 @@ pub struct ContextGuard {
 pub struct PrecomputedSummary {
     pub summary_text: String,
     pub summarized_up_to: usize,
+    pub summarized_count: usize,
 }
 
 impl ContextGuard {
@@ -133,9 +134,12 @@ impl ContextGuard {
             .ok()
             .filter(|t| !t.trim().is_empty())?;
 
+        let summarized_count = removable_indices.len();
+
         Some(PrecomputedSummary {
             summary_text,
             summarized_up_to: tail_boundary,
+            summarized_count,
         })
     }
 
@@ -148,8 +152,9 @@ impl ContextGuard {
             return false;
         }
 
-        let removable_indices: Vec<usize> = (0..cached.summarized_up_to.min(messages.len()))
+        let removable_indices: Vec<usize> = (0..messages.len())
             .filter(|&i| messages[i].role != "system")
+            .take(cached.summarized_count)
             .collect();
 
         for &i in removable_indices.iter().rev() {
@@ -816,6 +821,7 @@ mod tests {
         let cached = PrecomputedSummary {
             summary_text: "User asked about X, tool returned Y.".to_string(),
             summarized_up_to: 5,
+            summarized_count: 4,
         };
         let mut msgs = vec![
             sys("system prompt"),     // 0: system, skipped
@@ -843,6 +849,7 @@ mod tests {
         let cached = PrecomputedSummary {
             summary_text: "summary".to_string(),
             summarized_up_to: 10,
+            summarized_count: 0,
         };
         // Only 5 messages — fewer than summarized_up_to
         let mut msgs = vec![
@@ -863,6 +870,7 @@ mod tests {
         let cached = PrecomputedSummary {
             summary_text: "conversation summary".to_string(),
             summarized_up_to: 4,
+            summarized_count: 2,
         };
         let mut msgs = vec![
             sys("core system prompt"),  // 0: system, preserved
@@ -881,5 +889,33 @@ mod tests {
         assert!(msgs.iter().any(|m| m.content == "core system prompt"));
         assert!(msgs.iter().any(|m| m.content == "extra system"));
         assert!(msgs.iter().any(|m| m.content.contains("conversation summary")));
+    }
+
+    #[test]
+    fn cached_summary_immune_to_system_insertion_before_apply() {
+        let guard = ContextGuard::new(Some(4096));
+        let cached = PrecomputedSummary {
+            summary_text: "summary of q1/a1".to_string(),
+            summarized_up_to: 3,
+            summarized_count: 2,
+        };
+        let mut msgs = vec![
+            sys("system prompt"),
+            sys("# User Model"),
+            sys("# Task Context"),
+            user("q1"),
+            assistant("a1"),
+            user("q2"),
+            assistant("a2"),
+        ];
+        let applied = guard.apply_cached_summary(&mut msgs, &cached);
+        assert!(applied);
+        assert!(!msgs.iter().any(|m| m.content == "q1"));
+        assert!(!msgs.iter().any(|m| m.content == "a1"));
+        assert!(msgs.iter().any(|m| m.content == "q2"));
+        assert!(msgs.iter().any(|m| m.content == "a2"));
+        assert!(msgs.iter().any(|m| m.content == "# User Model"));
+        assert!(msgs.iter().any(|m| m.content == "# Task Context"));
+        assert!(msgs.iter().any(|m| m.content.contains("summary of q1/a1")));
     }
 }
