@@ -41,7 +41,6 @@ export type AiConfigForUi = {
   privacy: AiPrivacy;
   toolsEnabled: boolean;
   planningEnabled: boolean;
-  planningApprovalEnabled: boolean;
   memoryEnabled: boolean;
   memoryReflectionMode: string;
 };
@@ -103,7 +102,6 @@ export type AiConfigSavePatch = {
   };
   toolsEnabled?: boolean;
   planningEnabled?: boolean;
-  planningApprovalEnabled?: boolean;
   memoryEnabled?: boolean;
   memoryReflectionMode?: string;
 };

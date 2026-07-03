@@ -2,7 +2,6 @@
 
 pub(crate) mod agent_loop;
 pub mod approval;
-pub mod plan_approval;
 pub(crate) mod context_guard;
 pub(crate) mod planning;
 pub(crate) mod provider;
@@ -810,7 +809,6 @@ pub async fn start_chat_stream(
     registry: State<'_, Arc<ToolRegistry>>,
     ctx_factory: State<'_, Arc<ToolContextFactory>>,
     approval: State<'_, Arc<approval::ToolApprovalState>>,
-    plan_approval: State<'_, Arc<plan_approval::PlanApprovalState>>,
     skills: State<'_, Arc<SkillRegistry>>,
     http_client: State<'_, Arc<reqwest::Client>>,
     embed_cache_state: State<'_, Arc<semantic_index::EmbeddingCache>>,
@@ -884,7 +882,6 @@ pub async fn start_chat_stream(
     let registry_arc = Arc::clone(registry.inner());
     let ctx_factory_arc = Arc::clone(ctx_factory.inner());
     let approval_arc = Arc::clone(approval.inner());
-    let plan_approval_arc = Arc::clone(plan_approval.inner());
     let workspace_root = root.clone();
     let conversation_id = args
         .conversation_id
@@ -1042,8 +1039,6 @@ pub async fn start_chat_stream(
                         loop_config,
                         conversation_id,
                         approval_arc,
-                        plan_approval_arc,
-                        ai.planning_approval_enabled,
                         memory_manager.clone(),
                     )
                     .await;
@@ -1242,28 +1237,6 @@ pub fn respond_tool_approval(
     approval: State<'_, Arc<approval::ToolApprovalState>>,
 ) -> Result<(), String> {
     approval.resolve(&args.approval_id, args.decision)
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RespondPlanApprovalArgs {
-    pub approval_id: String,
-    /// "approve" | "reject"
-    pub decision: String,
-}
-
-/// 前端响应一次计划审批请求（执行 / 拒绝）。
-#[tauri::command]
-pub fn respond_plan_approval(
-    args: RespondPlanApprovalArgs,
-    plan_approval: State<'_, Arc<plan_approval::PlanApprovalState>>,
-) -> Result<(), String> {
-    let decision = match args.decision.as_str() {
-        "approve" => plan_approval::PlanDecision::Approve,
-        "reject" => plan_approval::PlanDecision::Reject,
-        other => return Err(format!("unknown plan approval decision: {other}")),
-    };
-    plan_approval.resolve(&args.approval_id, decision)
 }
 
 #[derive(Debug, Deserialize)]

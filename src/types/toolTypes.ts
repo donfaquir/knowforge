@@ -115,14 +115,3 @@ export interface ApprovalRequest {
   effects: Effect[];
 }
 
-// 后端在 Planning 模式下、Phase A 生成计划后、Phase B 执行前 emit
-// `llm:plan-approval-request`，前端展示审批卡片；用户可执行或拒绝，
-// 通过 `respond_plan_approval` 回送。计划不可编辑——不认可应拒绝并修改提示词重发。
-export interface PlanApprovalRequest {
-  sessionId: string;
-  conversationId: string;
-  approvalId: string;
-  planText: string;
-}
-
-export type PlanApprovalDecision = "approve" | "reject";

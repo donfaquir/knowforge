@@ -9,6 +9,21 @@ export type ConversationMeta = {
   updatedAt: number;
 };
 
+export type PersistedToolCall = {
+  toolCallId: string;
+  toolName: string;
+  displaySummary?: string;
+  status: "done" | "error";
+  inputSummary?: string;
+  resultSummary?: string;
+  durationMs?: number;
+  errorMessage?: string;
+  skillId?: string;
+  skillName?: string;
+  skillContent?: string;
+  skillToolCalls?: PersistedToolCall[];
+};
+
 export type PersistedChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -20,6 +35,7 @@ export type PersistedChatMessage = {
    *  (b) 主对话发送时按此过滤掉 skill 子轮次，避免污染 prompt context。 */
   skillId?: string;
   skillName?: string;
+  toolCalls?: PersistedToolCall[];
 };
 
 /** 与 Rust `ThoughtFocusContextDisk` / LLM `thought_focus_context` 对齐 */

@@ -6,6 +6,7 @@ import type {
   ConversationMeta,
   ListAiConversationsResponse,
   PersistedChatMessage,
+  PersistedToolCall,
   ThoughtFocusContext,
 } from "../types/aiConversation";
 import type { ThoughtRetrievalResult } from "../types/cognitiveTypes";
@@ -22,6 +23,7 @@ export type ChatMessageTiming = {
 export type ToolCallDisplayInfo = {
   toolCallId: string;
   toolName: string;
+  displaySummary?: string;
   status: "running" | "done" | "error";
   /** 可解释性字段 */
   inputSummary?: string;
@@ -34,13 +36,6 @@ export type ToolCallDisplayInfo = {
   skillContent?: string;
   skillToolCalls?: ToolCallDisplayInfo[];
   skillStreaming?: boolean;
-};
-
-export type PlanStepInfo = {
-  step: number;
-  title: string;
-  status: "pending" | "in_progress" | "done";
-  toolCalls: ToolCallDisplayInfo[];
 };
 
 export type ChatMessage = {
@@ -68,10 +63,28 @@ export type ChatMessage = {
      *  即使关闭并重新打开 vault，徽章和过滤行为均保持一致。 */
     skillId?: string;
     skillName?: string;
-    planningText?: string;
-    planSteps?: PlanStepInfo[];
   };
 };
+
+function normalizeToolCallForPersist(tc: ToolCallDisplayInfo): PersistedToolCall {
+  const result: PersistedToolCall = {
+    toolCallId: tc.toolCallId,
+    toolName: tc.toolName,
+    displaySummary: tc.displaySummary,
+    status: tc.status === "running" ? "done" : (tc.status as "done" | "error"),
+    inputSummary: tc.inputSummary,
+    resultSummary: tc.resultSummary,
+    durationMs: tc.durationMs,
+    errorMessage: tc.errorMessage,
+    skillId: tc.skillId,
+    skillName: tc.skillName,
+    skillContent: tc.skillContent,
+  };
+  if (tc.skillToolCalls && tc.skillToolCalls.length > 0) {
+    result.skillToolCalls = tc.skillToolCalls.map(normalizeToolCallForPersist);
+  }
+  return result;
+}
 
 function bodyToMessages(body: ConversationBodyOut): ChatMessage[] {
   return body.messages.map((m) => {
@@ -79,6 +92,7 @@ function bodyToMessages(body: ConversationBodyOut): ChatMessage[] {
     if (m.replyContextSources) meta.replyContextSources = m.replyContextSources;
     if (m.skillId) meta.skillId = m.skillId;
     if (m.skillName) meta.skillName = m.skillName;
+    if (m.toolCalls) meta.toolCalls = m.toolCalls as unknown as ToolCallDisplayInfo[];
     return {
       id: m.id,
       role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
@@ -91,14 +105,20 @@ function bodyToMessages(body: ConversationBodyOut): ChatMessage[] {
 function toPersistPayload(messages: ChatMessage[]): PersistedChatMessage[] {
   return messages
     .filter((m) => !m.streaming)
-    .map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      replyContextSources: m.meta?.replyContextSources,
-      skillId: m.meta?.skillId,
-      skillName: m.meta?.skillName,
-    }));
+    .map((m) => {
+      const msg: PersistedChatMessage = {
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        replyContextSources: m.meta?.replyContextSources,
+        skillId: m.meta?.skillId,
+        skillName: m.meta?.skillName,
+      };
+      if (m.meta?.toolCalls && m.meta.toolCalls.length > 0) {
+        msg.toolCalls = m.meta.toolCalls.map(normalizeToolCallForPersist);
+      }
+      return msg;
+    });
 }
 
 type CreateResponse = { id: string };

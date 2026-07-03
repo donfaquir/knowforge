@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useAiConversationSession } from "../contexts/AiConversationSessionContext";
 import type { ThoughtFocusContext } from "../types/aiConversation";
 import { useAiNoteContext } from "../contexts/AiNoteContext";
-import type { ChatMessage, PlanStepInfo, ToolCallDisplayInfo } from "../hooks/useWorkspaceAiConversations";
+import type { ChatMessage, ToolCallDisplayInfo } from "../hooks/useWorkspaceAiConversations";
 import type { ReplyContextSources } from "../types/replyContextSources";
 import { hasReplyContextSourcesToShow } from "../types/replyContextSources";
 import type {
@@ -21,9 +21,8 @@ import { VAULT_CONFIG_UPDATED_EVENT } from "../utils/vaultConfigBroadcast";
 import { markdownTreatAsKfPrivateForUi } from "../utils/kfPrivateMarkdown";
 import { PrivacyChangeOverlay } from "./PrivacyChangeOverlay";
 import { AiToolApprovalDialog } from "./AiToolApprovalDialog";
-import { AiPlanApprovalDialog } from "./AiPlanApprovalDialog";
-import type { ApprovalRequest, PlanApprovalRequest } from "../types/toolTypes";
-import { respondPlanApproval, respondToolApproval } from "../utils/toolInvoke";
+import type { ApprovalRequest } from "../types/toolTypes";
+import { respondToolApproval } from "../utils/toolInvoke";
 import { listSkills, invokeSkill } from "../utils/skillInvoke";
 import type { SkillManifestJson } from "../types/skillTypes";
 import { parseSlashCommand } from "../utils/parseSlashCommand";
@@ -79,6 +78,35 @@ function finalizeStreamingAssistant(prev: ChatMessage[]): ChatMessage[] {
     next[next.length - 1] = { ...last, streaming: false };
   }
   return next;
+}
+
+/**
+ * Search for a ToolCallDisplayInfo by toolCallId in flat toolCalls.
+ * When found, apply the patcher and return the updated messages array.
+ * Returns null if not found.
+ */
+function findAndPatchToolCall(
+  prev: ChatMessage[],
+  targetToolCallId: string,
+  patcher: (tc: ToolCallDisplayInfo) => ToolCallDisplayInfo,
+): ChatMessage[] | null {
+  for (let i = prev.length - 1; i >= 0; i--) {
+    const m = prev[i];
+    if (m.role !== "assistant") continue;
+
+    const tcs = m.meta?.toolCalls;
+    if (tcs) {
+      const tcIdx = tcs.findIndex((tc) => tc.toolCallId === targetToolCallId);
+      if (tcIdx !== -1) {
+        const next = [...prev];
+        const updated = [...tcs];
+        updated[tcIdx] = patcher(updated[tcIdx]);
+        next[i] = { ...m, meta: { ...m.meta, toolCalls: updated } };
+        return next;
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -301,7 +329,7 @@ export function AiConversationPanel() {
   const [copyToast, setCopyToast] = useState<"copied" | "failed" | null>(null);
   const [privacyHint, setPrivacyHint] = useState<string | null>(null);
   const [vaultSearchSummary, setVaultSearchSummary] = useState<string | null>(null);
-  const [isPlanning, setIsPlanning] = useState(false);
+
 
   const activeSessionRef = useRef<string | null>(null);
   const listEndRef = useRef<HTMLDivElement>(null);
@@ -320,8 +348,6 @@ export function AiConversationPanel() {
   const parentSessionRef = useRef<string | null>(null);
   /** 映射：skillSessionId → { parentToolCallId } */
   const skillSessionMapRef = useRef<Map<string, { parentToolCallId: string }>>(new Map());
-
-  const activeStepRef = useRef<number | null>(null);
 
   /** Iter 5 #3：内置 skill manifest 缓存。skill 在后端 setup() 注册一次后不变，挂载时取一次即可。 */
   const [skillsCache, setSkillsCache] = useState<SkillManifestJson[]>([]);
@@ -420,38 +446,6 @@ export function AiConversationPanel() {
   useEffect(() => {
     approvalQueueRef.current = [];
     setActiveApproval(null);
-  }, [conversationId]);
-
-  /** 计划审批：Planning 模式每个 run 只有一份计划，无需队列 */
-  const [activePlanApproval, setActivePlanApproval] =
-    useState<PlanApprovalRequest | null>(null);
-  const handlePlanApprove = useCallback((approvalId: string) => {
-    void respondPlanApproval(approvalId, "approve").catch(() => {});
-    setActivePlanApproval(null);
-  }, []);
-  const handlePlanReject = useCallback((approvalId: string) => {
-    void respondPlanApproval(approvalId, "reject").catch(() => {});
-    setActivePlanApproval(null);
-    // 拒绝后把触发本次的提示词回填到输入框，方便用户修改后重发
-    // （提示词是唯一意图来源，改提示词而非改计划）。
-    setMessages((prev) => {
-      for (let i = prev.length - 1; i >= 0; i--) {
-        if (prev[i].role === "user") {
-          const lastUser = prev[i].content;
-          if (lastUser.length > 0) {
-            queueMicrotask(() => {
-              setInput(lastUser);
-              composerRef.current?.focus();
-            });
-          }
-          break;
-        }
-      }
-      return prev;
-    });
-  }, []);
-  useEffect(() => {
-    setActivePlanApproval(null);
   }, [conversationId]);
 
   /** invite-after-answer 状态 */
@@ -646,29 +640,12 @@ export function AiConversationPanel() {
         }
         const skillMapping = skillSessionMapRef.current.get(p.sessionId);
         if (skillMapping) {
-          // Skill 会话的 chunk → 追加到父气泡的工具调用项的 skillContent
-          setMessages((prev) => {
-            const next = [...prev];
-            for (let i = next.length - 1; i >= 0; i--) {
-              const m = next[i];
-              if (m.role !== "assistant") continue;
-              const tcs = m.meta?.toolCalls;
-              if (!tcs) continue;
-              const tcIdx = tcs.findIndex((tc) => tc.toolCallId === skillMapping.parentToolCallId);
-              if (tcIdx === -1) continue;
-              const updatedCalls = [...tcs];
-              updatedCalls[tcIdx] = {
-                ...updatedCalls[tcIdx],
-                skillContent: (updatedCalls[tcIdx].skillContent || "") + p.delta,
-              };
-              next[i] = {
-                ...m,
-                meta: { ...m.meta, toolCalls: updatedCalls },
-              };
-              break;
-            }
-            return next;
-          });
+          setMessages((prev) =>
+            findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
+              ...tc,
+              skillContent: (tc.skillContent || "") + p.delta,
+            })) ?? prev,
+          );
           return;
         }
         // 主会话的 chunk → 追加到气泡 content（原有逻辑）
@@ -930,7 +907,7 @@ export function AiConversationPanel() {
       }),
       // P2 Tool Calling Loop：工具调用开始 → 在末尾 assistant 消息中插入 running 状态项
       // Skill 内部的工具调用路由到对应 toolCall 的 skillToolCalls
-      listen<{ sessionId: string; toolCallId: string; toolName: string; inputSummary?: string }>(
+      listen<{ sessionId: string; toolCallId: string; toolName: string; inputSummary?: string; displaySummary?: string }>(
         "llm:tool-call-start",
         (e) => {
           const p = e.payload;
@@ -941,52 +918,23 @@ export function AiConversationPanel() {
           const newCall: ToolCallDisplayInfo = {
             toolCallId: p.toolCallId,
             toolName: p.toolName,
+            displaySummary: p.displaySummary || undefined,
             status: "running",
             inputSummary: p.inputSummary,
           };
           if (skillMapping) {
-            // Skill 内部的工具调用 → 添加到对应的 skillToolCalls
-            setMessages((prev) => {
-              const next = [...prev];
-              for (let i = next.length - 1; i >= 0; i--) {
-                const m = next[i];
-                if (m.role !== "assistant") continue;
-                const tcs = m.meta?.toolCalls;
-                if (!tcs) continue;
-                const tcIdx = tcs.findIndex((tc) => tc.toolCallId === skillMapping.parentToolCallId);
-                if (tcIdx === -1) continue;
-                const updatedCalls = [...tcs];
-                updatedCalls[tcIdx] = {
-                  ...updatedCalls[tcIdx],
-                  skillToolCalls: [...(updatedCalls[tcIdx].skillToolCalls || []), newCall],
-                };
-                next[i] = {
-                  ...m,
-                  meta: { ...m.meta, toolCalls: updatedCalls },
-                };
-                break;
-              }
-              return next;
-            });
+            setMessages((prev) =>
+              findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
+                ...tc,
+                skillToolCalls: [...(tc.skillToolCalls || []), newCall],
+              })) ?? prev,
+            );
             return;
           }
-          if (p.toolName === "plan.update_step") return;
-          const currentStep = activeStepRef.current;
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
             if (last?.role !== "assistant") return prev;
-            if (currentStep != null && last.meta?.planSteps) {
-              const steps = last.meta.planSteps.map((s) =>
-                s.step === currentStep
-                  ? { ...s, toolCalls: [...s.toolCalls, newCall] }
-                  : s,
-              );
-              return [
-                ...next.slice(0, -1),
-                { ...last, meta: { ...last.meta, planSteps: steps } },
-              ];
-            }
             const existing = last.meta?.toolCalls ?? [];
             return [
               ...next.slice(0, -1),
@@ -1009,28 +957,16 @@ export function AiConversationPanel() {
           }
           const skillMapping = skillSessionMapRef.current.get(p.sessionId);
           if (skillMapping) {
-            // Skill 内部的工具完成 → 更新对应的 skillToolCalls
-            setMessages((prev) => {
-              const next = [...prev];
-              for (let i = next.length - 1; i >= 0; i--) {
-                const m = next[i];
-                if (m.role !== "assistant") continue;
-                const tcs = m.meta?.toolCalls;
-                if (!tcs) continue;
-                const tcIdx = tcs.findIndex((tc) => tc.toolCallId === skillMapping.parentToolCallId);
-                if (tcIdx === -1) continue;
-                const updatedCalls = [...tcs];
-                const skillTcs = (updatedCalls[tcIdx].skillToolCalls || []).map((stc) =>
+            setMessages((prev) =>
+              findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
+                ...tc,
+                skillToolCalls: (tc.skillToolCalls || []).map((stc) =>
                   stc.toolCallId === p.toolCallId
                     ? { ...stc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage }
                     : stc,
-                );
-                updatedCalls[tcIdx] = { ...updatedCalls[tcIdx], skillToolCalls: skillTcs };
-                next[i] = { ...m, meta: { ...m.meta, toolCalls: updatedCalls } };
-                break;
-              }
-              return next;
-            });
+                ),
+              })) ?? prev,
+            );
             return;
           }
           setMessages((prev) => {
@@ -1042,16 +978,6 @@ export function AiConversationPanel() {
             for (let i = prev.length - 1; i >= 0; i -= 1) {
               const m = prev[i];
               if (m.role !== "assistant") continue;
-
-              if (m.meta?.planSteps?.some((s) => s.toolCalls.some((tc) => tc.toolCallId === p.toolCallId))) {
-                const steps = m.meta.planSteps.map((s) => ({
-                  ...s,
-                  toolCalls: s.toolCalls.map(patchTc),
-                }));
-                const next = [...prev];
-                next[i] = { ...m, meta: { ...m.meta, planSteps: steps } };
-                return next;
-              }
 
               if (m.meta?.toolCalls?.some((tc) => tc.toolCallId === p.toolCallId)) {
                 const next = [...prev];
@@ -1106,110 +1032,16 @@ export function AiConversationPanel() {
         skillSessionMapRef.current.set(p.sessionId, {
           parentToolCallId: p.parentToolCallId,
         });
-        // 更新父气泡中对应工具调用项的 skill 字段（不创建新气泡）
-        setMessages((prev) => {
-          const next = [...prev];
-          for (let i = next.length - 1; i >= 0; i--) {
-            const m = next[i];
-            if (m.role !== "assistant") continue;
-            const tcs = m.meta?.toolCalls;
-            if (!tcs) continue;
-            const tcIdx = tcs.findIndex((tc) => tc.toolCallId === p.parentToolCallId);
-            if (tcIdx === -1) continue;
-            const updatedCalls = [...tcs];
-            updatedCalls[tcIdx] = {
-              ...updatedCalls[tcIdx],
-              skillId: p.skillId,
-              skillName: p.skillName,
-              skillContent: "",
-              skillToolCalls: [],
-              skillStreaming: true,
-            };
-            next[i] = {
-              ...m,
-              meta: { ...m.meta, toolCalls: updatedCalls },
-            };
-            break;
-          }
-          return next;
-        });
-      }),
-      listen<PlanApprovalRequest>("llm:plan-approval-request", (e) => {
-        if (e.payload.sessionId !== activeSessionRef.current) return;
-        setActivePlanApproval(e.payload);
-      }),
-      // Gate resolved by any means (approve/reject/timeout/cancel) — dismiss the
-      // card. Covers non-interactive paths (timeout auto-execute) where the user
-      // never clicked, so the card would otherwise linger over the output.
-      listen<{ sessionId: string }>("llm:plan-approval-resolved", (e) => {
-        if (e.payload.sessionId !== activeSessionRef.current) return;
-        setActivePlanApproval(null);
-      }),
-      listen<{ sessionId: string }>("llm:planning-start", (e) => {
-        if (e.payload.sessionId !== activeSessionRef.current) return;
-        setIsPlanning(true);
-      }),
-      listen<{ sessionId: string; planText: string }>("llm:planning-done", (e) => {
-        if (e.payload.sessionId !== activeSessionRef.current) return;
-        setIsPlanning(false);
-        const planText = e.payload.planText;
-        if (planText && planText.trim()) {
-          setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant" && last.streaming) {
-              next[next.length - 1] = {
-                ...last,
-                content: "",
-                meta: { ...last.meta, planningText: planText },
-              };
-            }
-            return next;
-          });
-        }
-      }),
-      listen<{ sessionId: string; steps: { step: number; title: string }[] }>("llm:plan-steps", (e) => {
-        if (e.payload.sessionId !== activeSessionRef.current) return;
-        activeStepRef.current = null;
-        const planSteps: PlanStepInfo[] = e.payload.steps.map((s) => ({
-          step: s.step,
-          title: s.title,
-          status: "pending" as const,
-          toolCalls: [],
-        }));
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === "assistant") {
-            next[next.length - 1] = {
-              ...last,
-              meta: { ...last.meta, planSteps },
-            };
-          }
-          return next;
-        });
-      }),
-      listen<{ sessionId: string; step: number; status: string }>("llm:plan-step-update", (e) => {
-        if (e.payload.sessionId !== activeSessionRef.current) return;
-        const { step, status } = e.payload;
-        if (status === "in_progress") {
-          activeStepRef.current = step;
-        }
-        setMessages((prev) => {
-          const next = [...prev];
-          for (let i = next.length - 1; i >= 0; i--) {
-            const m = next[i];
-            if (m.role !== "assistant" || !m.meta?.planSteps) continue;
-            const steps = m.meta.planSteps.map((s) =>
-              s.step === step
-                ? { ...s, status: status as PlanStepInfo["status"] }
-                : s,
-            );
-            next[i] = { ...m, meta: { ...m.meta, planSteps: steps } };
-            break;
-          }
-          return next;
-        });
+        setMessages((prev) =>
+          findAndPatchToolCall(prev, p.parentToolCallId, (tc) => ({
+            ...tc,
+            skillId: p.skillId,
+            skillName: p.skillName,
+            skillContent: "",
+            skillToolCalls: [],
+            skillStreaming: true,
+          })) ?? prev,
+        );
       }),
       // Budget warning: tool call budget reaching 80%
       listen<{ sessionId: string; used: number; limit: number; type: string }>(
@@ -1289,23 +1121,12 @@ export function AiConversationPanel() {
           }
           parentSessionRef.current = null;
 
-          setMessages((prev) => {
-            const next = [...prev];
-            for (let i = next.length - 1; i >= 0; i--) {
-              const m = next[i];
-              if (m.role !== "assistant") continue;
-              const tcs = m.meta?.toolCalls;
-              if (!tcs) continue;
-              const tcIdx = tcs.findIndex((tc) => tc.toolCallId === skillMapping.parentToolCallId);
-              if (tcIdx === -1) continue;
-
-              const updatedCalls = [...tcs];
-              updatedCalls[tcIdx] = { ...updatedCalls[tcIdx], skillStreaming: false };
-              next[i] = { ...m, meta: { ...m.meta, toolCalls: updatedCalls } };
-              break;
-            }
-            return next;
-          });
+          setMessages((prev) =>
+            findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
+              ...tc,
+              skillStreaming: false,
+            })) ?? prev,
+          );
           return;
         }
 
@@ -1318,10 +1139,8 @@ export function AiConversationPanel() {
         markNeedPersist();
         activeSessionRef.current = null;
         isAgentModeRef.current = false;
-        activeStepRef.current = null;
         setIsStreaming(false);
         setIsVaultSearching(false);
-        setIsPlanning(false);
         setMessages((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
@@ -2206,12 +2025,6 @@ export function AiConversationPanel() {
         </div>
       ) : null}
 
-      {isPlanning ? (
-        <div className="ai-chat__banner ai-chat__banner--hint" aria-live="polite" {...dragExcludeProps}>
-          {t("aiPanel.planning")}
-        </div>
-      ) : null}
-
       {passiveHighlightBanner ? (
         <div
           className="ai-chat__banner ai-chat__banner--hint ai-chat__banner--dismissible"
@@ -2259,103 +2072,7 @@ export function AiConversationPanel() {
               <div className={`ai-chat__bubble ai-chat__bubble--${m.role}`}>
                 {m.role === "assistant" ? (
                   <>
-                    {m.meta?.planSteps && m.meta.planSteps.length > 0 ? (
-                      <div className="ai-chat__plan-progress">
-                        {m.meta.planSteps.map((ps) => (
-                          <details
-                            key={ps.step}
-                            className={`ai-chat__plan-step ai-chat__plan-step--${ps.status}`}
-                            open={ps.status === "in_progress"}
-                          >
-                            <summary className="ai-chat__plan-step__header">
-                              <span className="ai-chat__plan-step__icon" aria-hidden={true}>
-                                {ps.status === "done" ? "✓" : ps.status === "in_progress" ? "⋯" : "○"}
-                              </span>
-                              <span className="ai-chat__plan-step__number">{ps.step}.</span>
-                              <span className="ai-chat__plan-step__title">{ps.title}</span>
-                            </summary>
-                            {ps.toolCalls.length > 0 && (
-                              <div className="ai-chat__tool-calls ai-chat__plan-step__tools">
-                                {ps.toolCalls.map((tc) => (
-                                  <details key={tc.toolCallId} className="ai-chat__tool-call-details">
-                                    <summary className={`ai-chat__tool-call ai-chat__tool-call--${tc.status}`}>
-                                      <span className="ai-chat__tool-call__icon" aria-hidden={true}>
-                                        {tc.status === "running" ? "⋯" : tc.status === "done" ? "✓" : "✗"}
-                                      </span>
-                                      <span className="ai-chat__tool-call__name">{tc.toolName}</span>
-                                      {tc.durationMs != null && (
-                                        <span className="ai-chat__tool-call__duration">
-                                          {(tc.durationMs / 1000).toFixed(1)}s
-                                        </span>
-                                      )}
-                                    </summary>
-                                    <div className="ai-chat__tool-call__detail">
-                                      {tc.inputSummary && (
-                                        <div className="ai-chat__tool-call__input">
-                                          <span className="ai-chat__tool-call__label">输入</span>
-                                          <code>{tc.inputSummary}</code>
-                                        </div>
-                                      )}
-                                      {tc.resultSummary && (
-                                        <div className="ai-chat__tool-call__result">
-                                          <span className="ai-chat__tool-call__label">结果</span>
-                                          <code>{tc.resultSummary}</code>
-                                        </div>
-                                      )}
-                                      {tc.errorMessage && (
-                                        <div className="ai-chat__tool-call__error">
-                                          <span className="ai-chat__tool-call__label">错误</span>
-                                          <code>{tc.errorMessage}</code>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </details>
-                                ))}
-                              </div>
-                            )}
-                          </details>
-                        ))}
-                        {m.meta.toolCalls && m.meta.toolCalls.length > 0 ? (
-                          <div className="ai-chat__tool-calls">
-                            {m.meta.toolCalls.map((tc) => (
-                              <details key={tc.toolCallId} className="ai-chat__tool-call-details">
-                                <summary className={`ai-chat__tool-call ai-chat__tool-call--${tc.status}`}>
-                                  <span className="ai-chat__tool-call__icon" aria-hidden={true}>
-                                    {tc.status === "running" ? "⋯" : tc.status === "done" ? "✓" : "✗"}
-                                  </span>
-                                  <span className="ai-chat__tool-call__name">{tc.toolName}</span>
-                                  {tc.durationMs != null && (
-                                    <span className="ai-chat__tool-call__duration">
-                                      {(tc.durationMs / 1000).toFixed(1)}s
-                                    </span>
-                                  )}
-                                </summary>
-                                <div className="ai-chat__tool-call__detail">
-                                  {tc.inputSummary && (
-                                    <div className="ai-chat__tool-call__input">
-                                      <span className="ai-chat__tool-call__label">输入</span>
-                                      <code>{tc.inputSummary}</code>
-                                    </div>
-                                  )}
-                                  {tc.resultSummary && (
-                                    <div className="ai-chat__tool-call__result">
-                                      <span className="ai-chat__tool-call__label">结果</span>
-                                      <code>{tc.resultSummary}</code>
-                                    </div>
-                                  )}
-                                  {tc.errorMessage && (
-                                    <div className="ai-chat__tool-call__error">
-                                      <span className="ai-chat__tool-call__label">错误</span>
-                                      <code>{tc.errorMessage}</code>
-                                    </div>
-                                  )}
-                                </div>
-                              </details>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : m.meta?.toolCalls && m.meta.toolCalls.length > 0 ? (
+                    {m.meta?.toolCalls && m.meta.toolCalls.length > 0 ? (
                       <div className="ai-chat__tool-calls">
                         {m.meta.toolCalls.map((tc) => (
                           <details key={tc.toolCallId} className="ai-chat__tool-call-details">
@@ -2363,7 +2080,7 @@ export function AiConversationPanel() {
                               <span className="ai-chat__tool-call__icon" aria-hidden={true}>
                                 {tc.status === "running" ? "⋯" : tc.status === "done" ? "✓" : "✗"}
                               </span>
-                              <span className="ai-chat__tool-call__name">{tc.toolName}</span>
+                              <span className="ai-chat__tool-call__name">{tc.displaySummary || tc.toolName}</span>
                               {tc.durationMs != null && (
                                 <span className="ai-chat__tool-call__duration">
                                   {(tc.durationMs / 1000).toFixed(1)}s
@@ -2390,7 +2107,7 @@ export function AiConversationPanel() {
                                             <span className="ai-chat__tool-call__icon" aria-hidden={true}>
                                               {stc.status === "running" ? "⋯" : stc.status === "done" ? "✓" : "✗"}
                                             </span>
-                                            <span className="ai-chat__tool-call__name">{stc.toolName}</span>
+                                            <span className="ai-chat__tool-call__name">{stc.displaySummary || stc.toolName}</span>
                                             {stc.durationMs != null && (
                                               <span className="ai-chat__tool-call__duration">
                                                 {(stc.durationMs / 1000).toFixed(1)}s
@@ -2445,15 +2162,7 @@ export function AiConversationPanel() {
                         Agent {m.meta.budgetWarning.used}/{m.meta.budgetWarning.limit} tool calls used
                       </div>
                     )}
-                    {!m.meta?.planSteps && m.meta?.planningText && (
-                      <details className="ai-chat__planning-fold">
-                        <summary>Plan</summary>
-                        <AiAssistantMarkdown content={m.meta.planningText} />
-                      </details>
-                    )}
-                    <div className={isPlanning && m.streaming ? "ai-chat__planning-live" : undefined}>
-                      <AiAssistantMarkdown content={m.content} />
-                    </div>
+                    <AiAssistantMarkdown content={m.content} />
                     {!m.streaming && m.meta?.thoughtCitation && !m.meta.thoughtCitation.privateOmitted ? (
                       <button
                         type="button"
@@ -2856,11 +2565,6 @@ export function AiConversationPanel() {
       ) : null}
 
       <AiToolApprovalDialog request={activeApproval} onResolve={handleApprovalResolve} />
-      <AiPlanApprovalDialog
-        request={activePlanApproval}
-        onApprove={handlePlanApprove}
-        onReject={handlePlanReject}
-      />
     </section>
   );
 }

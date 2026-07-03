@@ -371,7 +371,8 @@ pub async fn run_agent_stream(
         // 4. NormalizedToolCall already carries an ID (UUID v7 or server-provided)
         for tc in &normalized_calls {
             let input_summary = summarize_tool_input(&tc.arguments);
-            emit_tool_call_start(&app, &session_id, &tc.id, &tc.name, &input_summary);
+            let display_summary = generate_tool_display_summary(&tc.name, &tc.arguments);
+            emit_tool_call_start(&app, &session_id, &tc.id, &tc.name, &input_summary, &display_summary);
         }
 
         // 5. 并行执行工具（跳过循环调用；每个工具有独立超时，支持取消）
@@ -466,14 +467,7 @@ pub async fn run_agent_stream(
                 let error_message = result.as_ref().err().map(|e| e.as_str());
                 emit_tool_call_done(&app, &session_id, &tc.id, success, &result_summary, *duration_ms, error_message);
 
-                if tc.name == "plan.update_step" && success {
-                    if let (Some(step), Some(status)) = (
-                        tc.arguments.get("step").and_then(|v| v.as_u64()).map(|v| v as u32),
-                        tc.arguments.get("status").and_then(|v| v.as_str()),
-                    ) {
-                        emit_plan_step_update(&app, &session_id, step, status);
-                    }
-                }
+
             }
         }
 
@@ -941,7 +935,7 @@ pub fn list_for_llm_to_tools(manifests: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-fn emit_tool_call_start(app: &AppHandle, session_id: &str, tool_call_id: &str, tool_name: &str, input_summary: &str) {
+fn emit_tool_call_start(app: &AppHandle, session_id: &str, tool_call_id: &str, tool_name: &str, input_summary: &str, display_summary: &str) {
     let _ = app.emit(
         "llm:tool-call-start",
         json!({
@@ -949,8 +943,45 @@ fn emit_tool_call_start(app: &AppHandle, session_id: &str, tool_call_id: &str, t
             "toolCallId": tool_call_id,
             "toolName": tool_name,
             "inputSummary": input_summary,
+            "displaySummary": display_summary,
         }),
     );
+}
+
+fn generate_tool_display_summary(name: &str, args: &Value) -> String {
+    let get_str = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or("");
+
+    match name {
+        "note.list" => "List notes".into(),
+        "note.read" => format!("Read {}", truncate_str(get_str("rel_path"), 40)),
+        "note.create" => format!("Create {}", truncate_str(get_str("rel_path"), 40)),
+        "note.append" => format!("Append to {}", truncate_str(get_str("rel_path"), 40)),
+        "note.write_section" => format!("Edit {}", truncate_str(get_str("rel_path"), 40)),
+
+        "vault.search_keyword" => format!("Search: {}", truncate_str(get_str("query"), 40)),
+        "vault.semantic_search" => format!("Semantic search: {}", truncate_str(get_str("query"), 40)),
+
+        "web.search" => format!("Web search: {}", truncate_str(get_str("query"), 40)),
+        "web.read_page" => format!("Read page: {}", truncate_str(get_str("url"), 50)),
+        "web.read_pdf" => format!("Read PDF: {}", truncate_str(get_str("url"), 50)),
+        "web.download" => format!("Download: {}", truncate_str(get_str("url"), 50)),
+
+        "thought.list" => "List thoughts".into(),
+        "thought.read" => format!("Read thought {}", truncate_str(get_str("thought_id"), 20)),
+        "thought.create" => "Create thought".into(),
+
+        "graph.query_topic_network" => format!("Query graph: {}", truncate_str(get_str("topic"), 30)),
+        "link.suggest_related" => "Suggest related links".into(),
+
+        "memory.save" => format!("Save memory: {}", truncate_str(get_str("category"), 20)),
+        "memory.forget" => "Forget memory".into(),
+
+        "tool.recall" => format!("Recall: {}", truncate_str(get_str("tool_call_id"), 20)),
+
+        n if n.starts_with("skill.") => format!("Skill: {}", &n[6..]),
+
+        _ => name.to_string(),
+    }
 }
 
 fn emit_tool_call_done(app: &AppHandle, session_id: &str, tool_call_id: &str, success: bool, result_summary: &str, duration_ms: u64, error_message: Option<&str>) {
@@ -971,13 +1002,6 @@ fn emit_agent_done(app: &AppHandle, session_id: &str) {
     let _ = app.emit(
         "llm:agent-done",
         json!({ "sessionId": session_id }),
-    );
-}
-
-fn emit_plan_step_update(app: &AppHandle, session_id: &str, step: u32, status: &str) {
-    let _ = app.emit(
-        "llm:plan-step-update",
-        json!({ "sessionId": session_id, "step": step, "status": status }),
     );
 }
 
