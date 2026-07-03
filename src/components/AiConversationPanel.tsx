@@ -1,22 +1,19 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useAiConversationSession } from "../contexts/AiConversationSessionContext";
 import type { ThoughtFocusContext } from "../types/aiConversation";
 import { useAiNoteContext } from "../contexts/AiNoteContext";
-import type { ChatMessage, ToolCallDisplayInfo } from "../hooks/useWorkspaceAiConversations";
+import type { ChatMessage } from "../hooks/useWorkspaceAiConversations";
+import { useAgentEventHandlers, retractInterruptedTurn, finalizeStreamingAssistant } from "../hooks/useAgentEventHandlers";
 import type { ReplyContextSources } from "../types/replyContextSources";
 import { hasReplyContextSourcesToShow } from "../types/replyContextSources";
 import type {
   AutoResolvedDepth,
   ThoughtRetrievalResult,
-  CountVaultThoughtsForReviewResponse,
-  GenerateChallengeQuestionResponse,
 } from "../types/cognitiveTypes";
 import type { DetectPassiveHighlightResponse, PassiveHighlightMarked } from "../types/passiveHighlight";
 import type { VaultConfigForUi, ProviderProfileForUi } from "../types/vaultAiConfig";
-import { isChallengeInlineLlmReady } from "../utils/isChallengeReviewLlmReady";
 import { VAULT_CONFIG_UPDATED_EVENT } from "../utils/vaultConfigBroadcast";
 import { markdownTreatAsKfPrivateForUi } from "../utils/kfPrivateMarkdown";
 import { PrivacyChangeOverlay } from "./PrivacyChangeOverlay";
@@ -26,18 +23,14 @@ import { respondToolApproval } from "../utils/toolInvoke";
 import { listSkills, invokeSkill } from "../utils/skillInvoke";
 import type { SkillManifestJson } from "../types/skillTypes";
 import { parseSlashCommand } from "../utils/parseSlashCommand";
-import { AiAssistantMarkdown } from "./AiAssistantMarkdown";
-import { StreamingTimer } from "./StreamingTimer";
+import { MessageBubble, IconSaveThought } from "./MessageBubble";
 import { useCognitiveFrequencyControl } from "../hooks/useCognitiveFrequencyControl";
 import { DepthSlider } from "./DepthSlider";
 import { ChallengeReviewInline } from "./ChallengeReviewInline";
 import { InviteAfterAnswer } from "./InviteAfterAnswer";
 import { ThoughtSavePopover } from "./ThoughtSavePopover";
-import { PassiveHighlightSaveCue } from "./PassiveHighlightSaveCue";
-import { AiReplyContextSources } from "./AiReplyContextSources";
 import { stripMarkedPassiveHighlightWithCount } from "../utils/passiveHighlightLifecycle";
 import { trackKnowforgeEvent } from "../utils/knowforgeAnalytics";
-import { getAppLocale } from "../i18n";
 import "./AiConversationPanel.css";
 import "./MemoryProposals.css";
 
@@ -56,79 +49,6 @@ type MemoryProposalBatch = {
   created_at: string;
 };
 
-/** 用户中止且输入框无新草稿：去掉末尾 streaming 助手及其前一条用户消息 */
-function retractInterruptedTurn(prev: ChatMessage[]): ChatMessage[] {
-  const next = [...prev];
-  const last = next[next.length - 1];
-  if (last?.role === "assistant" && last.streaming) {
-    next.pop();
-  }
-  const u = next[next.length - 1];
-  if (u?.role === "user") {
-    next.pop();
-  }
-  return next;
-}
-
-/** 用户中止但保留会话：仅将末尾 streaming 助手标为结束，保留已生成片段 */
-function finalizeStreamingAssistant(prev: ChatMessage[]): ChatMessage[] {
-  const next = [...prev];
-  const last = next[next.length - 1];
-  if (last?.role === "assistant" && last.streaming) {
-    next[next.length - 1] = { ...last, streaming: false };
-  }
-  return next;
-}
-
-/**
- * Search for a ToolCallDisplayInfo by toolCallId in flat toolCalls.
- * When found, apply the patcher and return the updated messages array.
- * Returns null if not found.
- */
-function findAndPatchToolCall(
-  prev: ChatMessage[],
-  targetToolCallId: string,
-  patcher: (tc: ToolCallDisplayInfo) => ToolCallDisplayInfo,
-): ChatMessage[] | null {
-  for (let i = prev.length - 1; i >= 0; i--) {
-    const m = prev[i];
-    if (m.role !== "assistant") continue;
-
-    const tcs = m.meta?.toolCalls;
-    if (tcs) {
-      const tcIdx = tcs.findIndex((tc) => tc.toolCallId === targetToolCallId);
-      if (tcIdx !== -1) {
-        const next = [...prev];
-        const updated = [...tcs];
-        updated[tcIdx] = patcher(updated[tcIdx]);
-        next[i] = { ...m, meta: { ...m.meta, toolCalls: updated } };
-        return next;
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * 合并流式增量，兼容重复监听或上游偶发返回「全量片段」导致的重复拼接。
- * - `delta` 与当前尾部完全重复：忽略；
- * - `delta` 以当前全文开头：视为全量快照，直接替换为 `delta`；
- * - 其余情况按最大前后缀重叠合并，避免出现「您您 在在」这类叠字。
- */
-function mergeStreamDelta(current: string, delta: string): string {
-  if (!delta) return current;
-  if (!current) return delta;
-  if (current.endsWith(delta)) return current;
-  if (delta.startsWith(current)) return delta;
-
-  const maxOverlap = Math.min(current.length, delta.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (current.endsWith(delta.slice(0, overlap))) {
-      return current + delta.slice(overlap);
-    }
-  }
-  return current + delta;
-}
 
 type StartStreamResponse = {
   sessionId: string;
@@ -188,44 +108,6 @@ function IconStopSquare() {
   );
 }
 
-/** 复制助手消息为 Markdown */
-function IconCopyClipboard() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden={true}
-    >
-      <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-    </svg>
-  );
-}
-
-/** 保存为想法图标（书签） */
-function IconSaveThought() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden={true}
-    >
-      <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-    </svg>
-  );
-}
 
 /** 横幅提示手动关闭（X） */
 function IconDismissBanner() {
@@ -331,7 +213,6 @@ export function AiConversationPanel() {
   const [vaultSearchSummary, setVaultSearchSummary] = useState<string | null>(null);
 
 
-  const activeSessionRef = useRef<string | null>(null);
   const listEndRef = useRef<HTMLDivElement>(null);
   /** 是否吸附在底部：用户向上滚动查看历史时置 false，避免流式刷新强制拉回底部 */
   const stickToBottomRef = useRef(true);
@@ -339,15 +220,6 @@ export function AiConversationPanel() {
   /** Iter 5 #4：工具调用总开关从 vault config 读取（默认 true,旧 vault 缺字段时取 true）。
    *  通过 VAULT_CONFIG_UPDATED_EVENT 在设置保存后实时同步,无需重开会话。 */
   const [toolsEnabled, setToolsEnabled] = useState(true);
-  /** 发送时快照：agent 模式下 stream-done 仅是中间信号，不能最终化助手消息 */
-  const isAgentModeRef = useRef(false);
-
-  /** Iter 5 #4: while a `skill.<id>` auto-invocation is in flight, save the
-   * parent session here so we can restore activeSessionRef once the skill
-   * sub-turn fires `agent-done`. Null when no skill is currently in progress. */
-  const parentSessionRef = useRef<string | null>(null);
-  /** 映射：skillSessionId → { parentToolCallId } */
-  const skillSessionMapRef = useRef<Map<string, { parentToolCallId: string }>>(new Map());
 
   /** Iter 5 #3：内置 skill manifest 缓存。skill 在后端 setup() 注册一次后不变，挂载时取一次即可。 */
   const [skillsCache, setSkillsCache] = useState<SkillManifestJson[]>([]);
@@ -624,566 +496,37 @@ export function AiConversationPanel() {
     }
   }, [messages, scrollToBottom]);
 
-  useEffect(() => {
-    if (!isTauri()) {
-      return;
-    }
-
-    let disposed = false;
-    const pending: UnlistenFn[] = [];
-
-    void Promise.all([
-      listen<{ sessionId: string; delta: string }>("llm:stream-chunk", (e) => {
-        const p = e.payload;
-        if (p.sessionId !== activeSessionRef.current) {
-          return;
-        }
-        const skillMapping = skillSessionMapRef.current.get(p.sessionId);
-        if (skillMapping) {
-          setMessages((prev) =>
-            findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
-              ...tc,
-              skillContent: (tc.skillContent || "") + p.delta,
-            })) ?? prev,
-          );
-          return;
-        }
-        // 主会话的 chunk → 追加到气泡 content（原有逻辑）
-        setMessages((prev) => {
-          let next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === "assistant" && last.streaming) {
-            const isFirstToken = last.content === "";
-            next[next.length - 1] = {
-              ...last,
-              content: mergeStreamDelta(last.content, p.delta),
-              meta: isFirstToken && last.meta?.timing
-                ? { ...last.meta, timing: { ...last.meta.timing, firstTokenMs: Date.now() } }
-                : last.meta,
-            };
-          }
-          return next;
-        });
-      }),
-      listen<{ sessionId: string }>("llm:stream-done", (e) => {
-        const p = e.payload;
-        if (p.sessionId !== activeSessionRef.current) {
-          return;
-        }
-        setIsVaultSearching(false);
-        // P2 Tool Calling Loop：agent 模式下 stream-done 只是轮次中的中间信号，
-        // 后续还会有 tool-call-* 与后续文本输出，只能由 llm:agent-done 最终化。
-        if (isAgentModeRef.current) {
-          return;
-        }
-        markNeedPersist();
-        activeSessionRef.current = null;
-        setIsStreaming(false);
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === "assistant" && last.streaming) {
-            next[next.length - 1] = {
-              ...last,
-              streaming: false,
-              meta: last.meta?.timing
-                ? { ...last.meta, timing: { ...last.meta.timing, endMs: Date.now() } }
-                : last.meta,
-            };
-          }
-          const strippedPack = stripMarkedPassiveHighlightWithCount(next);
-          if (strippedPack.stripped > 0) {
-            passiveHighlightMarkedCountRef.current = Math.max(
-              0,
-              passiveHighlightMarkedCountRef.current - strippedPack.stripped,
-            );
-          }
-          return strippedPack.messages;
-        });
-
-        // 后台：先答后邀优先；否则在满足频控时尝试挑战式回顾（通道二）
-        const epoch = ++inviteSearchEpochRef.current;
-        setInviteData(null);
-        setChallengeInlineData(null);
-        const query = lastSentQueryRef.current.trim();
-        if (!query || enoughForThisChatRef.current) return;
-        const dm = depthModeForInviteRef.current;
-        const ar = autoResolvedForInviteRef.current;
-        if (dm === "shallow" || (dm === "auto" && ar === "shallow")) {
-          return;
-        }
-        void (async () => {
-          try {
-            type SearchResp = {
-              thought: ThoughtRetrievalResult | null;
-              thoughts?: ThoughtRetrievalResult[];
-              meta: { scannedFiles: number; stoppedEarly: boolean; elapsedMs: number };
-            };
-
-            const turnIdx = messagesRef.current.filter((m) => m.role === "user").length;
-            const inviteEligible = freqCtrl.shouldShowInvite(
-              dm,
-              enoughForThisChatRef.current,
-              turnIdx,
-              ar,
-            );
-
-            if (inviteEligible) {
-              const resp = await invoke<SearchResp>("search_thought_for_invite", {
-                args: {
-                  query,
-                  excludeRelPaths: thoughtInviteExcludeRef.current,
-                  maxResults: 1,
-                },
-              });
-              if (inviteSearchEpochRef.current !== epoch || disposed) return;
-              const excerptRaw = resp.thought?.excerpt;
-              const question =
-                excerptRaw && excerptRaw.length > 0
-                  ? t("invite.thoughtQuestion", {
-                      excerpt:
-                        excerptRaw.length > 60 ? `${excerptRaw.slice(0, 60)}...` : excerptRaw,
-                    })
-                  : t("invite.defaultQuestion");
-              setInviteData({ thought: resp.thought, question });
-              attachCitationToLastAssistant(resp.thought ?? null);
-              const th = resp.thought;
-              if (
-                th &&
-                !th.privateOmitted &&
-                th.thoughtId &&
-                isTauri() &&
-                th.relPath
-              ) {
-                void invoke("append_ai_thought_reference", {
-                  args: {
-                    relPath: th.relPath,
-                    thoughtId: th.thoughtId,
-                    context: query.slice(0, 2000),
-                    relevance: "ai-conversation-invite",
-                  },
-                }).catch(() => {});
-              }
-              return;
-            }
-
-            let cfg: VaultCfgForSend;
-            try {
-              cfg = await invoke<VaultCfgForSend>("get_vault_config_for_ui");
-            } catch {
-              return;
-            }
-            if (inviteSearchEpochRef.current !== epoch || disposed) return;
-            if (!isChallengeInlineLlmReady(cfg as VaultConfigForUi)) return;
-
-            const countResp = await invoke<CountVaultThoughtsForReviewResponse>(
-              "count_vault_thoughts_for_review",
-            );
-            if (inviteSearchEpochRef.current !== epoch || disposed) return;
-            const total = countResp.totalThoughts;
-            if (
-              !freqCtrl.shouldShowChallengeInline(dm, ar, {
-                inviteWillShow: false,
-                thoughtId: null,
-                vaultThoughtTotal: total,
-              })
-            ) {
-              return;
-            }
-
-            const respMany = await invoke<SearchResp>("search_thought_for_invite", {
-              args: {
-                query,
-                excludeRelPaths: thoughtInviteExcludeRef.current,
-                maxResults: 3,
-              },
-            });
-            if (inviteSearchEpochRef.current !== epoch || disposed) return;
-            const pick =
-              respMany.thoughts?.find((x) => x.excerpt && !x.privateOmitted) ?? respMany.thought;
-            if (!pick?.excerpt || pick.privateOmitted) return;
-
-            const gen = await invoke<GenerateChallengeQuestionResponse>("generate_challenge_question", {
-              args: {
-                thoughtExcerpt: pick.excerpt,
-                relPath: pick.relPath,
-                conversationQuery: query,
-                depthMode: dm,
-                uiLocale: getAppLocale(),
-              },
-            });
-            if (inviteSearchEpochRef.current !== epoch || disposed) return;
-            if (gen.shouldSkip || !gen.question.trim()) return;
-
-            void freqCtrl.recordChallengeInlineShown(pick.thoughtId);
-            void trackKnowforgeEvent("review.inline_shown", {
-              thoughtId: pick.thoughtId,
-              templateKind: gen.templateKind,
-            });
-            setChallengeInlineData({
-              thought: pick,
-              question: gen.question,
-              templateKind: gen.templateKind,
-            });
-            attachCitationToLastAssistant(pick);
-            if (!pick.privateOmitted && pick.thoughtId && isTauri()) {
-              void invoke("append_ai_thought_reference", {
-                args: {
-                  relPath: pick.relPath,
-                  thoughtId: pick.thoughtId,
-                  context: query.slice(0, 2000),
-                  relevance: "ai-challenge-inline",
-                },
-              }).catch(() => {});
-            }
-          } catch {
-            // 超时或其他失败：静默跳过
-          }
-        })();
-      }),
-      listen<{ sessionId: string; code?: string; message: string }>("llm:stream-error", (e) => {
-        const p = e.payload;
-        if (p.sessionId !== activeSessionRef.current) {
-          return;
-        }
-        // Iter 5 #4: error during a skill sub-turn — restore parent session.
-        // The parent agent_loop will receive the SkillAsTool tool error in its
-        // tool_result and decide whether to recover. Don't tear down top-level streaming UI here.
-        if (parentSessionRef.current) {
-          const parent = parentSessionRef.current;
-          parentSessionRef.current = null;
-          activeSessionRef.current = parent;
-          setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant" && last.streaming) {
-              next[next.length - 1] = { ...last, streaming: false };
-            }
-            return next;
-          });
-          return;
-        }
-        markNeedPersist();
-        activeSessionRef.current = null;
-        isAgentModeRef.current = false;
-        setIsStreaming(false);
-        setIsVaultSearching(false);
-        if (p.code === "cancelled") {
-          setMessages((prev) => {
-            if (composerInputRef.current.trim().length > 0) {
-              return finalizeStreamingAssistant(prev);
-            }
-            let lastUser = "";
-            for (let i = prev.length - 1; i >= 0; i--) {
-              if (prev[i].role === "user") {
-                lastUser = prev[i].content;
-                break;
-              }
-            }
-            const next = retractInterruptedTurn(prev);
-            if (lastUser.length > 0) {
-              queueMicrotask(() => setInput(lastUser));
-            }
-            return next;
-          });
-          return;
-        }
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === "assistant" && last.streaming) {
-            next[next.length - 1] = { ...last, streaming: false };
-          }
-          const strippedPack = stripMarkedPassiveHighlightWithCount(next);
-          if (strippedPack.stripped > 0) {
-            passiveHighlightMarkedCountRef.current = Math.max(
-              0,
-              passiveHighlightMarkedCountRef.current - strippedPack.stripped,
-            );
-          }
-          return strippedPack.messages;
-        });
-        setErrorBanner(p.message);
-      }),
-      // P2 Tool Calling Loop：工具调用开始 → 在末尾 assistant 消息中插入 running 状态项
-      // Skill 内部的工具调用路由到对应 toolCall 的 skillToolCalls
-      listen<{ sessionId: string; toolCallId: string; toolName: string; inputSummary?: string; displaySummary?: string }>(
-        "llm:tool-call-start",
-        (e) => {
-          const p = e.payload;
-          if (p.sessionId !== activeSessionRef.current) {
-            return;
-          }
-          const skillMapping = skillSessionMapRef.current.get(p.sessionId);
-          const newCall: ToolCallDisplayInfo = {
-            toolCallId: p.toolCallId,
-            toolName: p.toolName,
-            displaySummary: p.displaySummary || undefined,
-            status: "running",
-            inputSummary: p.inputSummary,
-          };
-          if (skillMapping) {
-            setMessages((prev) =>
-              findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
-                ...tc,
-                skillToolCalls: [...(tc.skillToolCalls || []), newCall],
-              })) ?? prev,
-            );
-            return;
-          }
-          setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role !== "assistant") return prev;
-            const existing = last.meta?.toolCalls ?? [];
-            return [
-              ...next.slice(0, -1),
-              {
-                ...last,
-                meta: { ...last.meta, toolCalls: [...existing, newCall] },
-              },
-            ];
-          });
-        },
-      ),
-      // P2 Tool Calling Loop：工具调用完成 → 更新对应 toolCallId 的状态为 done/error
-      // 按新字段更新 resultSummary / durationMs / errorMessage，处理 Skill 内部工具调用
-      listen<{ sessionId: string; toolCallId: string; success: boolean; resultSummary?: string; durationMs?: number; errorMessage?: string }>(
-        "llm:tool-call-done",
-        (e) => {
-          const p = e.payload;
-          if (p.sessionId !== activeSessionRef.current) {
-            return;
-          }
-          const skillMapping = skillSessionMapRef.current.get(p.sessionId);
-          if (skillMapping) {
-            setMessages((prev) =>
-              findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
-                ...tc,
-                skillToolCalls: (tc.skillToolCalls || []).map((stc) =>
-                  stc.toolCallId === p.toolCallId
-                    ? { ...stc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage }
-                    : stc,
-                ),
-              })) ?? prev,
-            );
-            return;
-          }
-          setMessages((prev) => {
-            const patchTc = (tc: ToolCallDisplayInfo): ToolCallDisplayInfo =>
-              tc.toolCallId === p.toolCallId
-                ? { ...tc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage }
-                : tc;
-
-            for (let i = prev.length - 1; i >= 0; i -= 1) {
-              const m = prev[i];
-              if (m.role !== "assistant") continue;
-
-              if (m.meta?.toolCalls?.some((tc) => tc.toolCallId === p.toolCallId)) {
-                const next = [...prev];
-                next[i] = { ...m, meta: { ...m.meta, toolCalls: m.meta.toolCalls!.map(patchTc) } };
-                return next;
-              }
-            }
-            return prev;
-          });
-        },
-      ),
-      // P3 审批：后端在执行非 Auto 工具前请求用户决策
-      listen<ApprovalRequest>("llm:tool-approval-request", (e) => {
-        const p = e.payload;
-        if (p.sessionId !== activeSessionRef.current) {
-          return;
-        }
-        setActiveApproval((cur) => {
-          if (cur === null) {
-            return p;
-          }
-          approvalQueueRef.current.push(p);
-          return cur;
-        });
-      }),
-      listen<MemoryProposalBatch>("llm:memory-proposals", (e) => {
-        if (e.payload.session_id === activeSessionRef.current) {
-          setMemoryProposals(e.payload);
-          setProposalDecisions({});
-        }
-      }),
-      // Iter 5 #4: 主对话自动调用 `skill.<id>` 时，后端发出 skill-spawn,
-      // 携带新 sessionId — 这里保存父 session、切换 active、更新父气泡中对应工具调用项的 skill 字段。
-      // 不再创建新气泡，Skill 内容内嵌到父气泡的工具调用项中。
-      listen<{
-        sessionId: string;
-        conversationId: string;
-        skillId: string;
-        skillName: string;
-        parentToolCallId: string;
-      }>("llm:skill-spawn", (e) => {
-        const p = e.payload;
-        if (!activeSessionRef.current || activeSessionRef.current === p.sessionId) {
-          return;
-        }
-        if (conversationId && p.conversationId !== conversationId) {
-          return;
-        }
-        parentSessionRef.current = activeSessionRef.current;
-        activeSessionRef.current = p.sessionId;
-        // 记录 skill session → parent tool call 的映射
-        skillSessionMapRef.current.set(p.sessionId, {
-          parentToolCallId: p.parentToolCallId,
-        });
-        setMessages((prev) =>
-          findAndPatchToolCall(prev, p.parentToolCallId, (tc) => ({
-            ...tc,
-            skillId: p.skillId,
-            skillName: p.skillName,
-            skillContent: "",
-            skillToolCalls: [],
-            skillStreaming: true,
-          })) ?? prev,
-        );
-      }),
-      // Budget warning: tool call budget reaching 80%
-      listen<{ sessionId: string; used: number; limit: number; type: string }>(
-        "llm:budget-warning",
-        (e) => {
-          if (e.payload.sessionId !== activeSessionRef.current) return;
-          setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant") {
-              next[next.length - 1] = {
-                ...last,
-                meta: {
-                  ...last.meta,
-                  budgetWarning: { used: e.payload.used, limit: e.payload.limit },
-                },
-              };
-            }
-            return next;
-          });
-        },
-      ),
-      listen<{
-        sessionId: string;
-        snippets: import("../types/vaultContextSearch").VaultSnippetRecord[];
-        meta: import("../types/vaultContextSearch").SearchWorkspaceContextMeta | null;
-        replyContextSources: ReplyContextSources;
-      }>("llm:context-ready", (e) => {
-        const { sessionId, snippets, meta, replyContextSources } = e.payload;
-        if (sessionId !== activeSessionRef.current) return;
-
-        if (snippets.length > 0 && meta) {
-          const paths = snippets.map((s) => s.relPath).join(", ");
-          const priv = snippets.filter((s) => s.kind === "privateOmitted").length;
-          let line = t("aiPanel.vaultLine", {
-            paths,
-            scannedFiles: meta.scannedFiles,
-            elapsedMs: meta.elapsedMs,
-          });
-          if (priv > 0) {
-            line += ` ${t("aiPanel.vaultPrivateOmitted", { count: priv })}`;
-          }
-          if (meta.stoppedEarly) {
-            line += ` ${t("aiPanel.vaultStoppedEarly")}`;
-          }
-          setVaultSearchSummary(line);
-        } else {
-          setVaultSearchSummary(null);
-        }
-
-        for (const s of snippets) {
-          if (s.kind !== "privateOmitted") {
-            sharedDocPathsRef.current.add(s.relPath);
-          }
-        }
-
-        setMessages((prev) => {
-          const idx = prev.findIndex((m) => m.role === "assistant" && m.streaming);
-          if (idx < 0) return prev;
-          const next = [...prev];
-          next[idx] = { ...next[idx], meta: { ...next[idx].meta, replyContextSources } };
-          return next;
-        });
-
-        setIsVaultSearching(false);
-      }),
-      // P2 Tool Calling Loop：Agent 轮次结束 → 最终化助手消息、清理 streaming 状态
-      listen<{ sessionId: string }>("llm:agent-done", (e) => {
-        const sid = e.payload.sessionId;
-        const skillMapping = skillSessionMapRef.current.get(sid);
-
-        // Skill 子轮次完成：优先处理，不依赖 activeSessionRef
-        if (skillMapping) {
-          skillSessionMapRef.current.delete(sid);
-          if (activeSessionRef.current === sid) {
-            activeSessionRef.current = parentSessionRef.current;
-          }
-          parentSessionRef.current = null;
-
-          setMessages((prev) =>
-            findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
-              ...tc,
-              skillStreaming: false,
-            })) ?? prev,
-          );
-          return;
-        }
-
-        // 其余情况：保持原有顶层 agent-done 逻辑
-        if (sid !== activeSessionRef.current) {
-          return;
-        }
-
-        // 顶层 agent 循环完成
-        markNeedPersist();
-        activeSessionRef.current = null;
-        isAgentModeRef.current = false;
-        setIsStreaming(false);
-        setIsVaultSearching(false);
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === "assistant" && last.streaming) {
-            next[next.length - 1] = {
-              ...last,
-              streaming: false,
-              meta: last.meta?.timing
-                ? { ...last.meta, timing: { ...last.meta.timing, endMs: Date.now() } }
-                : last.meta,
-            };
-          }
-          const strippedPack = stripMarkedPassiveHighlightWithCount(next);
-          if (strippedPack.stripped > 0) {
-            passiveHighlightMarkedCountRef.current = Math.max(
-              0,
-              passiveHighlightMarkedCountRef.current - strippedPack.stripped,
-            );
-          }
-          return strippedPack.messages;
-        });
-      }),
-    ]).then((unlisteners) => {
-      if (disposed) {
-        unlisteners.forEach((u) => void u());
-        return;
-      }
-      pending.push(...unlisteners);
+  const { activeSessionRef, isAgentModeRef, parentSessionRef, skillSessionMapRef } =
+    useAgentEventHandlers({
+      setMessages,
+      setIsStreaming,
+      setIsVaultSearching,
+      setErrorBanner,
+      setInput,
+      setVaultSearchSummary,
+      setInviteData,
+      setChallengeInlineData,
+      setMemoryProposals,
+      setProposalDecisions,
+      setActiveApproval,
+      composerInputRef,
+      messagesRef,
+      sharedDocPathsRef,
+      approvalQueueRef,
+      inviteSearchEpochRef,
+      lastSentQueryRef,
+      enoughForThisChatRef,
+      depthModeForInviteRef,
+      autoResolvedForInviteRef,
+      thoughtInviteExcludeRef,
+      passiveHighlightMarkedCountRef,
+      markNeedPersist,
+      attachCitationToLastAssistant,
+      freqCtrl,
+      conversationId,
+      t,
     });
 
-    return () => {
-      disposed = true;
-      pending.forEach((u) => void u());
-    };
-  }, [
-    markNeedPersist,
-    setMessages,
-    setIsStreaming,
-    freqCtrl,
-    t,
-    attachCitationToLastAssistant,
-    conversationId,
-  ]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -2064,178 +1407,23 @@ export function AiConversationPanel() {
           </p>
         ) : (
           messages.map((m) => (
-            <div
+            <MessageBubble
               key={m.id}
-              className={`ai-chat__row ai-chat__row--${m.role}`}
-              {...dragExcludeProps}
-            >
-              <div className={`ai-chat__bubble ai-chat__bubble--${m.role}`}>
-                {m.role === "assistant" ? (
-                  <>
-                    {m.meta?.toolCalls && m.meta.toolCalls.length > 0 ? (
-                      <div className="ai-chat__tool-calls">
-                        {m.meta.toolCalls.map((tc) => (
-                          <details key={tc.toolCallId} className="ai-chat__tool-call-details">
-                            <summary className={`ai-chat__tool-call ai-chat__tool-call--${tc.status}`}>
-                              <span className="ai-chat__tool-call__icon" aria-hidden={true}>
-                                {tc.status === "running" ? "⋯" : tc.status === "done" ? "✓" : "✗"}
-                              </span>
-                              <span className="ai-chat__tool-call__name">{tc.displaySummary || tc.toolName}</span>
-                              {tc.durationMs != null && (
-                                <span className="ai-chat__tool-call__duration">
-                                  {(tc.durationMs / 1000).toFixed(1)}s
-                                </span>
-                              )}
-                            </summary>
-                            <div className="ai-chat__tool-call__detail">
-                              {tc.inputSummary && (
-                                <div className="ai-chat__tool-call__input">
-                                  <span className="ai-chat__tool-call__label">输入</span>
-                                  <code>{tc.inputSummary}</code>
-                                </div>
-                              )}
-                              {tc.skillId && (
-                                <div className="ai-chat__skill-inline">
-                                  <span className="ai-chat__skill-badge">🧠 {tc.skillName}</span>
-                                  <AiAssistantMarkdown content={tc.skillContent || ""} />
-                                  {tc.skillStreaming && <span className="ai-chat__typing">▌</span>}
-                                  {tc.skillToolCalls && tc.skillToolCalls.length > 0 && (
-                                    <div className="ai-chat__tool-calls">
-                                      {tc.skillToolCalls.map((stc) => (
-                                        <details key={stc.toolCallId} className="ai-chat__tool-call-details">
-                                          <summary className={`ai-chat__tool-call ai-chat__tool-call--${stc.status}`}>
-                                            <span className="ai-chat__tool-call__icon" aria-hidden={true}>
-                                              {stc.status === "running" ? "⋯" : stc.status === "done" ? "✓" : "✗"}
-                                            </span>
-                                            <span className="ai-chat__tool-call__name">{stc.displaySummary || stc.toolName}</span>
-                                            {stc.durationMs != null && (
-                                              <span className="ai-chat__tool-call__duration">
-                                                {(stc.durationMs / 1000).toFixed(1)}s
-                                              </span>
-                                            )}
-                                          </summary>
-                                          <div className="ai-chat__tool-call__detail">
-                                            {stc.inputSummary && (
-                                              <div className="ai-chat__tool-call__input">
-                                                <span className="ai-chat__tool-call__label">输入</span>
-                                                <code>{stc.inputSummary}</code>
-                                              </div>
-                                            )}
-                                            {stc.resultSummary && (
-                                              <div className="ai-chat__tool-call__result">
-                                                <span className="ai-chat__tool-call__label">结果</span>
-                                                <code>{stc.resultSummary}</code>
-                                              </div>
-                                            )}
-                                            {stc.errorMessage && (
-                                              <div className="ai-chat__tool-call__error">
-                                                <span className="ai-chat__tool-call__label">错误</span>
-                                                <code>{stc.errorMessage}</code>
-                                              </div>
-                                            )}
-                                          </div>
-                                        </details>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                              {tc.resultSummary && (
-                                <div className="ai-chat__tool-call__result">
-                                  <span className="ai-chat__tool-call__label">结果</span>
-                                  <code>{tc.resultSummary}</code>
-                                </div>
-                              )}
-                              {tc.errorMessage && (
-                                <div className="ai-chat__tool-call__error">
-                                  <span className="ai-chat__tool-call__label">错误</span>
-                                  <code>{tc.errorMessage}</code>
-                                </div>
-                              )}
-                            </div>
-                          </details>
-                        ))}
-                      </div>
-                    ) : null}
-                    {m.meta?.budgetWarning && (
-                      <div className="ai-chat__budget-warning">
-                        Agent {m.meta.budgetWarning.used}/{m.meta.budgetWarning.limit} tool calls used
-                      </div>
-                    )}
-                    <AiAssistantMarkdown content={m.content} />
-                    {!m.streaming && m.meta?.thoughtCitation && !m.meta.thoughtCitation.privateOmitted ? (
-                      <button
-                        type="button"
-                        className="ai-chat__thought-cite"
-                        onClick={() => openMarkdownTab?.(m.meta!.thoughtCitation!.relPath)}
-                        {...dragExcludeProps}
-                      >
-                        {t("aiPanel.thoughtCited", {
-                          note:
-                            m.meta.thoughtCitation.relPath.split("/").pop() ??
-                            m.meta.thoughtCitation.relPath,
-                        })}
-                      </button>
-                    ) : null}
-                    {!m.streaming && m.meta?.replyContextSources && hasReplyContextSourcesToShow(m.meta.replyContextSources) ? (
-                      <AiReplyContextSources sources={m.meta.replyContextSources} onOpenMarkdown={openMarkdownTab} />
-                    ) : null}
-                    {m.streaming ? (
-                      <span className="ai-chat__typing" aria-hidden={true}>
-                        ▌
-                      </span>
-                    ) : null}
-                    {!m.streaming && m.content.trim().length > 0 ? (
-                      <>
-                        <button
-                          type="button"
-                          className="ai-chat__copy"
-                          onClick={() => void copyAssistant(m.content)}
-                          aria-label={t("aiPanel.copyAria")}
-                          title={t("aiPanel.copyMd")}
-                          {...dragExcludeProps}
-                        >
-                          <IconCopyClipboard />
-                        </button>
-                        <button
-                          type="button"
-                          className="ai-chat__copy"
-                          onClick={() => {
-                            setSavePopoverVariant("default");
-                            setSavePopoverUserMsgId(null);
-                            setSavePopoverContent(m.content);
-                            setSavePopoverMsgId(m.id);
-                          }}
-                          aria-label={t("thoughtSave.buttonTitle")}
-                          title={t("thoughtSave.buttonTitle")}
-                          {...dragExcludeProps}
-                        >
-                          <IconSaveThought />
-                        </button>
-                      </>
-                    ) : null}
-                    {m.meta?.timing ? (
-                      <StreamingTimer timing={m.meta.timing} streaming={!!m.streaming} modelName={m.meta.modelName} />
-                    ) : null}
-                  </>
-                ) : (
-                  <div className="ai-chat__user-stack">
-                    <p className="ai-chat__user-text">{m.content}</p>
-                    {m.meta?.passiveHighlight?.phase === "marked" ? (
-                      <PassiveHighlightSaveCue
-                        t={t}
-                        state={m.meta.passiveHighlight as PassiveHighlightMarked}
-                        disabled={!!savePopoverMsgId}
-                        onSaveClick={() => {
-                          // 落库用用户原文：detect 的 summary 易为英文，与中文输入下「保存想法」预期不符
-                          openPassiveHighlightSave(m.id, m.content);
-                        }}
-                      />
-                    ) : null}
-                  </div>
-                )}
-              </div>
-            </div>
+              message={m}
+              onCopy={copyAssistant}
+              onSaveAsThought={(msgId, content) => {
+                setSavePopoverVariant("default");
+                setSavePopoverUserMsgId(null);
+                setSavePopoverContent(content);
+                setSavePopoverMsgId(msgId);
+              }}
+              onOpenThoughtCite={openMarkdownTab}
+              savePopoverMsgId={savePopoverMsgId}
+              onPassiveHighlightSave={openPassiveHighlightSave}
+              t={t}
+              dragExcludeProps={dragExcludeProps}
+              hasReplyContextSourcesToShow={hasReplyContextSourcesToShow}
+            />
           ))
         )}
 
