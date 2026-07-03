@@ -53,13 +53,48 @@ fn inject_plan_into_messages(
     out.push(LlmChatMessage {
         role: "system".to_string(),
         content: format!(
-            "Execute the following plan step by step. Call the tools listed. \
+            "Execute the following plan step by step. \
+             Before starting each step, call plan.update_step with {{\"step\": N, \"status\": \"in_progress\"}}. \
+             After completing each step, call plan.update_step with {{\"step\": N, \"status\": \"done\"}}. \
              After all steps, provide the final answer to the user.\n\n\
              Plan:\n{plan_text}"
         ),
         ..Default::default()
     });
     out
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct PlanStep {
+    pub step: u32,
+    pub title: String,
+}
+
+fn parse_plan_steps(plan_text: &str) -> Vec<PlanStep> {
+    plan_text
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            let dot_pos = trimmed.find(". ")?;
+            let num_part = &trimmed[..dot_pos];
+            if !num_part.chars().all(|c| c.is_ascii_digit()) || num_part.is_empty() {
+                return None;
+            }
+            let step = num_part.parse::<u32>().ok()?;
+            let title = trimmed[dot_pos + 2..].trim().to_string();
+            if title.is_empty() {
+                return None;
+            }
+            Some(PlanStep { step, title })
+        })
+        .collect()
+}
+
+fn emit_plan_steps(app: &AppHandle, session_id: &str, steps: &[PlanStep]) {
+    let _ = app.emit(
+        "llm:plan-steps",
+        json!({ "sessionId": session_id, "steps": steps }),
+    );
 }
 
 fn build_tool_descriptions(tools_json: &[Value]) -> String {
@@ -235,6 +270,10 @@ pub async fn run_planned_agent(
         );
     }
     let exec_messages = if plan_text.trim().len() >= MIN_PLAN_LENGTH {
+        let steps = parse_plan_steps(&plan_text);
+        if !steps.is_empty() {
+            emit_plan_steps(&app, &session_id, &steps);
+        }
         inject_plan_into_messages(&initial_messages, &plan_text)
     } else {
         initial_messages
@@ -289,7 +328,42 @@ mod tests {
         let result = inject_plan_into_messages(&msgs, plan);
         assert_eq!(result.len(), 2);
         assert!(result[1].content.contains("Execute the following plan"));
+        assert!(result[1].content.contains("plan.update_step"));
         assert!(result[1].content.contains("note.list"));
+    }
+
+    #[test]
+    fn parse_plan_steps_numbered_list() {
+        let plan = "1. Search for notes about quantum physics\n2. Read the most relevant note\n3. Summarize findings";
+        let steps = parse_plan_steps(plan);
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0].step, 1);
+        assert_eq!(steps[0].title, "Search for notes about quantum physics");
+        assert_eq!(steps[2].step, 3);
+        assert_eq!(steps[2].title, "Summarize findings");
+    }
+
+    #[test]
+    fn parse_plan_steps_with_sub_items() {
+        let plan = "1. Search vault\n   - use keyword search\n   - filter by tag\n2. Read results";
+        let steps = parse_plan_steps(plan);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].step, 1);
+        assert_eq!(steps[1].step, 2);
+    }
+
+    #[test]
+    fn parse_plan_steps_empty_and_prose() {
+        assert!(parse_plan_steps("").is_empty());
+        assert!(parse_plan_steps("Just do whatever seems right").is_empty());
+    }
+
+    #[test]
+    fn parse_plan_steps_non_sequential() {
+        let plan = "1. First\n3. Third\n5. Fifth";
+        let steps = parse_plan_steps(plan);
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[1].step, 3);
     }
 
     #[test]

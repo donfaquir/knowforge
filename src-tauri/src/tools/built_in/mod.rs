@@ -10,3 +10,4 @@ pub mod memory_ops;
 pub mod web_search;
 pub mod webview_renderer;
 pub mod tool_result_recall;
+pub mod plan_step_ops;

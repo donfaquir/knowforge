@@ -36,6 +36,13 @@ export type ToolCallDisplayInfo = {
   skillStreaming?: boolean;
 };
 
+export type PlanStepInfo = {
+  step: number;
+  title: string;
+  status: "pending" | "in_progress" | "done";
+  toolCalls: ToolCallDisplayInfo[];
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -62,6 +69,7 @@ export type ChatMessage = {
     skillId?: string;
     skillName?: string;
     planningText?: string;
+    planSteps?: PlanStepInfo[];
   };
 };
 

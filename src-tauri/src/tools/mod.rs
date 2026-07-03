@@ -121,6 +121,9 @@ pub fn register_builtin_tools(
     // Tool result recall
     registry.register(Arc::new(built_in::tool_result_recall::ToolResultRecallTool::new()))?;
 
+    // Planning progress
+    registry.register(built_in::plan_step_ops::PlanUpdateStepTool::new())?;
+
     Ok(())
 }
 
@@ -140,9 +143,9 @@ mod mod_tests {
             "register_builtin_tools failed: {:?}",
             result.err()
         );
-        // 确认工具总数：1(time.now) + 9(P1) + 4(P3 写操作) + 2(memory) + 4(P4 网络) + 1(recall) = 21
+        // 确认工具总数：1(time.now) + 9(P1) + 4(P3 写操作) + 2(memory) + 4(P4 网络) + 1(recall) + 1(plan) = 22
         let tools = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
-        assert_eq!(tools.len(), 21, "expected 21 registered tools, got {}", tools.len());
+        assert_eq!(tools.len(), 22, "expected 22 registered tools, got {}", tools.len());
     }
 
     #[test]
@@ -152,8 +155,8 @@ mod mod_tests {
         let all = registry.list_for_llm(crate::tools::registry::ToolScope::Global);
         let core = registry.list_for_llm_filtered(&crate::tools::registry::ToolFilter::core());
         assert!(core.len() < all.len(), "core ({}) should be less than all ({})", core.len(), all.len());
-        // NoteRead(6) + Utility(1 time.now + 2 memory + 1 recall) = 10
-        assert_eq!(core.len(), 10, "core should have 10 tools (6 NoteRead + 4 Utility)");
+        // NoteRead(6) + Utility(1 time.now + 2 memory + 1 recall + 1 plan) = 11
+        assert_eq!(core.len(), 11, "core should have 11 tools (6 NoteRead + 5 Utility)");
     }
 
     #[test]

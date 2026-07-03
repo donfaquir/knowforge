@@ -465,6 +465,15 @@ pub async fn run_agent_stream(
                 );
                 let error_message = result.as_ref().err().map(|e| e.as_str());
                 emit_tool_call_done(&app, &session_id, &tc.id, success, &result_summary, *duration_ms, error_message);
+
+                if tc.name == "plan.update_step" && success {
+                    if let (Some(step), Some(status)) = (
+                        tc.arguments.get("step").and_then(|v| v.as_u64()).map(|v| v as u32),
+                        tc.arguments.get("status").and_then(|v| v.as_str()),
+                    ) {
+                        emit_plan_step_update(&app, &session_id, step, status);
+                    }
+                }
             }
         }
 
@@ -962,6 +971,13 @@ fn emit_agent_done(app: &AppHandle, session_id: &str) {
     let _ = app.emit(
         "llm:agent-done",
         json!({ "sessionId": session_id }),
+    );
+}
+
+fn emit_plan_step_update(app: &AppHandle, session_id: &str, step: u32, status: &str) {
+    let _ = app.emit(
+        "llm:plan-step-update",
+        json!({ "sessionId": session_id, "step": step, "status": status }),
     );
 }
 

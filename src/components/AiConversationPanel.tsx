@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useAiConversationSession } from "../contexts/AiConversationSessionContext";
 import type { ThoughtFocusContext } from "../types/aiConversation";
 import { useAiNoteContext } from "../contexts/AiNoteContext";
-import type { ChatMessage, ToolCallDisplayInfo } from "../hooks/useWorkspaceAiConversations";
+import type { ChatMessage, PlanStepInfo, ToolCallDisplayInfo } from "../hooks/useWorkspaceAiConversations";
 import type { ReplyContextSources } from "../types/replyContextSources";
 import { hasReplyContextSourcesToShow } from "../types/replyContextSources";
 import type {
@@ -320,6 +320,8 @@ export function AiConversationPanel() {
   const parentSessionRef = useRef<string | null>(null);
   /** 映射：skillSessionId → { parentToolCallId } */
   const skillSessionMapRef = useRef<Map<string, { parentToolCallId: string }>>(new Map());
+
+  const activeStepRef = useRef<number | null>(null);
 
   /** Iter 5 #3：内置 skill manifest 缓存。skill 在后端 setup() 注册一次后不变，挂载时取一次即可。 */
   const [skillsCache, setSkillsCache] = useState<SkillManifestJson[]>([]);
@@ -968,11 +970,23 @@ export function AiConversationPanel() {
             });
             return;
           }
-          // 主会话的工具调用 → 添加到末尾 assistant 气泡的 toolCalls
+          if (p.toolName === "plan.update_step") return;
+          const currentStep = activeStepRef.current;
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
             if (last?.role !== "assistant") return prev;
+            if (currentStep != null && last.meta?.planSteps) {
+              const steps = last.meta.planSteps.map((s) =>
+                s.step === currentStep
+                  ? { ...s, toolCalls: [...s.toolCalls, newCall] }
+                  : s,
+              );
+              return [
+                ...next.slice(0, -1),
+                { ...last, meta: { ...last.meta, planSteps: steps } },
+              ];
+            }
             const existing = last.meta?.toolCalls ?? [];
             return [
               ...next.slice(0, -1),
@@ -1019,32 +1033,33 @@ export function AiConversationPanel() {
             });
             return;
           }
-          // 主会话的工具完成 → 从后向前搜索 toolCallId
           setMessages((prev) => {
-            let foundIndex = -1;
+            const patchTc = (tc: ToolCallDisplayInfo): ToolCallDisplayInfo =>
+              tc.toolCallId === p.toolCallId
+                ? { ...tc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage }
+                : tc;
+
             for (let i = prev.length - 1; i >= 0; i -= 1) {
               const m = prev[i];
               if (m.role !== "assistant") continue;
+
+              if (m.meta?.planSteps?.some((s) => s.toolCalls.some((tc) => tc.toolCallId === p.toolCallId))) {
+                const steps = m.meta.planSteps.map((s) => ({
+                  ...s,
+                  toolCalls: s.toolCalls.map(patchTc),
+                }));
+                const next = [...prev];
+                next[i] = { ...m, meta: { ...m.meta, planSteps: steps } };
+                return next;
+              }
+
               if (m.meta?.toolCalls?.some((tc) => tc.toolCallId === p.toolCallId)) {
-                foundIndex = i;
-                break;
+                const next = [...prev];
+                next[i] = { ...m, meta: { ...m.meta, toolCalls: m.meta.toolCalls!.map(patchTc) } };
+                return next;
               }
             }
-            if (foundIndex === -1) {
-              return prev;
-            }
-            const target = prev[foundIndex];
-            const updatedCalls = (target.meta?.toolCalls ?? []).map((tc) =>
-              tc.toolCallId === p.toolCallId
-                ? { ...tc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage }
-                : tc,
-            );
-            const next = [...prev];
-            next[foundIndex] = {
-              ...target,
-              meta: { ...target.meta, toolCalls: updatedCalls },
-            };
-            return next;
+            return prev;
           });
         },
       ),
@@ -1153,6 +1168,49 @@ export function AiConversationPanel() {
           });
         }
       }),
+      listen<{ sessionId: string; steps: { step: number; title: string }[] }>("llm:plan-steps", (e) => {
+        if (e.payload.sessionId !== activeSessionRef.current) return;
+        activeStepRef.current = null;
+        const planSteps: PlanStepInfo[] = e.payload.steps.map((s) => ({
+          step: s.step,
+          title: s.title,
+          status: "pending" as const,
+          toolCalls: [],
+        }));
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant") {
+            next[next.length - 1] = {
+              ...last,
+              meta: { ...last.meta, planSteps },
+            };
+          }
+          return next;
+        });
+      }),
+      listen<{ sessionId: string; step: number; status: string }>("llm:plan-step-update", (e) => {
+        if (e.payload.sessionId !== activeSessionRef.current) return;
+        const { step, status } = e.payload;
+        if (status === "in_progress") {
+          activeStepRef.current = step;
+        }
+        setMessages((prev) => {
+          const next = [...prev];
+          for (let i = next.length - 1; i >= 0; i--) {
+            const m = next[i];
+            if (m.role !== "assistant" || !m.meta?.planSteps) continue;
+            const steps = m.meta.planSteps.map((s) =>
+              s.step === step
+                ? { ...s, status: status as PlanStepInfo["status"] }
+                : s,
+            );
+            next[i] = { ...m, meta: { ...m.meta, planSteps: steps } };
+            break;
+          }
+          return next;
+        });
+      }),
       // Budget warning: tool call budget reaching 80%
       listen<{ sessionId: string; used: number; limit: number; type: string }>(
         "llm:budget-warning",
@@ -1260,6 +1318,7 @@ export function AiConversationPanel() {
         markNeedPersist();
         activeSessionRef.current = null;
         isAgentModeRef.current = false;
+        activeStepRef.current = null;
         setIsStreaming(false);
         setIsVaultSearching(false);
         setIsPlanning(false);
@@ -2200,7 +2259,103 @@ export function AiConversationPanel() {
               <div className={`ai-chat__bubble ai-chat__bubble--${m.role}`}>
                 {m.role === "assistant" ? (
                   <>
-                    {m.meta?.toolCalls && m.meta.toolCalls.length > 0 ? (
+                    {m.meta?.planSteps && m.meta.planSteps.length > 0 ? (
+                      <div className="ai-chat__plan-progress">
+                        {m.meta.planSteps.map((ps) => (
+                          <details
+                            key={ps.step}
+                            className={`ai-chat__plan-step ai-chat__plan-step--${ps.status}`}
+                            open={ps.status === "in_progress"}
+                          >
+                            <summary className="ai-chat__plan-step__header">
+                              <span className="ai-chat__plan-step__icon" aria-hidden={true}>
+                                {ps.status === "done" ? "✓" : ps.status === "in_progress" ? "⋯" : "○"}
+                              </span>
+                              <span className="ai-chat__plan-step__number">{ps.step}.</span>
+                              <span className="ai-chat__plan-step__title">{ps.title}</span>
+                            </summary>
+                            {ps.toolCalls.length > 0 && (
+                              <div className="ai-chat__tool-calls ai-chat__plan-step__tools">
+                                {ps.toolCalls.map((tc) => (
+                                  <details key={tc.toolCallId} className="ai-chat__tool-call-details">
+                                    <summary className={`ai-chat__tool-call ai-chat__tool-call--${tc.status}`}>
+                                      <span className="ai-chat__tool-call__icon" aria-hidden={true}>
+                                        {tc.status === "running" ? "⋯" : tc.status === "done" ? "✓" : "✗"}
+                                      </span>
+                                      <span className="ai-chat__tool-call__name">{tc.toolName}</span>
+                                      {tc.durationMs != null && (
+                                        <span className="ai-chat__tool-call__duration">
+                                          {(tc.durationMs / 1000).toFixed(1)}s
+                                        </span>
+                                      )}
+                                    </summary>
+                                    <div className="ai-chat__tool-call__detail">
+                                      {tc.inputSummary && (
+                                        <div className="ai-chat__tool-call__input">
+                                          <span className="ai-chat__tool-call__label">输入</span>
+                                          <code>{tc.inputSummary}</code>
+                                        </div>
+                                      )}
+                                      {tc.resultSummary && (
+                                        <div className="ai-chat__tool-call__result">
+                                          <span className="ai-chat__tool-call__label">结果</span>
+                                          <code>{tc.resultSummary}</code>
+                                        </div>
+                                      )}
+                                      {tc.errorMessage && (
+                                        <div className="ai-chat__tool-call__error">
+                                          <span className="ai-chat__tool-call__label">错误</span>
+                                          <code>{tc.errorMessage}</code>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </details>
+                                ))}
+                              </div>
+                            )}
+                          </details>
+                        ))}
+                        {m.meta.toolCalls && m.meta.toolCalls.length > 0 ? (
+                          <div className="ai-chat__tool-calls">
+                            {m.meta.toolCalls.map((tc) => (
+                              <details key={tc.toolCallId} className="ai-chat__tool-call-details">
+                                <summary className={`ai-chat__tool-call ai-chat__tool-call--${tc.status}`}>
+                                  <span className="ai-chat__tool-call__icon" aria-hidden={true}>
+                                    {tc.status === "running" ? "⋯" : tc.status === "done" ? "✓" : "✗"}
+                                  </span>
+                                  <span className="ai-chat__tool-call__name">{tc.toolName}</span>
+                                  {tc.durationMs != null && (
+                                    <span className="ai-chat__tool-call__duration">
+                                      {(tc.durationMs / 1000).toFixed(1)}s
+                                    </span>
+                                  )}
+                                </summary>
+                                <div className="ai-chat__tool-call__detail">
+                                  {tc.inputSummary && (
+                                    <div className="ai-chat__tool-call__input">
+                                      <span className="ai-chat__tool-call__label">输入</span>
+                                      <code>{tc.inputSummary}</code>
+                                    </div>
+                                  )}
+                                  {tc.resultSummary && (
+                                    <div className="ai-chat__tool-call__result">
+                                      <span className="ai-chat__tool-call__label">结果</span>
+                                      <code>{tc.resultSummary}</code>
+                                    </div>
+                                  )}
+                                  {tc.errorMessage && (
+                                    <div className="ai-chat__tool-call__error">
+                                      <span className="ai-chat__tool-call__label">错误</span>
+                                      <code>{tc.errorMessage}</code>
+                                    </div>
+                                  )}
+                                </div>
+                              </details>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : m.meta?.toolCalls && m.meta.toolCalls.length > 0 ? (
                       <div className="ai-chat__tool-calls">
                         {m.meta.toolCalls.map((tc) => (
                           <details key={tc.toolCallId} className="ai-chat__tool-call-details">
@@ -2290,7 +2445,7 @@ export function AiConversationPanel() {
                         Agent {m.meta.budgetWarning.used}/{m.meta.budgetWarning.limit} tool calls used
                       </div>
                     )}
-                    {m.meta?.planningText && (
+                    {!m.meta?.planSteps && m.meta?.planningText && (
                       <details className="ai-chat__planning-fold">
                         <summary>Plan</summary>
                         <AiAssistantMarkdown content={m.meta.planningText} />

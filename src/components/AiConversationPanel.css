@@ -306,3 +306,77 @@
   color: var(--fg-muted, #888);
   user-select: none;
 }
+
+/* Plan progress tree view */
+.ai-chat__plan-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.ai-chat__plan-step {
+  border: 1px solid var(--border-subtle, #e0e0e0);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.ai-chat__plan-step__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.9em;
+  line-height: 1.4;
+}
+
+.ai-chat__plan-step__header::-webkit-details-marker {
+  display: none;
+}
+
+.ai-chat__plan-step__icon {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.ai-chat__plan-step__number {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--fg-muted, #888);
+  font-size: 0.85em;
+}
+
+.ai-chat__plan-step__title {
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-chat__plan-step__tools {
+  margin: 0 8px 6px;
+  padding-left: 22px;
+}
+
+.ai-chat__plan-step--pending {
+  opacity: 0.6;
+}
+
+.ai-chat__plan-step--in_progress {
+  border-color: color-mix(in srgb, var(--kf-accent, #3b82f6) 60%, transparent);
+}
+
+.ai-chat__plan-step--in_progress .ai-chat__plan-step__icon {
+  color: var(--kf-accent, #3b82f6);
+  animation: ai-chat-tool-call-pulse 1.2s ease-in-out infinite;
+}
+
+.ai-chat__plan-step--done {
+  border-color: color-mix(in srgb, #16a34a 40%, transparent);
+}
+
+.ai-chat__plan-step--done .ai-chat__plan-step__icon {
+  color: #16a34a;
+}
