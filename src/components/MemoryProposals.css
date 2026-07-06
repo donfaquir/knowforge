@@ -68,6 +68,20 @@
   color: var(--crepe-color-on-surface-variant, #6b7280);
 }
 
+.memory-proposals__content {
+  font-size: 0.78rem;
+  color: var(--crepe-color-on-surface-variant, #6b7280);
+  margin: 4px 0 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--crepe-color-surface, #fff), transparent 20%);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
 .memory-proposals__reason {
   font-size: 0.82rem;
   color: var(--crepe-color-on-surface, #374151);
@@ -142,6 +156,11 @@
 
   .memory-proposals__item {
     background: color-mix(in srgb, var(--crepe-color-surface, #1f1f23), transparent 40%);
+  }
+
+  .memory-proposals__content {
+    background: color-mix(in srgb, var(--crepe-color-surface, #1f1f23), transparent 20%);
+    color: var(--crepe-color-on-surface-variant, #a1a1aa);
   }
 
   .memory-proposals__reason {

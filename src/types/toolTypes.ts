@@ -114,3 +114,4 @@ export interface ApprovalRequest {
   risk: Risk;
   effects: Effect[];
 }
+

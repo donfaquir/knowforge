@@ -230,6 +230,7 @@ pub async fn run_agent_stream(
 
     loop {
         iteration += 1;
+        emit_heartbeat(&app, &session_id, iteration);
         let est_tokens: usize = messages.iter().map(|m| m.content.len() / 3).sum();
         eprintln!(
             "[agent_loop] session={} iter={} msgs={} est_tokens={} tool_calls_so_far={}/{}",
@@ -371,12 +372,13 @@ pub async fn run_agent_stream(
         // 4. NormalizedToolCall already carries an ID (UUID v7 or server-provided)
         for tc in &normalized_calls {
             let input_summary = summarize_tool_input(&tc.arguments);
-            emit_tool_call_start(&app, &session_id, &tc.id, &tc.name, &input_summary);
+            let display_summary = generate_tool_display_summary(&tc.name, &tc.arguments);
+            emit_tool_call_start(&app, &session_id, &tc.id, &tc.name, &input_summary, &display_summary);
         }
 
         // 5. 并行执行工具（跳过循环调用；每个工具有独立超时，支持取消）
         let default_tool_timeout = Duration::from_millis(config.timeout_ms);
-        let results = join_all(normalized_calls.iter().enumerate().map(|(idx, tc)| {
+        let results_fut = join_all(normalized_calls.iter().enumerate().map(|(idx, tc)| {
             let skip = looped.get(idx).copied().unwrap_or(false);
             let cancel = cancel.clone();
             let registry = registry.clone();
@@ -394,12 +396,29 @@ pub async fn run_agent_stream(
                 if skip {
                     return (Err(format!("loop detected: '{}' called too many times with same arguments", tc.name)), 0u64);
                 }
+                // Human-in-the-loop approval runs first, OUTSIDE tool_timeout — the
+                // time the user spends deciding must not count against the tool's
+                // execution budget (it has its own 30-min backstop + cancel).
+                if let Err(e) = await_tool_approval(
+                    &app,
+                    &session_id,
+                    &registry,
+                    &conversation_id,
+                    &tc,
+                    &approval_state,
+                    &cancel,
+                )
+                .await
+                {
+                    return (Err(e), 0u64);
+                }
                 let tool_timeout = registry
                     .get(&tc.name)
                     .and_then(|t| t.timeout_ms())
                     .map(Duration::from_millis)
                     .unwrap_or(default_tool_timeout);
                 let nesting_depth = config.nesting_depth;
+                // Measured after approval so the duration reflects execution only.
                 let exec_start = std::time::Instant::now();
                 let result = tokio::select! {
                     res = tokio::time::timeout(tool_timeout, execute_tool(
@@ -412,7 +431,6 @@ pub async fn run_agent_stream(
                         app_bundle_resource_dir,
                         &conversation_id,
                         &tc,
-                        &approval_state,
                         &cancel,
                         nesting_depth,
                         Some(provider),
@@ -429,8 +447,18 @@ pub async fn run_agent_stream(
                 let duration_ms = exec_start.elapsed().as_millis() as u64;
                 (result, duration_ms)
             }
-        }))
-        .await;
+        }));
+        tokio::pin!(results_fut);
+        let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(10));
+        heartbeat_interval.tick().await;
+        let results = loop {
+            tokio::select! {
+                r = &mut results_fut => break r,
+                _ = heartbeat_interval.tick() => {
+                    emit_heartbeat(&app, &session_id, iteration);
+                }
+            }
+        };
 
         for (i, tc) in normalized_calls.iter().enumerate() {
             if let Some((result, duration_ms)) = results.get(i) {
@@ -449,6 +477,8 @@ pub async fn run_agent_stream(
                 );
                 let error_message = result.as_ref().err().map(|e| e.as_str());
                 emit_tool_call_done(&app, &session_id, &tc.id, success, &result_summary, *duration_ms, error_message);
+
+
             }
         }
 
@@ -695,22 +725,21 @@ where
     result
 }
 
+/// Human-in-the-loop approval gate for a tool call. Runs BEFORE and OUTSIDE the
+/// tool-execution timeout, so time the user spends deciding is not charged against
+/// the tool's execution budget (that timeout must only bound the actual invocation).
+/// Returns Ok(()) to proceed, or Err to abort (forbidden / denied / cancelled /
+/// approval backstop expired).
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn execute_tool(
+pub(crate) async fn await_tool_approval(
     app: &AppHandle,
     session_id: &str,
     registry: &Arc<ToolRegistry>,
-    ctx_factory: &Arc<ToolContextFactory>,
-    workspace_root: &PathBuf,
-    app_cache_dir: Option<PathBuf>,
-    app_bundle_resource_dir: Option<PathBuf>,
     conversation_id: &str,
     tc: &NormalizedToolCall,
     approval_state: &Arc<ToolApprovalState>,
     cancel: &CancellationToken,
-    nesting_depth: u8,
-    provider: Option<Arc<dyn LlmProvider>>,
-) -> Result<Value, String> {
+) -> Result<(), String> {
     let tool = registry
         .get(&tc.name)
         .ok_or_else(|| format!("tool not found: {}", tc.name))?;
@@ -723,14 +752,13 @@ pub(crate) async fn execute_tool(
         manifest_policy
     };
     match &policy {
-        ApprovalPolicy::Auto => { /* 直接放行 */ }
-        ApprovalPolicy::Forbidden => {
-            return Err(format!("tool '{}' is forbidden", tc.name));
-        }
+        ApprovalPolicy::Auto => Ok(()),
+        ApprovalPolicy::Forbidden => Err(format!("tool '{}' is forbidden", tc.name)),
         ApprovalPolicy::ConfirmOncePerSession
             if approval_state.is_pre_approved(conversation_id, &tc.name) =>
         {
             // 会话级缓存命中,放行
+            Ok(())
         }
         ApprovalPolicy::ConfirmEach | ApprovalPolicy::ConfirmOncePerSession => {
             let (approval_id, rx, _guard) = approval_state.register();
@@ -751,7 +779,7 @@ pub(crate) async fn execute_tool(
             );
 
             let decision = tokio::select! {
-                res = tokio::time::timeout(Duration::from_secs(120), rx) => res,
+                res = tokio::time::timeout(TOOL_APPROVAL_TIMEOUT, rx) => res,
                 _ = cancel.cancelled() => {
                     return Err("cancelled".to_string());
                 }
@@ -762,22 +790,34 @@ pub(crate) async fn execute_tool(
                     if matches!(policy, ApprovalPolicy::ConfirmOncePerSession) {
                         approval_state.remember_approval(conversation_id, &tc.name);
                     }
+                    Ok(())
                 }
-                Ok(Ok(false)) => {
-                    return Err(format!("user denied approval for tool '{}'", tc.name));
-                }
-                Ok(Err(_)) => {
-                    return Err("approval channel closed unexpectedly".to_string());
-                }
-                Err(_) => {
-                    return Err(format!(
-                        "approval timed out for tool '{}'",
-                        tc.name
-                    ));
-                }
+                Ok(Ok(false)) => Err(format!("user denied approval for tool '{}'", tc.name)),
+                Ok(Err(_)) => Err("approval channel closed unexpectedly".to_string()),
+                Err(_) => Err(format!("approval timed out for tool '{}'", tc.name)),
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn execute_tool(
+    app: &AppHandle,
+    session_id: &str,
+    registry: &Arc<ToolRegistry>,
+    ctx_factory: &Arc<ToolContextFactory>,
+    workspace_root: &PathBuf,
+    app_cache_dir: Option<PathBuf>,
+    app_bundle_resource_dir: Option<PathBuf>,
+    conversation_id: &str,
+    tc: &NormalizedToolCall,
+    cancel: &CancellationToken,
+    nesting_depth: u8,
+    provider: Option<Arc<dyn LlmProvider>>,
+) -> Result<Value, String> {
+    let tool = registry
+        .get(&tc.name)
+        .ok_or_else(|| format!("tool not found: {}", tc.name))?;
 
     tool.validate_input(&tc.arguments)
         .map_err(|e| format!("validation failed: {}", e.message))?;
@@ -906,7 +946,7 @@ pub fn list_for_llm_to_tools(manifests: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-fn emit_tool_call_start(app: &AppHandle, session_id: &str, tool_call_id: &str, tool_name: &str, input_summary: &str) {
+fn emit_tool_call_start(app: &AppHandle, session_id: &str, tool_call_id: &str, tool_name: &str, input_summary: &str, display_summary: &str) {
     let _ = app.emit(
         "llm:tool-call-start",
         json!({
@@ -914,8 +954,45 @@ fn emit_tool_call_start(app: &AppHandle, session_id: &str, tool_call_id: &str, t
             "toolCallId": tool_call_id,
             "toolName": tool_name,
             "inputSummary": input_summary,
+            "displaySummary": display_summary,
         }),
     );
+}
+
+fn generate_tool_display_summary(name: &str, args: &Value) -> String {
+    let get_str = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or("");
+
+    match name {
+        "note.list" => "List notes".into(),
+        "note.read" => format!("Read {}", truncate_str(get_str("rel_path"), 40)),
+        "note.create" => format!("Create {}", truncate_str(get_str("rel_path"), 40)),
+        "note.append" => format!("Append to {}", truncate_str(get_str("rel_path"), 40)),
+        "note.write_section" => format!("Edit {}", truncate_str(get_str("rel_path"), 40)),
+
+        "vault.search_keyword" => format!("Search: {}", truncate_str(get_str("query"), 40)),
+        "vault.semantic_search" => format!("Semantic search: {}", truncate_str(get_str("query"), 40)),
+
+        "web.search" => format!("Web search: {}", truncate_str(get_str("query"), 40)),
+        "web.read_page" => format!("Read page: {}", truncate_str(get_str("url"), 50)),
+        "web.read_pdf" => format!("Read PDF: {}", truncate_str(get_str("url"), 50)),
+        "web.download" => format!("Download: {}", truncate_str(get_str("url"), 50)),
+
+        "thought.list" => "List thoughts".into(),
+        "thought.read" => format!("Read thought {}", truncate_str(get_str("thought_id"), 20)),
+        "thought.create" => "Create thought".into(),
+
+        "graph.query_topic_network" => format!("Query graph: {}", truncate_str(get_str("topic"), 30)),
+        "link.suggest_related" => "Suggest related links".into(),
+
+        "memory.save" => format!("Save memory: {}", truncate_str(get_str("category"), 20)),
+        "memory.forget" => "Forget memory".into(),
+
+        "tool.recall" => format!("Recall: {}", truncate_str(get_str("tool_call_id"), 20)),
+
+        n if n.starts_with("skill.") => format!("Skill: {}", &n[6..]),
+
+        _ => name.to_string(),
+    }
 }
 
 fn emit_tool_call_done(app: &AppHandle, session_id: &str, tool_call_id: &str, success: bool, result_summary: &str, duration_ms: u64, error_message: Option<&str>) {
@@ -936,6 +1013,13 @@ fn emit_agent_done(app: &AppHandle, session_id: &str) {
     let _ = app.emit(
         "llm:agent-done",
         json!({ "sessionId": session_id }),
+    );
+}
+
+fn emit_heartbeat(app: &AppHandle, session_id: &str, loop_iteration: u32) {
+    let _ = app.emit(
+        "llm:heartbeat",
+        json!({ "sessionId": session_id, "loopIteration": loop_iteration }),
     );
 }
 
@@ -993,6 +1077,12 @@ fn summarize_tool_input(args: &Value) -> String {
 }
 
 const TASK_CONTEXT_HEADER: &str = "# Task Context";
+
+/// Backstop timeout for tool-call approval. Approval is human-in-the-loop, so we
+/// wait patiently for the user; this only guards against a request that is
+/// abandoned entirely (never answered, never cancelled) holding the run open
+/// forever. On expiry the tool is denied.
+const TOOL_APPROVAL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 const TASK_EXTRACT_PROMPT: &str = "\
 From the conversation below, extract the user's task:

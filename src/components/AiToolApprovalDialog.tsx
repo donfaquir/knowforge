@@ -20,7 +20,7 @@ export function AiToolApprovalDialog({ request, onResolve }: AiToolApprovalDialo
     if (request) onResolve(request.approvalId, false);
   }, [request, onResolve]);
 
-  // 30s 自动 deny 由后端兜底；前端不响应 Escape 以避免误关行为不明
+  // 后端有 30 分钟兜底超时（到期自动 deny）；前端不响应 Escape 以避免误关行为不明
   useEffect(() => {
     if (!request) return;
     const handler = (e: KeyboardEvent) => {

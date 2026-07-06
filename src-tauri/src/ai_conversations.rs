@@ -122,6 +122,8 @@ struct PersistedMessageDisk {
     skill_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     skill_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Value>,
 }
 
 /// 会话级「想法聚焦」上下文（磁盘与 LLM 字段对齐）
@@ -249,6 +251,8 @@ pub struct PersistedMessageOut {
     pub skill_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -299,6 +303,8 @@ pub struct PersistedMessageIn {
     pub skill_id: Option<String>,
     #[serde(default)]
     pub skill_name: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -358,6 +364,7 @@ fn validate_messages_for_save(msgs: &[PersistedMessageIn]) -> Result<Vec<Persist
             reply_context_sources: m.reply_context_sources.clone(),
             skill_id: m.skill_id.clone(),
             skill_name: m.skill_name.clone(),
+            tool_calls: m.tool_calls.clone(),
         });
     }
     Ok(out)
@@ -473,6 +480,7 @@ fn load_ai_conversation_for_subdir(root: &Path, subdir: &str, args: LoadAiConver
             reply_context_sources: m.reply_context_sources,
             skill_id: m.skill_id,
             skill_name: m.skill_name,
+            tool_calls: m.tool_calls,
         })
         .collect();
     Ok(ConversationBodyOut {
@@ -642,6 +650,7 @@ mod tests {
                         reply_context_sources: None,
                         skill_id: None,
                         skill_name: None,
+                        tool_calls: None,
                     },
                     PersistedMessageIn {
                         id: "a1".to_string(),
@@ -651,6 +660,7 @@ mod tests {
                         reply_context_sources: None,
                         skill_id: None,
                         skill_name: None,
+                        tool_calls: None,
                     },
                 ],
                 set_as_active: Some(true),
@@ -680,6 +690,7 @@ mod tests {
             reply_context_sources: None,
             skill_id: None,
             skill_name: None,
+            tool_calls: None,
         }];
         assert_eq!(compute_title_from_messages(&msgs), "New chat");
     }

@@ -290,19 +290,3 @@
   }
 }
 
-/* Planning phase: live streaming + fold */
-.ai-chat__planning-live {
-  opacity: 0.5;
-}
-.ai-chat__planning-fold {
-  margin-bottom: 0.5em;
-  border: 1px solid var(--border-subtle, #e0e0e0);
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 0.9em;
-}
-.ai-chat__planning-fold summary {
-  cursor: pointer;
-  color: var(--fg-muted, #888);
-  user-select: none;
-}
