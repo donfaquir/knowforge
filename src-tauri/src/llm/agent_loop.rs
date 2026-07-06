@@ -230,6 +230,7 @@ pub async fn run_agent_stream(
 
     loop {
         iteration += 1;
+        emit_heartbeat(&app, &session_id, iteration);
         let est_tokens: usize = messages.iter().map(|m| m.content.len() / 3).sum();
         eprintln!(
             "[agent_loop] session={} iter={} msgs={} est_tokens={} tool_calls_so_far={}/{}",
@@ -377,7 +378,7 @@ pub async fn run_agent_stream(
 
         // 5. 并行执行工具（跳过循环调用；每个工具有独立超时，支持取消）
         let default_tool_timeout = Duration::from_millis(config.timeout_ms);
-        let results = join_all(normalized_calls.iter().enumerate().map(|(idx, tc)| {
+        let results_fut = join_all(normalized_calls.iter().enumerate().map(|(idx, tc)| {
             let skip = looped.get(idx).copied().unwrap_or(false);
             let cancel = cancel.clone();
             let registry = registry.clone();
@@ -446,8 +447,18 @@ pub async fn run_agent_stream(
                 let duration_ms = exec_start.elapsed().as_millis() as u64;
                 (result, duration_ms)
             }
-        }))
-        .await;
+        }));
+        tokio::pin!(results_fut);
+        let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(10));
+        heartbeat_interval.tick().await;
+        let results = loop {
+            tokio::select! {
+                r = &mut results_fut => break r,
+                _ = heartbeat_interval.tick() => {
+                    emit_heartbeat(&app, &session_id, iteration);
+                }
+            }
+        };
 
         for (i, tc) in normalized_calls.iter().enumerate() {
             if let Some((result, duration_ms)) = results.get(i) {
@@ -1002,6 +1013,13 @@ fn emit_agent_done(app: &AppHandle, session_id: &str) {
     let _ = app.emit(
         "llm:agent-done",
         json!({ "sessionId": session_id }),
+    );
+}
+
+fn emit_heartbeat(app: &AppHandle, session_id: &str, loop_iteration: u32) {
+    let _ = app.emit(
+        "llm:heartbeat",
+        json!({ "sessionId": session_id, "loopIteration": loop_iteration }),
     );
 }
 

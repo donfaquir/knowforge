@@ -198,20 +198,201 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
     let disposed = false;
     const pending: UnlistenFn[] = [];
 
+    const WATCHDOG_TIMEOUT_MS = 30_000;
+    let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function resetWatchdog() {
+      if (watchdogTimer) clearTimeout(watchdogTimer);
+      watchdogTimer = setTimeout(() => {
+        activeSessionRef.current = null;
+        isAgentModeRef.current = false;
+        parentSessionRef.current = null;
+        setIsStreaming(false);
+        setMessages((prev) => finalizeStreamingAssistant(prev));
+        setErrorBanner("连接超时，请重试");
+      }, WATCHDOG_TIMEOUT_MS);
+    }
+
+    function clearWatchdog() {
+      if (watchdogTimer) {
+        clearTimeout(watchdogTimer);
+        watchdogTimer = null;
+      }
+    }
+
+    // --- Event buffer: holds events whose prerequisites haven't arrived yet ---
+    type PendingEvent = { type: string; payload: unknown; receivedAt: number };
+    const pendingEvents = new Map<string, PendingEvent[]>();
+    const BUFFER_TIMEOUT_MS = 30_000;
+
+    function bufferEvent(waitKey: string, type: string, payload: unknown) {
+      const queue = pendingEvents.get(waitKey) || [];
+      queue.push({ type, payload, receivedAt: Date.now() });
+      pendingEvents.set(waitKey, queue);
+    }
+
+    function drainBuffer(waitKey: string): PendingEvent[] {
+      const queue = pendingEvents.get(waitKey);
+      if (!queue?.length) return [];
+      pendingEvents.delete(waitKey);
+      const now = Date.now();
+      return queue.filter((ev) => {
+        if (now - ev.receivedAt > BUFFER_TIMEOUT_MS) {
+          console.warn(`[event-buffer] dropped stale ${ev.type} for key=${waitKey}`);
+          return false;
+        }
+        return true;
+      });
+    }
+
+    function applyBufferedToolCallEvent(msgs: ChatMessage[], ev: PendingEvent): ChatMessage[] {
+      const p = ev.payload as Record<string, unknown>;
+      switch (ev.type) {
+        case "tool-call-done": {
+          const toolCallId = p.toolCallId as string;
+          const success = p.success as boolean;
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const m = msgs[i];
+            if (m.role !== "assistant") continue;
+            if (m.meta?.toolCalls?.some((tc) => tc.toolCallId === toolCallId)) {
+              const next = [...msgs];
+              next[i] = {
+                ...m,
+                meta: {
+                  ...m.meta,
+                  toolCalls: m.meta!.toolCalls!.map((tc) => {
+                    if (tc.toolCallId !== toolCallId) return tc;
+                    if (tc.status === "done" || tc.status === "error") return tc;
+                    return { ...tc, status: (success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary as string | undefined, durationMs: p.durationMs as number | undefined, errorMessage: p.errorMessage as string | undefined };
+                  }),
+                },
+              };
+              return next;
+            }
+          }
+          return msgs;
+        }
+        case "tool-call-done-skill": {
+          const parentToolCallId = p._parentToolCallId as string;
+          const toolCallId = p.toolCallId as string;
+          const success = p.success as boolean;
+          return findAndPatchToolCall(msgs, parentToolCallId, (tc) => ({
+            ...tc,
+            skillToolCalls: (tc.skillToolCalls || []).map((stc) =>
+              stc.toolCallId === toolCallId
+                ? (stc.status === "done" || stc.status === "error") ? stc : { ...stc, status: (success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary as string | undefined, durationMs: p.durationMs as number | undefined, errorMessage: p.errorMessage as string | undefined }
+                : stc,
+            ),
+          })) ?? msgs;
+        }
+        case "stream-chunk-skill": {
+          const parentToolCallId = p._parentToolCallId as string;
+          const delta = p.delta as string;
+          return findAndPatchToolCall(msgs, parentToolCallId, (tc) => ({
+            ...tc,
+            skillContent: (tc.skillContent || "") + delta,
+          })) ?? msgs;
+        }
+        case "tool-call-start-skill": {
+          const parentToolCallId = p._parentToolCallId as string;
+          const newCall = p._newCall as ToolCallDisplayInfo;
+          return findAndPatchToolCall(msgs, parentToolCallId, (tc) => {
+            if (tc.skillToolCalls?.some((stc) => stc.toolCallId === newCall.toolCallId)) return tc;
+            return { ...tc, skillToolCalls: [...(tc.skillToolCalls || []), newCall] };
+          }) ?? msgs;
+        }
+        case "skill-spawn": {
+          const parentToolCallId = p.parentToolCallId as string;
+          return findAndPatchToolCall(msgs, parentToolCallId, (tc) => {
+            if (tc.skillId) return tc;
+            return { ...tc, skillId: p.skillId as string, skillName: p.skillName as string, skillContent: "", skillToolCalls: [], skillStreaming: true };
+          }) ?? msgs;
+        }
+        case "agent-done-skill": {
+          const parentToolCallId = p._parentToolCallId as string;
+          return findAndPatchToolCall(msgs, parentToolCallId, (tc) => ({
+            ...tc,
+            skillStreaming: false,
+          })) ?? msgs;
+        }
+        default:
+          return msgs;
+      }
+    }
+
+    function flushToolCallBuffer(msgs: ChatMessage[], toolCallId: string): ChatMessage[] {
+      const events = drainBuffer(toolCallId);
+      let current = msgs;
+      for (const ev of events) {
+        current = applyBufferedToolCallEvent(current, ev);
+      }
+      return current;
+    }
+
+    function applyBufferedAssistantEvent(msgs: ChatMessage[], ev: PendingEvent): ChatMessage[] {
+      const p = ev.payload as Record<string, unknown>;
+      switch (ev.type) {
+        case "tool-call-start": {
+          const next = [...msgs];
+          const last = next[next.length - 1];
+          if (last?.role !== "assistant") return msgs;
+          const existing = last.meta?.toolCalls ?? [];
+          const toolCallId = p.toolCallId as string;
+          if (existing.some((tc) => tc.toolCallId === toolCallId)) return msgs;
+          const newCall: ToolCallDisplayInfo = {
+            toolCallId,
+            toolName: p.toolName as string,
+            displaySummary: (p.displaySummary as string) || undefined,
+            status: "running",
+            inputSummary: p.inputSummary as string | undefined,
+          };
+          let result: ChatMessage[] = [
+            ...next.slice(0, -1),
+            { ...last, meta: { ...last.meta, toolCalls: [...existing, newCall] } },
+          ];
+          result = flushToolCallBuffer(result, toolCallId);
+          return result;
+        }
+        case "context-ready": {
+          const replyContextSources = p.replyContextSources as ReplyContextSources;
+          const idx = msgs.findIndex((m) => m.role === "assistant" && m.streaming);
+          if (idx < 0) return msgs;
+          const next = [...msgs];
+          next[idx] = { ...next[idx], meta: { ...next[idx].meta, replyContextSources } };
+          return next;
+        }
+        default:
+          return msgs;
+      }
+    }
+
+    function flushAssistantBuffer(msgs: ChatMessage[]): ChatMessage[] {
+      const events = drainBuffer("assistant-msg");
+      let current = msgs;
+      for (const ev of events) {
+        current = applyBufferedAssistantEvent(current, ev);
+      }
+      return current;
+    }
+
     void Promise.all([
       listen<{ sessionId: string; delta: string }>("llm:stream-chunk", (e) => {
         const p = e.payload;
         if (p.sessionId !== activeSessionRef.current) {
           return;
         }
+        resetWatchdog();
         const skillMapping = skillSessionMapRef.current.get(p.sessionId);
         if (skillMapping) {
-          setMessages((prev) =>
-            findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
+          setMessages((prev) => {
+            const patched = findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
               ...tc,
               skillContent: (tc.skillContent || "") + p.delta,
-            })) ?? prev,
-          );
+            }));
+            if (patched) return patched;
+            bufferEvent(skillMapping.parentToolCallId, "stream-chunk-skill", { ...p, _parentToolCallId: skillMapping.parentToolCallId });
+            return prev;
+          });
           return;
         }
         setMessages((prev) => {
@@ -226,6 +407,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
                 ? { ...last.meta, timing: { ...last.meta.timing, firstTokenMs: Date.now() } }
                 : last.meta,
             };
+            if (isFirstToken) return flushAssistantBuffer(next);
           }
           return next;
         });
@@ -235,6 +417,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
         if (p.sessionId !== activeSessionRef.current) {
           return;
         }
+        clearWatchdog();
         setIsVaultSearching(false);
         if (isAgentModeRef.current) {
           return;
@@ -408,6 +591,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
         if (p.sessionId !== activeSessionRef.current) {
           return;
         }
+        clearWatchdog();
         if (parentSessionRef.current) {
           const parent = parentSessionRef.current;
           parentSessionRef.current = null;
@@ -471,6 +655,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
           if (p.sessionId !== activeSessionRef.current) {
             return;
           }
+          resetWatchdog();
           const skillMapping = skillSessionMapRef.current.get(p.sessionId);
           const newCall: ToolCallDisplayInfo = {
             toolCallId: p.toolCallId,
@@ -480,26 +665,35 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
             inputSummary: p.inputSummary,
           };
           if (skillMapping) {
-            setMessages((prev) =>
-              findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
-                ...tc,
-                skillToolCalls: [...(tc.skillToolCalls || []), newCall],
-              })) ?? prev,
-            );
+            setMessages((prev) => {
+              const patched = findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => {
+                if (tc.skillToolCalls?.some((stc) => stc.toolCallId === p.toolCallId)) return tc;
+                return { ...tc, skillToolCalls: [...(tc.skillToolCalls || []), newCall] };
+              });
+              if (patched) return flushToolCallBuffer(patched, p.toolCallId);
+              bufferEvent(skillMapping.parentToolCallId, "tool-call-start-skill", { ...p, _parentToolCallId: skillMapping.parentToolCallId, _newCall: newCall });
+              return prev;
+            });
             return;
           }
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
-            if (last?.role !== "assistant") return prev;
+            if (last?.role !== "assistant") {
+              bufferEvent("assistant-msg", "tool-call-start", p);
+              return prev;
+            }
             const existing = last.meta?.toolCalls ?? [];
-            return [
+            if (existing.some((tc) => tc.toolCallId === p.toolCallId)) return prev;
+            let result: ChatMessage[] = [
               ...next.slice(0, -1),
               {
                 ...last,
                 meta: { ...last.meta, toolCalls: [...existing, newCall] },
               },
             ];
+            result = flushToolCallBuffer(result, p.toolCallId);
+            return result;
           });
         },
       ),
@@ -510,25 +704,30 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
           if (p.sessionId !== activeSessionRef.current) {
             return;
           }
+          resetWatchdog();
           const skillMapping = skillSessionMapRef.current.get(p.sessionId);
           if (skillMapping) {
-            setMessages((prev) =>
-              findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
+            setMessages((prev) => {
+              const patched = findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
                 ...tc,
                 skillToolCalls: (tc.skillToolCalls || []).map((stc) =>
                   stc.toolCallId === p.toolCallId
-                    ? { ...stc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage }
+                    ? (stc.status === "done" || stc.status === "error") ? stc : { ...stc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage }
                     : stc,
                 ),
-              })) ?? prev,
-            );
+              }));
+              if (patched) return patched;
+              bufferEvent(skillMapping.parentToolCallId, "tool-call-done-skill", { ...p, _parentToolCallId: skillMapping.parentToolCallId });
+              return prev;
+            });
             return;
           }
           setMessages((prev) => {
-            const patchTc = (tc: ToolCallDisplayInfo): ToolCallDisplayInfo =>
-              tc.toolCallId === p.toolCallId
-                ? { ...tc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage }
-                : tc;
+            const patchTc = (tc: ToolCallDisplayInfo): ToolCallDisplayInfo => {
+              if (tc.toolCallId !== p.toolCallId) return tc;
+              if (tc.status === "done" || tc.status === "error") return tc;
+              return { ...tc, status: (p.success ? "done" : "error") as ToolCallDisplayInfo["status"], resultSummary: p.resultSummary, durationMs: p.durationMs, errorMessage: p.errorMessage };
+            };
 
             for (let i = prev.length - 1; i >= 0; i -= 1) {
               const m = prev[i];
@@ -540,6 +739,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
                 return next;
               }
             }
+            bufferEvent(p.toolCallId, "tool-call-done", p);
             return prev;
           });
         },
@@ -549,6 +749,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
         if (p.sessionId !== activeSessionRef.current) {
           return;
         }
+        resetWatchdog();
         setActiveApproval((cur) => {
           if (cur === null) {
             return p;
@@ -577,26 +778,27 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
         if (conversationId && p.conversationId !== conversationId) {
           return;
         }
+        resetWatchdog();
         parentSessionRef.current = activeSessionRef.current;
         activeSessionRef.current = p.sessionId;
         skillSessionMapRef.current.set(p.sessionId, {
           parentToolCallId: p.parentToolCallId,
         });
-        setMessages((prev) =>
-          findAndPatchToolCall(prev, p.parentToolCallId, (tc) => ({
-            ...tc,
-            skillId: p.skillId,
-            skillName: p.skillName,
-            skillContent: "",
-            skillToolCalls: [],
-            skillStreaming: true,
-          })) ?? prev,
-        );
+        setMessages((prev) => {
+          const patched = findAndPatchToolCall(prev, p.parentToolCallId, (tc) => {
+            if (tc.skillId) return tc;
+            return { ...tc, skillId: p.skillId, skillName: p.skillName, skillContent: "", skillToolCalls: [], skillStreaming: true };
+          });
+          if (patched) return patched;
+          bufferEvent(p.parentToolCallId, "skill-spawn", p);
+          return prev;
+        });
       }),
       listen<{ sessionId: string; used: number; limit: number; type: string }>(
         "llm:budget-warning",
         (e) => {
           if (e.payload.sessionId !== activeSessionRef.current) return;
+          resetWatchdog();
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
@@ -621,6 +823,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
       }>("llm:context-ready", (e) => {
         const { sessionId, snippets, meta, replyContextSources } = e.payload;
         if (sessionId !== activeSessionRef.current) return;
+        resetWatchdog();
 
         if (snippets.length > 0 && meta) {
           const paths = snippets.map((s) => s.relPath).join(", ");
@@ -649,7 +852,10 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
 
         setMessages((prev) => {
           const idx = prev.findIndex((m) => m.role === "assistant" && m.streaming);
-          if (idx < 0) return prev;
+          if (idx < 0) {
+            bufferEvent("assistant-msg", "context-ready", { replyContextSources });
+            return prev;
+          }
           const next = [...prev];
           next[idx] = { ...next[idx], meta: { ...next[idx].meta, replyContextSources } };
           return next;
@@ -659,6 +865,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
       }),
       listen<{ sessionId: string }>("llm:agent-done", (e) => {
         const sid = e.payload.sessionId;
+        clearWatchdog();
         const skillMapping = skillSessionMapRef.current.get(sid);
 
         if (skillMapping) {
@@ -668,12 +875,15 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
           }
           parentSessionRef.current = null;
 
-          setMessages((prev) =>
-            findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
+          setMessages((prev) => {
+            const patched = findAndPatchToolCall(prev, skillMapping.parentToolCallId, (tc) => ({
               ...tc,
               skillStreaming: false,
-            })) ?? prev,
-          );
+            }));
+            if (patched) return patched;
+            bufferEvent(skillMapping.parentToolCallId, "agent-done-skill", { _parentToolCallId: skillMapping.parentToolCallId });
+            return prev;
+          });
           return;
         }
 
@@ -708,6 +918,12 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
           return strippedPack.messages;
         });
       }),
+      listen<{ sessionId: string; loopIteration: number }>("llm:heartbeat", (e) => {
+        const p = e.payload;
+        if (p.sessionId !== activeSessionRef.current &&
+            p.sessionId !== parentSessionRef.current) return;
+        resetWatchdog();
+      }),
     ]).then((unlisteners) => {
       if (disposed) {
         unlisteners.forEach((u) => void u());
@@ -718,6 +934,8 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
 
     return () => {
       disposed = true;
+      clearWatchdog();
+      pendingEvents.clear();
       pending.forEach((u) => void u());
     };
   }, [
