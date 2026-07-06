@@ -1527,6 +1527,11 @@ export function AiConversationPanel() {
                       <span className="memory-proposals__target">{p.target}</span>
                     )}
                   </div>
+                  {p.content != null && (
+                    <pre className="memory-proposals__content">
+                      {typeof p.content === "string" ? p.content : JSON.stringify(p.content, null, 2)}
+                    </pre>
+                  )}
                   <p className="memory-proposals__reason">{p.reason}</p>
                   <div className="memory-proposals__buttons">
                     <button
