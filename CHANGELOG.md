@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.4] - 2026-07-06
+
+### Added
+- 后端心跳事件（`llm:heartbeat`），agent loop 迭代及工具执行期间每 10 秒发送
+- 前端 watchdog 定时器，30 秒无事件自动恢复 streaming 状态
+- 事件缓冲队列：前置事件未到时缓冲后续事件，前置满足后自动冲刷
+- 记忆提案卡片展示完整 content 字段（之前仅显示推荐原因）
+
+### Changed
+- Planning 模式从 Phase A/B 两阶段简化为单次 agent loop 执行
+- AiConversationPanel 拆分：提取 ToolCallItem、MessageBubble 组件和 useAgentEventHandlers hook（-31%）
+
+### Fixed
+- 事件处理器幂等化：tool-call-start / skill-spawn / tool-call-done 防重复
+- context-guard 使用消息计数替代索引，避免快照漂移
+- 工具审批等待时间不再计入工具超时
+
 ## [0.7.3] - 2026-07-01
 
 ### Added
