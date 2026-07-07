@@ -233,6 +233,23 @@ body {
   color: var(--fg-default, #333);
 }
 
+.activity-bar__btn[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: #1a1a1a;
+  color: #f4f4f5;
+  pointer-events: none;
+  z-index: 100;
+}
+
 .activity-bar__btn--active {
   color: var(--fg-default, #1a1a1a);
 }
@@ -261,6 +278,10 @@ body {
   }
   .activity-bar__btn--active {
     color: var(--fg-default, #eee);
+  }
+  .activity-bar__btn[data-tooltip]:hover::after {
+    background: #e4e4e7;
+    color: #18181b;
   }
 }
 

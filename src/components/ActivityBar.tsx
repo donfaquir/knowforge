@@ -169,7 +169,7 @@ export function ActivityBar({
               type="button"
               className={`activity-bar__btn${active ? " activity-bar__btn--active" : ""}`}
               aria-label={t(VIEW_I18N_KEYS[view])}
-              title={t(VIEW_I18N_KEYS[view])}
+              data-tooltip={t(VIEW_I18N_KEYS[view])}
               aria-pressed={active}
               onClick={() => onViewChange(view)}
             >
@@ -184,7 +184,7 @@ export function ActivityBar({
           type="button"
           className="activity-bar__btn"
           aria-label={t("activityBar.report")}
-          title={t("activityBar.report")}
+          data-tooltip={t("activityBar.report")}
           onClick={onOpenCognitiveReport}
         >
           <ReportIcon />
@@ -193,7 +193,7 @@ export function ActivityBar({
           type="button"
           className="activity-bar__btn"
           aria-label={t("activityBar.settings")}
-          title={t("activityBar.settings")}
+          data-tooltip={t("activityBar.settings")}
           onClick={onOpenSettings}
         >
           <SettingsIcon />
