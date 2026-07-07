@@ -287,6 +287,11 @@ body {
   border-right: none;
 }
 
+.layout.layout--sidebar-collapsed .app-top-toolbar__open,
+.layout.layout--sidebar-collapsed .app-top-toolbar__thought-hub {
+  display: none;
+}
+
 .app-top-toolbar__editor {
   flex: 1;
   min-width: 0;
