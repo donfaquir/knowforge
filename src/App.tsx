@@ -191,7 +191,7 @@ function App() {
   const rightPanelFillRemainder = rightPanelTab === "ai";
   const rightPanelMaxWidth = useRightPanelMaxWidthPx({
     fillRemainder: rightPanelFillRemainder,
-    leftSidebarPx: sidebarOpen ? leftResizable.width : 0,
+    leftSidebarPx: sidebarOpen ? leftResizable.width : 36,
   });
   const rightResizable = useResizable({
     side: "right",
@@ -1023,7 +1023,7 @@ function App() {
       className={`layout${showRightColumn && leftPanelView === "files" ? " layout--with-right-panel" : ""}${tauriRuntime ? " layout--tauri" : ""}${sidebarOpen ? "" : " layout--sidebar-collapsed"}${titlebarPlatformClass}${anyDragging ? " layout--resizing" : ""}`}
       style={
         {
-          "--sidebar-width": sidebarOpen ? `${leftResizable.width}px` : undefined,
+          "--sidebar-width": sidebarOpen ? `${leftResizable.width}px` : "36px",
           "--right-panel-width": showRightColumn && leftPanelView === "files" ? `${rightResizable.width}px` : undefined,
         } as React.CSSProperties
       }
@@ -1323,7 +1323,6 @@ function App() {
         id="app-file-directory-pane"
         className="app-sidebar-column"
         {...tauriWindowDragProps}
-        aria-hidden={!sidebarOpen}
       >
         <ActivityBar
           activeView={leftPanelView}

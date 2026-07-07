@@ -87,13 +87,13 @@ body {
   grid-template-columns: var(--sidebar-width, 196px) minmax(0, 1fr) var(--right-panel-width);
 }
 
-/* 收起侧栏：去掉首列，主区占满下方 */
+/* 收起侧栏：首列缩到 Activity Bar 宽度（36px） */
 .layout.layout--sidebar-collapsed {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 36px minmax(0, 1fr);
 }
 
 .layout.layout--sidebar-collapsed.layout--with-right-panel {
-  grid-template-columns: minmax(0, 1fr) var(--right-panel-width);
+  grid-template-columns: 36px minmax(0, 1fr) var(--right-panel-width);
 }
 
 /* 顶栏横跨整窗：左侧固定宽（与下方文件列对齐）+ 标签区 */
@@ -182,7 +182,8 @@ body {
   position: relative;
 }
 
-.layout.layout--sidebar-collapsed .app-sidebar-column {
+.layout.layout--sidebar-collapsed .app-sidebar-column > .sidebar,
+.layout.layout--sidebar-collapsed .app-sidebar-column > .panel-resizer {
   display: none;
 }
 
@@ -281,8 +282,8 @@ body {
 }
 
 .layout.layout--sidebar-collapsed .app-top-toolbar__start {
-  flex: 0 0 auto;
-  width: auto;
+  flex: 0 0 36px;
+  width: 36px;
   border-right: none;
 }
 
@@ -747,7 +748,7 @@ body {
 }
 
 .layout.layout--sidebar-collapsed .content-area {
-  grid-column: 1 / -1;
+  grid-column: 2 / -1;
 }
 
 .content-area--with-right-panel {
