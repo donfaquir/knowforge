@@ -1023,7 +1023,7 @@ function App() {
       className={`layout${showRightColumn && leftPanelView === "files" ? " layout--with-right-panel" : ""}${tauriRuntime ? " layout--tauri" : ""}${sidebarOpen ? "" : " layout--sidebar-collapsed"}${titlebarPlatformClass}${anyDragging ? " layout--resizing" : ""}`}
       style={
         {
-          "--sidebar-width": sidebarOpen ? `${leftResizable.width}px` : "36px",
+          "--sidebar-width": sidebarOpen || thoughtManagementPageOpen ? `${leftResizable.width}px` : "36px",
           "--right-panel-width": showRightColumn && leftPanelView === "files" ? `${rightResizable.width}px` : undefined,
         } as React.CSSProperties
       }
