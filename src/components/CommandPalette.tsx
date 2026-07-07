@@ -19,6 +19,7 @@ type Props = {
   onOpenCognitiveReport: () => void;
   onOpenThoughtVaultHub?: () => void;
   onOpenWorkspaceSearch?: () => void;
+  onTriggerWritingCoach?: () => void;
 };
 
 export function CommandPalette({
@@ -27,6 +28,7 @@ export function CommandPalette({
   onOpenCognitiveReport,
   onOpenThoughtVaultHub,
   onOpenWorkspaceSearch,
+  onTriggerWritingCoach,
 }: Props) {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
@@ -41,9 +43,12 @@ export function CommandPalette({
   onOpenThoughtVaultHubRef.current = onOpenThoughtVaultHub;
   const onOpenWorkspaceSearchRef = useRef(onOpenWorkspaceSearch);
   onOpenWorkspaceSearchRef.current = onOpenWorkspaceSearch;
+  const onTriggerWritingCoachRef = useRef(onTriggerWritingCoach);
+  onTriggerWritingCoachRef.current = onTriggerWritingCoach;
 
   const hasThoughtVaultHub = onOpenThoughtVaultHub != null;
   const hasWorkspaceSearch = onOpenWorkspaceSearch != null;
+  const hasWritingCoach = onTriggerWritingCoach != null;
 
   const items: CommandItem[] = useMemo(() => {
     const base: CommandItem[] = [
@@ -79,8 +84,19 @@ export function CommandPalette({
         },
       });
     }
+    if (hasWritingCoach) {
+      base.push({
+        id: "writing-coach",
+        label: t("commandPalette.writingCoach"),
+        keywords: "写作教练 writing coach 逻辑追问 reasoning",
+        onSelect: () => {
+          onTriggerWritingCoachRef.current?.();
+          onCloseRef.current();
+        },
+      });
+    }
     return base;
-  }, [t, hasThoughtVaultHub, hasWorkspaceSearch]);
+  }, [t, hasThoughtVaultHub, hasWorkspaceSearch, hasWritingCoach]);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();

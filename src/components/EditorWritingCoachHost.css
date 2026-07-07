@@ -6,3 +6,53 @@
   pointer-events: none;
   z-index: 3;
 }
+
+.writing-coach-trigger {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, #0f172a 10%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, #fff 85%, transparent);
+  color: #64748b;
+  cursor: pointer;
+  pointer-events: auto;
+  opacity: 0.5;
+  transition: opacity 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+  z-index: 4;
+}
+
+.writing-coach-trigger:hover {
+  opacity: 1;
+  color: var(--toolbar-accent, #396cd8);
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--toolbar-accent, #396cd8) 18%, transparent);
+}
+
+.writing-coach-trigger:focus-visible {
+  opacity: 1;
+  outline: 2px solid color-mix(in srgb, var(--toolbar-accent, #396cd8) 55%, transparent);
+  outline-offset: 1px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .writing-coach-trigger {
+    border-color: color-mix(in srgb, #fff 12%, transparent);
+    background: color-mix(in srgb, #fff 6%, transparent);
+    color: #94a3b8;
+  }
+
+  .writing-coach-trigger:hover {
+    color: color-mix(in srgb, var(--toolbar-accent, #60a5fa) 88%, #fff);
+    box-shadow: 0 1px 4px color-mix(in srgb, var(--toolbar-accent, #60a5fa) 16%, transparent);
+  }
+
+  .writing-coach-trigger:focus-visible {
+    outline-color: color-mix(in srgb, var(--toolbar-accent, #60a5fa) 65%, transparent);
+  }
+}

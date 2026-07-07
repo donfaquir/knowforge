@@ -1,14 +1,19 @@
 //! Writing coach: paragraph-level argumentation check + vault keyword linkage (JSON mode).
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use crate::llm::create_provider;
+use crate::llm::CompletionOverrides;
 use crate::llm::LlmChatMessage;
+use tokio_util::sync::CancellationToken;
 use crate::lock_workspace_root;
 use crate::note_privacy;
 use crate::challenge_review;
 use crate::thought_retrieval::{self, SearchThoughtArgs};
-use crate::vault_config::{self, DepthMode};
+use crate::vault_config::{self, AiConfig, DepthMode};
 use crate::vault_context_search::{self, SearchWorkspaceContextArgs, SearchWorkspaceLimits};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -31,9 +36,10 @@ Hard rules:
 pub struct AnalyzeWritingCoachArgs {
     pub paragraph_text: String,
     pub rel_path: String,
-    /// 与界面语言对齐（如 `zh` / `en`），用于红线过滤后兜底问句语言
     #[serde(default)]
     pub ui_locale: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,7 +54,7 @@ pub struct WritingCoachLinkItem {
     pub excerpt: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyzeWritingCoachResponse {
     pub reasoning_questions: Vec<String>,
@@ -83,6 +89,25 @@ struct PrepareOutcome {
     whitelist_keys: std::collections::HashSet<String>,
     user_body: String,
     ui_locale: Option<String>,
+    ai_config: AiConfig,
+}
+
+const CACHE_TTL_SECS: u64 = 300;
+
+struct CacheEntry {
+    response: AnalyzeWritingCoachResponse,
+    created: Instant,
+}
+
+fn cache_map() -> &'static Mutex<HashMap<(u64, String), CacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<(u64, String), CacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn hash_paragraph(text: &str) -> u64 {
+    let mut h = std::hash::DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
 }
 
 /// 模型输出问句全被过滤时的一条中性兜底（与 SYSTEM 要求「不评判、只提问」一致）
@@ -215,6 +240,10 @@ fn prepare_blocking(
         return Err("paragraph_text is empty".to_string());
     }
 
+    let ai_config = vault_config::load_ai_config_internal(root)
+        .map_err(|e| e.to_string())?;
+    let redact_private = ai_config.should_redact_private();
+
     let md_count = count_markdown_files_at_least(root, 5)?;
     let knowledge_module_skipped = md_count < 5;
 
@@ -223,22 +252,32 @@ fn prepare_blocking(
 
     let query = paragraph_to_search_query(paragraph);
     if !knowledge_module_skipped && !query.is_empty() {
-        let vault_res = vault_context_search::search_workspace_context_blocking(
-            root,
-            SearchWorkspaceContextArgs {
-                query: query.clone(),
-                exclude_rel_paths: vec![rel_path.clone()],
-                limits: Some(SearchWorkspaceLimits {
-                    max_files_to_scan: Some(120),
-                    max_snippets: Some(3),
-                    max_chars_per_snippet: Some(400),
-                    max_total_chars: Some(4000),
-                    read_bytes_per_file: Some(48 * 1024),
-                    max_duration_ms: Some(3000),
-                }),
-            },
-        )?;
+        let vault_args = SearchWorkspaceContextArgs {
+            query: query.clone(),
+            exclude_rel_paths: vec![rel_path.clone()],
+            limits: Some(SearchWorkspaceLimits {
+                max_files_to_scan: Some(120),
+                max_snippets: Some(3),
+                max_chars_per_snippet: Some(400),
+                max_total_chars: Some(4000),
+                read_bytes_per_file: Some(48 * 1024),
+                max_duration_ms: Some(3000),
+            }),
+            redact_private_override: Some(redact_private),
+        };
+        let thought_args = SearchThoughtArgs {
+            query,
+            exclude_rel_paths: vec![rel_path.clone()],
+            max_results: 3,
+        };
 
+        let (vault_result, thought_result) = std::thread::scope(|s| {
+            let h1 = s.spawn(|| vault_context_search::search_workspace_context_blocking(root, vault_args));
+            let h2 = s.spawn(|| thought_retrieval::search_thought_blocking(root, thought_args));
+            (h1.join().unwrap(), h2.join().unwrap())
+        });
+
+        let vault_res = vault_result?;
         for sn in vault_res.snippets.into_iter().take(3) {
             if matches!(sn.kind, vault_context_search::VaultSnippetKind::PrivateOmitted) {
                 continue;
@@ -257,15 +296,7 @@ fn prepare_blocking(
             candidates.push(item);
         }
 
-        let thought_res = thought_retrieval::search_thought_blocking(
-            root,
-            SearchThoughtArgs {
-                query,
-                exclude_rel_paths: vec![rel_path.clone()],
-                max_results: 3,
-            },
-        )?;
-
+        let thought_res = thought_result?;
         for th in thought_res.thoughts.into_iter().take(3) {
             let rp = norm_rel_path(&th.rel_path);
             let title = format!("{} — {}", title_from_rel_path(&rp), th.thought_id);
@@ -305,6 +336,7 @@ fn prepare_blocking(
         whitelist_keys,
         user_body,
         ui_locale: args.ui_locale.clone(),
+        ai_config,
     }))
 }
 
@@ -368,10 +400,23 @@ fn filter_response(
 
 #[tauri::command]
 pub async fn analyze_writing_coach(
+    app_handle: tauri::AppHandle,
     workspace: State<'_, crate::WorkspaceState>,
     http_client: State<'_, Arc<reqwest::Client>>,
     args: AnalyzeWritingCoachArgs,
 ) -> Result<AnalyzeWritingCoachResponse, String> {
+    let paragraph_hash = hash_paragraph(&args.paragraph_text);
+    let cache_key = (paragraph_hash, args.rel_path.clone());
+
+    if let Ok(map) = cache_map().lock() {
+        if let Some(entry) = map.get(&cache_key) {
+            if entry.created.elapsed().as_secs() < CACHE_TTL_SECS {
+                return Ok(entry.response.clone());
+            }
+        }
+    }
+
+    let session_id = args.session_id.clone();
     let root = lock_workspace_root(&workspace)?;
     let root_for_prep = root.clone();
     let prep_opt = tauri::async_runtime::spawn_blocking(move || prepare_blocking(&root_for_prep, &args))
@@ -386,9 +431,7 @@ pub async fn analyze_writing_coach(
         });
     };
 
-    let ai = vault_config::load_ai_config_internal(&root)
-        .map_err(|e| e.to_string())?;
-    let provider = create_provider(&ai, None, http_client.inner())?;
+    let provider = create_provider(&prep.ai_config, None, http_client.inner())?;
 
     let msgs = vec![
         LlmChatMessage {
@@ -403,14 +446,42 @@ pub async fn analyze_writing_coach(
         },
     ];
 
-    let raw = provider.chat_completion(&msgs, None).await
-        .map_err(|e| e.to_string())?;
+    let raw = match session_id {
+        Some(ref sid) if !sid.is_empty() => {
+            let cancel = CancellationToken::new();
+            let result = provider
+                .chat_stream(&app_handle, sid, msgs, None, cancel)
+                .await
+                .map_err(|e| e.to_string())?;
+            result.content
+        }
+        _ => {
+            let overrides = CompletionOverrides {
+                json_mode: true,
+                ..Default::default()
+            };
+            provider
+                .chat_completion(&msgs, Some(&overrides))
+                .await
+                .map_err(|e| e.to_string())?
+        }
+    };
 
     let slice = extract_json_object(&raw).map_err(|_| "invalid coach JSON".to_string())?;
     let parsed: CoachJsonRaw =
         serde_json::from_str(&slice).map_err(|e| format!("failed to parse coach JSON: {e}"))?;
 
-    Ok(filter_response(parsed, &prep))
+    let response = filter_response(parsed, &prep);
+
+    if let Ok(mut map) = cache_map().lock() {
+        map.retain(|_, e| e.created.elapsed().as_secs() < CACHE_TTL_SECS);
+        map.insert(cache_key, CacheEntry {
+            response: response.clone(),
+            created: Instant::now(),
+        });
+    }
+
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -446,6 +517,7 @@ mod tests {
             whitelist_keys: std::collections::HashSet::new(),
             user_body: String::new(),
             ui_locale: Some("zh-CN".to_string()),
+            ai_config: serde_json::from_str("{}").unwrap(),
         };
         let parsed = CoachJsonRaw {
             reasoning_questions: vec!["建议你改成更简洁的表述。".to_string()],
@@ -467,6 +539,7 @@ mod tests {
             whitelist_keys: std::collections::HashSet::new(),
             user_body: String::new(),
             ui_locale: Some("en".to_string()),
+            ai_config: serde_json::from_str("{}").unwrap(),
         };
         let parsed = CoachJsonRaw {
             reasoning_questions: vec!["Please rewrite this paragraph.".to_string()],

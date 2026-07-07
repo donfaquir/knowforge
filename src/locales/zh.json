@@ -68,7 +68,8 @@
     "writingCoachLoading": "正在分析…",
     "writingCoachError": "无法加载建议。",
     "writingCoachKnowledge": "可能关联的笔记",
-    "writingCoachNoSuggestions": "暂时没有建议。"
+    "writingCoachNoSuggestions": "暂时没有建议。",
+    "writingCoachTrigger": "分析当前段落"
   },
   "diskNotice": {
     "text": "磁盘上的文件已变更，而编辑器中仍有未保存修改。重新加载会采用磁盘版本并丢弃本标签当前的缓冲区内容。忽略可继续编辑（你可能需要手动解决冲突）。",
@@ -652,7 +653,8 @@
     "footerHint": "Esc 关闭 · ⌘⇧P / Ctrl+Shift+P · 正文内 ⌘F / Ctrl+F 篇内查找",
     "cognitiveReport": "认知成长报告",
     "thoughtVaultHub": "全库想法中心",
-    "workspaceSearch": "全文搜索 Vault"
+    "workspaceSearch": "全文搜索 Vault",
+    "writingCoach": "写作教练"
   },
   "editorFind": {
     "title": "篇内查找",

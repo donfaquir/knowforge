@@ -10,7 +10,7 @@ function countCodePoints(s: string): number {
 }
 
 /** 取光标所在最近 textblock 的纯文本 */
-function nearestTextblockText(state: EditorView["state"]): string {
+export function nearestTextblockText(state: EditorView["state"]): string {
   const { $from } = state.selection;
   // 光标多在 text 内：parent 常为 textblock（Milkdown 多层包裹时比自 depth 向下更稳）
   const parent = $from.parent;

@@ -32,7 +32,7 @@ import type { CrepeMarkdownEditorApi } from "./components/CrepeMarkdownEditor";
 import { CognitiveReportPanel } from "./components/CognitiveReportPanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { EditorThoughtsPanel } from "./components/EditorThoughtsPanel";
-import { EditorWritingCoachHost } from "./components/EditorWritingCoachHost";
+import { EditorWritingCoachHost, type EditorWritingCoachHostHandle } from "./components/EditorWritingCoachHost";
 import { RightPanelReviewTab } from "./components/RightPanelReviewTab";
 import { LinkRecommendationPanel } from "./components/LinkRecommendationPanel";
 import { RightPanelShell, type RightPanelTab } from "./components/RightPanelShell";
@@ -205,6 +205,7 @@ function App() {
   const wikiHeadingNavRetryGenerationRef = useRef(0);
   const rawSourceTextareaRef = useRef<HTMLTextAreaElement>(null);
   const crepeEditorApiRef = useRef<CrepeMarkdownEditorApi | null>(null);
+  const writingCoachRef = useRef<EditorWritingCoachHostHandle>(null);
   /** 全文搜索打开笔记后：待预览态滚到近似命中行 */
   const pendingWorkspaceSearchGotoRef = useRef<{ relPath: string; line: number } | null>(null);
   const docState = useOpenDocs(workspaceReady);
@@ -683,6 +684,16 @@ function App() {
         e.preventDefault();
         setCognitiveReportOpen(false);
         setCommandPaletteOpen((o) => !o);
+        return;
+      }
+
+      // ⌘⇧W / Ctrl+Shift+W：手动触发写作教练（编辑器内也需响应）
+      if (e.shiftKey && (e.key === "w" || e.key === "W")) {
+        if (!editorUsableForShortcutRef.current) {
+          return;
+        }
+        e.preventDefault();
+        writingCoachRef.current?.triggerManually();
         return;
       }
 
@@ -1582,6 +1593,7 @@ function App() {
                           />
                         ) : null}
                         <EditorWritingCoachHost
+                          ref={writingCoachRef}
                           editorApiRef={crepeEditorApiRef}
                           activePath={docState.activePath}
                           workspaceReady={workspaceReady}
@@ -1713,6 +1725,11 @@ function App() {
         onOpenWorkspaceSearch={
           workspaceReady && tauriRuntime && rootPath
             ? () => setWorkspaceSearchOpen(true)
+            : undefined
+        }
+        onTriggerWritingCoach={
+          editorUsable
+            ? () => writingCoachRef.current?.triggerManually()
             : undefined
         }
       />

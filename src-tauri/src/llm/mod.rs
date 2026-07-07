@@ -308,7 +308,7 @@ struct LlmStreamErrorPayload {
     message: String,
 }
 
-pub(super) fn emit_chunk(app: &AppHandle, session_id: &str, delta: &str) {
+pub(crate) fn emit_chunk(app: &AppHandle, session_id: &str, delta: &str) {
     let payload = LlmStreamChunkPayload {
         session_id: session_id.to_string(),
         delta: delta.to_string(),
@@ -316,7 +316,7 @@ pub(super) fn emit_chunk(app: &AppHandle, session_id: &str, delta: &str) {
     let _ = app.emit("llm:stream-chunk", payload);
 }
 
-pub(super) fn emit_done(app: &AppHandle, session_id: &str) -> Result<(), tauri::Error> {
+pub(crate) fn emit_done(app: &AppHandle, session_id: &str) -> Result<(), tauri::Error> {
     app.emit(
         "llm:stream-done",
         LlmStreamDonePayload {
@@ -638,6 +638,7 @@ async fn build_context_pipeline(
                     query: query_clone,
                     exclude_rel_paths: exclude,
                     limits: None,
+                    redact_private_override: None,
                 },
             )
             .ok()

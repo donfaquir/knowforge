@@ -1,17 +1,57 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getAppLocale } from "../i18n";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { DepthMode } from "../types/cognitiveTypes";
 import type { VaultConfigForUi } from "../types/vaultAiConfig";
 import type { AnalyzeWritingCoachResponse } from "../types/writingCoach";
 import { dispatchVaultConfigUpdated, VAULT_CONFIG_UPDATED_EVENT } from "../utils/vaultConfigBroadcast";
-import { useWritingCoachTrigger } from "../hooks/useWritingCoachTrigger";
+import { nearestTextblockText, useWritingCoachTrigger } from "../hooks/useWritingCoachTrigger";
 import type { CrepeMarkdownEditorApi } from "./CrepeMarkdownEditor";
+import { useTranslation } from "react-i18next";
 import { WritingCoachBubble } from "./WritingCoachBubble";
 import { endPerfTrace, startPerfTrace } from "../utils/perfTrace";
 import "./EditorWritingCoachHost.css";
 
 const FADE_MS = 480;
+
+function extractStreamedQuestions(text: string): string[] {
+  const keyIdx = text.indexOf('"reasoningQuestions"');
+  if (keyIdx === -1) return [];
+  const bracketIdx = text.indexOf("[", keyIdx);
+  if (bracketIdx === -1) return [];
+  const after = text.slice(bracketIdx + 1);
+  const questions: string[] = [];
+  let pos = 0;
+  while (pos < after.length) {
+    const c = after[pos];
+    if (c === "]") break;
+    if (c === '"') {
+      let end = pos + 1;
+      let str = "";
+      while (end < after.length) {
+        if (after[end] === "\\" && end + 1 < after.length) {
+          str += after[end + 1];
+          end += 2;
+          continue;
+        }
+        if (after[end] === '"') break;
+        str += after[end];
+        end++;
+      }
+      if (end >= after.length) break;
+      questions.push(str);
+      pos = end + 1;
+    } else {
+      pos++;
+    }
+  }
+  return questions;
+}
+
+export type EditorWritingCoachHostHandle = {
+  triggerManually: () => void;
+};
 
 type Props = {
   editorApiRef: React.MutableRefObject<CrepeMarkdownEditorApi | null>;
@@ -33,13 +73,14 @@ function cooldownActive(iso: string | undefined): boolean {
   return Number.isFinite(t) && t > Date.now();
 }
 
-export function EditorWritingCoachHost({
+export const EditorWritingCoachHost = forwardRef<EditorWritingCoachHostHandle, Props>(function EditorWritingCoachHost({
   editorApiRef,
   activePath,
   workspaceReady,
   showMarkdownSource,
   onOpenMarkdownPath,
-}: Props) {
+}, ref) {
+  const { t } = useTranslation();
   const hostRef = useRef<HTMLDivElement>(null);
   const [depthMode, setDepthMode] = useState<DepthMode>("auto");
   const [writingCoachEnabled, setWritingCoachEnabled] = useState(true);
@@ -213,34 +254,80 @@ export function EditorWritingCoachHost({
     clearBubbleTimers();
   }, [activePath, clearBubbleTimers]);
 
-  const onBubbleClick = useCallback(() => {
-    clearBubbleTimers();
-    setBubbleVisible(false);
-    setBubbleFading(false);
+  const analyzeAndShowPanel = useCallback((text: string) => {
     setPanelOpen(true);
     setPanelLoading(true);
     setPanelError(null);
     setCoachData(null);
-    const text = paragraphRef.current;
     const rel = activePath ?? "";
     if (!isTauri() || !rel) {
       setPanelLoading(false);
       setPanelError("Not available.");
       return;
     }
+    const sessionId = `wc-${crypto.randomUUID()}`;
+    let accumulated = "";
+    const unlisteners: UnlistenFn[] = [];
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      for (const fn of unlisteners) fn();
+      unlisteners.length = 0;
+    };
     void (async () => {
       try {
+        const chunkUn = await listen<{ sessionId: string; delta: string }>(
+          "llm:stream-chunk",
+          (e) => {
+            if (e.payload.sessionId !== sessionId) return;
+            accumulated += e.payload.delta;
+            const questions = extractStreamedQuestions(accumulated);
+            if (questions.length > 0) {
+              setCoachData((prev) => ({
+                reasoningQuestions: questions,
+                links: prev?.links ?? [],
+                knowledgeModuleSkipped: prev?.knowledgeModuleSkipped ?? false,
+              }));
+            }
+          },
+        );
+        unlisteners.push(chunkUn);
         const resp = await invoke<AnalyzeWritingCoachResponse>("analyze_writing_coach", {
-          args: { paragraphText: text, relPath: rel, uiLocale: getAppLocale() },
+          args: { paragraphText: text, relPath: rel, uiLocale: getAppLocale(), sessionId },
         });
         setCoachData(resp);
       } catch (e) {
         setPanelError(e instanceof Error ? e.message : String(e));
       } finally {
+        cleanup();
         setPanelLoading(false);
       }
     })();
-  }, [activePath, clearBubbleTimers]);
+  }, [activePath]);
+
+  const onBubbleClick = useCallback(() => {
+    clearBubbleTimers();
+    setBubbleVisible(false);
+    setBubbleFading(false);
+    analyzeAndShowPanel(paragraphRef.current);
+  }, [analyzeAndShowPanel, clearBubbleTimers]);
+
+  const handleManualTrigger = useCallback(() => {
+    const view = editorApiRef.current?.getEditorView();
+    if (!view || !activePath) return;
+    const text = nearestTextblockText(view.state);
+    if (!text.trim()) return;
+    clearBubbleTimers();
+    setBubbleVisible(false);
+    setBubbleFading(false);
+    triggerLockRef.current = true;
+    analyzeAndShowPanel(text);
+  }, [activePath, analyzeAndShowPanel, clearBubbleTimers, editorApiRef]);
+
+  useImperativeHandle(ref, () => ({
+    triggerManually: handleManualTrigger,
+  }), [handleManualTrigger]);
 
   const onCollapsePanel = useCallback(() => {
     setPanelOpen(false);
@@ -257,8 +344,30 @@ export function EditorWritingCoachHost({
     return null;
   }
 
+  const showTriggerBtn = !bubbleVisible && !panelOpen && !showMarkdownSource;
+
   return (
-    <div ref={hostRef} className="editor-writing-coach-host" aria-hidden={!gatesOk && !panelOpen}>
+    <div ref={hostRef} className="editor-writing-coach-host" aria-hidden={!gatesOk && !panelOpen && !showTriggerBtn}>
+      {showTriggerBtn ? (
+        <button
+          type="button"
+          className="writing-coach-trigger"
+          onClick={handleManualTrigger}
+          aria-label={t("main.writingCoachTrigger")}
+          title={t("main.writingCoachTrigger")}
+        >
+          <svg viewBox="0 0 24 24" width={14} height={14} aria-hidden>
+            <path
+              fill="currentColor"
+              fillOpacity={0.22}
+              stroke="currentColor"
+              strokeWidth={1.15}
+              strokeLinejoin="round"
+              d="M12 5 17 12 12 19 7 12 12 5z"
+            />
+          </svg>
+        </button>
+      ) : null}
       <WritingCoachBubble
         bubbleVisible={bubbleVisible}
         bubbleFading={bubbleFading}
@@ -276,4 +385,4 @@ export function EditorWritingCoachHost({
       />
     </div>
   );
-}
+});

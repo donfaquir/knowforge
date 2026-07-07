@@ -68,7 +68,8 @@
     "writingCoachLoading": "Analyzing…",
     "writingCoachError": "Could not load suggestions.",
     "writingCoachKnowledge": "Related notes",
-    "writingCoachNoSuggestions": "No suggestions right now."
+    "writingCoachNoSuggestions": "No suggestions right now.",
+    "writingCoachTrigger": "Analyze current paragraph"
   },
   "diskNotice": {
     "text": "This file was modified on disk while you have unsaved edits in the editor. Reload loads the on-disk version and discards your current buffer for this tab. Dismiss to keep editing (you may need to resolve the conflict manually).",
@@ -652,7 +653,8 @@
     "footerHint": "Esc to close · ⌘⇧P / Ctrl+Shift+P · ⌘F / Ctrl+F find in editor",
     "cognitiveReport": "Cognitive growth report",
     "thoughtVaultHub": "All thoughts hub",
-    "workspaceSearch": "Search workspace"
+    "workspaceSearch": "Search workspace",
+    "writingCoach": "Writing coach"
   },
   "editorFind": {
     "title": "Find in document",

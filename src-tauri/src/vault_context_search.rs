@@ -318,6 +318,8 @@ pub struct SearchWorkspaceContextArgs {
     pub exclude_rel_paths: Vec<String>,
     #[serde(default)]
     pub limits: Option<SearchWorkspaceLimits>,
+    #[serde(default)]
+    pub redact_private_override: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -341,8 +343,13 @@ pub fn search_workspace_context_blocking(
     args: SearchWorkspaceContextArgs,
 ) -> Result<SearchWorkspaceContextResponse, String> {
     let started = Instant::now();
-    let ai = vault_config::load_ai_config_internal(canonical_root)?;
-    let redact_private = redact_private_snippets(&ai);
+    let redact_private = match args.redact_private_override {
+        Some(v) => v,
+        None => {
+            let ai = vault_config::load_ai_config_internal(canonical_root)?;
+            redact_private_snippets(&ai)
+        }
+    };
 
     let lim = args.limits.as_ref();
     let max_files = lim.and_then(|l| l.max_files_to_scan).unwrap_or(400).max(1);
@@ -591,6 +598,7 @@ mod tests {
                     read_bytes_per_file: Some(8192),
                     max_duration_ms: Some(5000),
                 }),
+                redact_private_override: None,
             },
         )
         .unwrap();
@@ -652,6 +660,7 @@ mod tests {
                     read_bytes_per_file: Some(8192),
                     max_duration_ms: Some(5000),
                 }),
+                redact_private_override: None,
             },
         )
         .unwrap();
