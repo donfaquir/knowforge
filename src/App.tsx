@@ -188,7 +188,7 @@ function App() {
   } | null>(null);
   const editorFindWorkspaceSeedNonceRef = useRef(0);
   const leftResizable = useResizable({ side: "left", defaultWidth: 196, minWidth: 150, maxWidth: 500 });
-  const rightPanelFillRemainder = rightPanelTab === "ai" || rightPanelTab === "graph";
+  const rightPanelFillRemainder = rightPanelTab === "ai";
   const rightPanelMaxWidth = useRightPanelMaxWidthPx({
     fillRemainder: rightPanelFillRemainder,
     leftSidebarPx: sidebarOpen ? leftResizable.width : 0,
@@ -199,23 +199,6 @@ function App() {
     minWidth: 280,
     maxWidth: rightPanelMaxWidth,
   });
-  /** 理解网络「一键加宽」前记住的右栏宽度，再次点击还原 */
-  const graphPanelWidthBeforeWideRef = useRef<number | null>(null);
-  const [graphPanelWideExpanded, setGraphPanelWideExpanded] = useState(false);
-  const toggleUnderstandingGraphPanelWide = useCallback(() => {
-    if (!graphPanelWideExpanded) {
-      graphPanelWidthBeforeWideRef.current = rightResizable.width;
-      const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
-      rightResizable.setProgrammaticWidth(Math.floor(vw * 0.7));
-      setGraphPanelWideExpanded(true);
-      return;
-    }
-    const prev = graphPanelWidthBeforeWideRef.current ?? 364;
-    graphPanelWidthBeforeWideRef.current = null;
-    rightResizable.setProgrammaticWidth(prev);
-    setGraphPanelWideExpanded(false);
-  }, [graphPanelWideExpanded, rightResizable.width, rightResizable.setProgrammaticWidth]);
-
   const anyDragging = leftResizable.isDragging || rightResizable.isDragging;
 
   const editorScrollRef = useRef<HTMLDivElement>(null);
@@ -290,21 +273,6 @@ function App() {
 
   const tauriRuntime = isTauri();
 
-  useEffect(() => {
-    if (!workspaceReady || !tauriRuntime) {
-      setGraphPanelWideExpanded((was) => {
-        if (was) {
-          const prev = graphPanelWidthBeforeWideRef.current;
-          if (prev != null) {
-            rightResizable.setProgrammaticWidth(prev);
-          }
-        }
-        graphPanelWidthBeforeWideRef.current = null;
-        return false;
-      });
-    }
-  }, [workspaceReady, tauriRuntime, rightResizable.setProgrammaticWidth]);
-
   const { dueCount: reviewDueTabCount } = useReviewDueTabBadge({
     workspaceReady,
     tauriRuntime,
@@ -340,6 +308,7 @@ function App() {
   }, [reviewDueTabCount, rightPanelTab, rootPath]);
 
   const requestOpenChallengeReview = useCallback(() => {
+    setLeftPanelView("files");
     setRightPanelOpen(true);
     setRightPanelTab("review");
   }, []);
@@ -554,12 +523,6 @@ function App() {
   useEffect(() => {
     if (rightPanelOpen && workspaceReady && rightPanelTab === "outline" && !editorReady) {
       setRightPanelTab("ai");
-    }
-  }, [rightPanelOpen, workspaceReady, rightPanelTab, editorReady]);
-
-  useEffect(() => {
-    if (rightPanelOpen && workspaceReady && rightPanelTab === "linkRec" && !editorReady) {
-      setRightPanelTab("outline");
     }
   }, [rightPanelOpen, workspaceReady, rightPanelTab, editorReady]);
 
@@ -1747,10 +1710,8 @@ function App() {
             <RightPanelShell
               tab={rightPanelTab}
               onViewChange={setRightPanelTab}
-              onAfterSelectAiOrGraphTab={() => setSidebarOpen(false)}
+              onAfterSelectAiTab={() => setSidebarOpen(false)}
               outlineTabEnabled={editorReady}
-              graphTabEnabled={workspaceReady && tauriRuntime && !!rootPath}
-              linkRecTabEnabled={editorReady}
               tauriDragExclude={tauriRuntime}
               outlineToolbarEnd={
                 rightPanelTab === "outline" && editorReady ? (
@@ -1795,42 +1756,7 @@ function App() {
                   />
                 </>
               }
-              linkRecPanel={
-                <LinkRecommendationPanel
-                  workspaceRoot={rootPath}
-                  activeRelPath={docState.activePath}
-                  panelActive={rightPanelOpen && rightPanelTab === "linkRec"}
-                  savedMarkdownSnapshot={
-                    docState.activePath &&
-                    current &&
-                    !current.loading &&
-                    !current.loadError
-                      ? current.savedContent
-                      : undefined
-                  }
-                  editorContentInjectEpoch={
-                    docState.activePath ? (current?.contentInjectEpoch ?? 0) : 0
-                  }
-                  workspaceReady={workspaceReady}
-                  tauriRuntime={tauriRuntime}
-                  crepeApiRef={crepeEditorApiRef}
-                />
-              }
               aiPanel={<AiConversationPanel />}
-              graphPanel={
-                <GraphTabShell
-                  workspaceReady={workspaceReady}
-                  workspaceRoot={rootPath}
-                  tauriRuntime={tauriRuntime}
-                  onOpenNote={(relPath) => {
-                    void onOpenCoachMarkdownPath(relPath);
-                  }}
-                  onTogglePanelWide={
-                    workspaceReady && tauriRuntime ? toggleUnderstandingGraphPanelWide : undefined
-                  }
-                  graphPanelWideExpanded={graphPanelWideExpanded}
-                />
-              }
               reviewPanel={<RightPanelReviewTab onClose={() => setRightPanelTab("ai")} />}
               reviewTabBadgeCount={reviewTabBadgeCount}
             />

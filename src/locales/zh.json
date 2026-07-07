@@ -404,6 +404,7 @@
     "fallbackQuestion": "你之前写过这个想法，现在还同意这个观点吗？",
     "panelTitle": "回顾队列",
     "panelDisabledHint": "请在「设置 → AI 与大模型」中开启独立回顾。",
+    "panelNeedsLlm": "配置 AI 后即可使用挑战复习。先创建想法，系统会自动安排复习计划。",
     "panelEmpty": "今日没有到期的理解需要回顾。",
     "panelShallow": "浅档模式下不进行挑战回顾。",
     "panelNoMore": "本批队列已处理完毕。",
