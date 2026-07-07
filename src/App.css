@@ -197,7 +197,7 @@ body {
   padding: 8px 0;
   border-right: 1px solid rgba(0, 0, 0, 0.08);
   background: var(--app-chrome-bg);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .activity-bar__top {
