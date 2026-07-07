@@ -287,7 +287,6 @@ body {
   border-right: none;
 }
 
-.layout.layout--sidebar-collapsed .app-top-toolbar__open,
 .layout.layout--sidebar-collapsed .app-top-toolbar__thought-hub {
   display: none;
 }
@@ -1536,6 +1535,14 @@ body {
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.028);
   border: 1px solid rgba(0, 0, 0, 0.06);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+}
+
+.sidebar__root:hover {
+  background: rgba(0, 0, 0, 0.06);
 }
 
 .sidebar__root-icon {
@@ -3448,6 +3455,10 @@ html:lang(zh-Hans) .settings-lang-toggle .app-modal__btn {
   .sidebar__root {
     background: rgba(0, 0, 0, 0.28);
     border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .sidebar__root:hover {
+    background: rgba(255, 255, 255, 0.08);
   }
 
   .sidebar__root-icon {

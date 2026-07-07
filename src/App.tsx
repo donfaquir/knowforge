@@ -1072,29 +1072,6 @@ function App() {
               <path d="M9 5.5v13" />
             </svg>
           </button>
-          <button
-            type="button"
-            className="app-top-toolbar__open"
-            {...tauriDragExcludeProps}
-            onClick={() => void pickFolder()}
-            aria-label={t("toolbar.open")}
-            title={t("toolbar.open")}
-          >
-            <svg
-              className="app-top-toolbar__open-icon"
-              width="19"
-              height="19"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden={true}
-            >
-              <path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
-            </svg>
-          </button>
           {tauriRuntime && workspaceReady ? (
             <button
               type="button"
@@ -1293,7 +1270,12 @@ function App() {
           {rootPath ? (
             <footer className="sidebar__footer">
               <div className="sidebar__footer-bar">
-                <div className="sidebar__root" title={rootPath}>
+                <button
+                  type="button"
+                  className="sidebar__root"
+                  title={t("toolbar.open")}
+                  onClick={() => void pickFolder()}
+                >
                   <svg
                     className="sidebar__root-icon"
                     width="14"
@@ -1311,7 +1293,7 @@ function App() {
                   <span className="sidebar__root-path">
                     <span className="sidebar__root-path__ltr">{rootPath}</span>
                   </span>
-                </div>
+                </button>
               </div>
             </footer>
           ) : null}
