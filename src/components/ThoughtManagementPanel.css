@@ -301,10 +301,9 @@
   min-width: 0;
 }
 
-/* 与主界面文件树同宽（继承 layout 上的 --sidebar-width） */
 .thought-mgmt__nav {
-  width: var(--sidebar-width, 196px);
-  flex: 0 0 var(--sidebar-width, 196px);
+  width: 220px;
+  flex: 0 0 220px;
   display: flex;
   flex-direction: column;
   min-height: 0;

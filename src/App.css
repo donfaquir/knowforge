@@ -719,17 +719,10 @@ body {
   opacity: 0.92;
 }
 
-/* 全屏想法管理：叠在第二行文件树+主编辑之上（顶栏仍可见） */
 .app-thought-management-route {
-  grid-column: 1 / -1;
-  grid-row: 2;
-  z-index: 30;
-  min-height: 0;
-  min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--app-chrome-bg);
-  box-shadow: 0 -1px 0 var(--app-toolbar-bottom-line);
 }
 
 .content-area {

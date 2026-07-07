@@ -1,12 +1,11 @@
 import type React from "react";
 import { useTranslation } from "react-i18next";
 
-export type LeftPanelView = "files" | "graph" | "linkRec";
+export type LeftPanelView = "files" | "graph" | "linkRec" | "thoughts";
 
 type Props = {
   activeView: LeftPanelView;
   onViewChange: (view: LeftPanelView) => void;
-  onOpenThoughtManagement: () => void;
   onOpenCognitiveReport: () => void;
   onOpenSettings: () => void;
 };
@@ -140,18 +139,19 @@ const VIEW_ICONS: Record<LeftPanelView, () => React.JSX.Element> = {
   files: FilesIcon,
   graph: GraphIcon,
   linkRec: LinkRecIcon,
+  thoughts: ThoughtsIcon,
 };
 
 const VIEW_I18N_KEYS: Record<LeftPanelView, string> = {
   files: "activityBar.files",
   graph: "activityBar.graph",
   linkRec: "activityBar.linkRec",
+  thoughts: "activityBar.thoughts",
 };
 
 export function ActivityBar({
   activeView,
   onViewChange,
-  onOpenThoughtManagement,
   onOpenCognitiveReport,
   onOpenSettings,
 }: Props) {
@@ -180,15 +180,6 @@ export function ActivityBar({
       </div>
 
       <div className="activity-bar__bottom">
-        <button
-          type="button"
-          className="activity-bar__btn"
-          aria-label={t("activityBar.thoughts")}
-          title={t("activityBar.thoughts")}
-          onClick={onOpenThoughtManagement}
-        >
-          <ThoughtsIcon />
-        </button>
         <button
           type="button"
           className="activity-bar__btn"

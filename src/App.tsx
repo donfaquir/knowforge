@@ -172,9 +172,6 @@ function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [cognitiveReportOpen, setCognitiveReportOpen] = useState(false);
   const [thoughtVaultHubOpen, setThoughtVaultHubOpen] = useState(false);
-  /** 顶栏入口：全屏想法管理（非右栏 Tab） */
-  const [thoughtManagementPageOpen, setThoughtManagementPageOpen] = useState(false);
-  /** 想法管理详情正文是否相对已保存状态有未写入的编辑 */
   const [thoughtMgmtBodyDirty, setThoughtMgmtBodyDirty] = useState(false);
   const [workspaceSearchOpen, setWorkspaceSearchOpen] = useState(false);
   /** 同标签重复点全文搜索结果时仍触发预览滚动 */
@@ -499,25 +496,21 @@ function App() {
   const editorReady = !!docState.activePath && !loadingDoc && !loadError;
   /** 右栏承载大纲与 AI：无打开文档时也应显示，避免分段按钮与 AI 面板被整栏卸载 */
   const showRightColumn = rightPanelOpen && workspaceReady;
-  /** 全屏想法管理覆盖层内嵌会话 Provider（与右栏 Provider 分离；深聊依赖盘内会话列表衔接） */
   const thoughtManagementSessionActive =
-    thoughtManagementPageOpen && workspaceReady && tauriRuntime && !!rootPath;
+    leftPanelView === "thoughts" && workspaceReady && tauriRuntime && !!rootPath;
 
-  const handleThoughtManagementBack = useCallback(async () => {
-    if (!thoughtMgmtBodyDirty) {
-      setThoughtManagementPageOpen(false);
-      return;
+  const changeView = useCallback(async (view: LeftPanelView) => {
+    if (leftPanelView === "thoughts" && view !== "thoughts" && thoughtMgmtBodyDirty) {
+      const ok = await ask(t("thoughtManagement.exitUnsavedMessage"), {
+        title: t("thoughtManagement.exitUnsavedTitle"),
+        kind: "warning",
+      });
+      if (!ok) return false;
     }
-    const ok = await ask(t("thoughtManagement.exitUnsavedMessage"), {
-      title: t("thoughtManagement.exitUnsavedTitle"),
-      kind: "warning",
-    });
-    if (ok) setThoughtManagementPageOpen(false);
-  }, [thoughtMgmtBodyDirty, t]);
-
-  const handleThoughtMgmtDetailDirtyChange = useCallback((dirty: boolean) => {
-    setThoughtMgmtBodyDirty(dirty);
-  }, []);
+    setThoughtMgmtBodyDirty(false);
+    setLeftPanelView(view);
+    return true;
+  }, [leftPanelView, thoughtMgmtBodyDirty, t]);
 
   /** 选中 Outline 但尚无可用编辑器文档时自动切到 AI，避免右栏空白且无法切换 */
   useEffect(() => {
@@ -1023,7 +1016,7 @@ function App() {
       className={`layout${showRightColumn && leftPanelView === "files" ? " layout--with-right-panel" : ""}${tauriRuntime ? " layout--tauri" : ""}${sidebarOpen ? "" : " layout--sidebar-collapsed"}${titlebarPlatformClass}${anyDragging ? " layout--resizing" : ""}`}
       style={
         {
-          "--sidebar-width": sidebarOpen || thoughtManagementPageOpen ? `${leftResizable.width}px` : "36px",
+          "--sidebar-width": sidebarOpen ? `${leftResizable.width}px` : "36px",
           "--right-panel-width": showRightColumn && leftPanelView === "files" ? `${rightResizable.width}px` : undefined,
         } as React.CSSProperties
       }
@@ -1054,86 +1047,55 @@ function App() {
       >
         <div className="app-top-toolbar__start" role="toolbar" aria-label={t("toolbar.files")}>
           {renderWindowControls("leading")}
-          {!thoughtManagementPageOpen ? (
-            <button
-              type="button"
-              className={`app-top-toolbar__sidebar-toggle${sidebarOpen ? " is-active" : ""}`}
-              {...tauriDragExcludeProps}
-              onClick={() => setSidebarOpen((o) => !o)}
-              aria-pressed={sidebarOpen}
-              aria-label={sidebarOpen ? t("toolbar.hideTree") : t("toolbar.showTree")}
-              title={sidebarOpen ? t("toolbar.hideTree") : t("toolbar.showTree")}
+          <button
+            type="button"
+            className={`app-top-toolbar__sidebar-toggle${sidebarOpen ? " is-active" : ""}`}
+            {...tauriDragExcludeProps}
+            onClick={() => setSidebarOpen((o) => !o)}
+            aria-pressed={sidebarOpen}
+            aria-label={sidebarOpen ? t("toolbar.hideTree") : t("toolbar.showTree")}
+            title={sidebarOpen ? t("toolbar.hideTree") : t("toolbar.showTree")}
+          >
+            <svg
+              className="app-top-toolbar__sidebar-toggle__icon"
+              width="19"
+              height="19"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden={true}
             >
-              <svg
-                className="app-top-toolbar__sidebar-toggle__icon"
-                width="19"
-                height="19"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden={true}
-              >
-                {/* 与文件夹图标相近的视口占比：外框约 3–21，左侧窄栏 */}
-                <rect x="3" y="3" width="18" height="18" rx="2.5" />
-                <path d="M9 5.5v13" />
-              </svg>
-            </button>
-          ) : null}
-          {thoughtManagementPageOpen ? (
-            <button
-              type="button"
-              className="app-top-toolbar__thought-route-back"
-              {...tauriDragExcludeProps}
-              onClick={() => void handleThoughtManagementBack()}
-              aria-label={t("toolbar.backToEditor")}
-              title={t("toolbar.backToEditorTitle")}
+              <rect x="3" y="3" width="18" height="18" rx="2.5" />
+              <path d="M9 5.5v13" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="app-top-toolbar__open"
+            {...tauriDragExcludeProps}
+            onClick={() => void pickFolder()}
+            aria-label={t("toolbar.open")}
+            title={t("toolbar.open")}
+          >
+            <svg
+              className="app-top-toolbar__open-icon"
+              width="19"
+              height="19"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden={true}
             >
-              <svg
-                className="app-top-toolbar__thought-route-back-icon"
-                width="19"
-                height="19"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden={true}
-              >
-                <path d="m15 18-6-6 6-6" />
-              </svg>
-              <span className="app-top-toolbar__thought-route-back-text">{t("toolbar.backToEditor")}</span>
-            </button>
-          ) : null}
-          {!thoughtManagementPageOpen ? (
-            <button
-              type="button"
-              className="app-top-toolbar__open"
-              {...tauriDragExcludeProps}
-              onClick={() => void pickFolder()}
-              aria-label={t("toolbar.open")}
-              title={t("toolbar.open")}
-            >
-              <svg
-                className="app-top-toolbar__open-icon"
-                width="19"
-                height="19"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden={true}
-              >
-                <path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
-              </svg>
-            </button>
-          ) : null}
-          {tauriRuntime && workspaceReady && !thoughtManagementPageOpen ? (
+              <path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+            </svg>
+          </button>
+          {tauriRuntime && workspaceReady ? (
             <button
               type="button"
               className="app-top-toolbar__thought-hub"
@@ -1162,29 +1124,21 @@ function App() {
           ) : null}
         </div>
         <div className="app-top-toolbar__editor">
-          {thoughtManagementPageOpen ? (
-            <div
-              className="app-top-toolbar__tabs app-top-toolbar__tabs--thought-route"
-              role="status"
-              aria-live="polite"
-            >
-              <span className="app-top-toolbar__thought-route-title">{t("thoughtManagement.title")}</span>
-            </div>
-          ) : (
-            <div className="app-top-toolbar__tabs">
-              <EditorTabBar
-                tabs={docState.tabPaths}
-                activePath={docState.activePath}
-                isDirty={docState.isDirty}
-                hasDiskStaleConflict={docState.hasDiskStaleConflict}
-                tauriDragExclude={tauriRuntime}
-                isKfPrivate={isPathKfPrivate}
-                onRenameTab={onRenameTabFromBar}
-                onSelect={(p) => {
-                  if (p === docState.activePath && leftPanelView === "files") {
-                    return;
-                  }
-                  setLeftPanelView("files");
+          <div className="app-top-toolbar__tabs">
+            <EditorTabBar
+              tabs={docState.tabPaths}
+              activePath={docState.activePath}
+              isDirty={docState.isDirty}
+              hasDiskStaleConflict={docState.hasDiskStaleConflict}
+              tauriDragExclude={tauriRuntime}
+              isKfPrivate={isPathKfPrivate}
+              onRenameTab={onRenameTabFromBar}
+              onSelect={(p) => {
+                if (p === docState.activePath && leftPanelView === "files") {
+                  return;
+                }
+                void changeView("files").then((ok) => {
+                  if (!ok) return;
                   logPerfMark("markdown.tab_switch.select", {
                     from: docState.activePath,
                     to: p,
@@ -1195,126 +1149,89 @@ function App() {
                   });
                   docState.setSaveError(null);
                   docState.setActivePath(p);
-                }}
-                onClose={(p) => void docState.closeTab(p)}
-                onCloseAll={() => void docState.closeAllTabs()}
-              />
-            </div>
-          )}
+                });
+              }}
+              onClose={(p) => void docState.closeTab(p)}
+              onCloseAll={() => void docState.closeAllTabs()}
+            />
+          </div>
           <div className="app-top-toolbar__end">
-            {!thoughtManagementPageOpen ? (
-              <>
-                {tauriRuntime && workspaceReady && editorUsable && docState.saveFeedback !== "idle" ? (
-                  <span className="app-top-toolbar__save-status" aria-live="polite">
-                    {docState.saveFeedback === "pending_auto"
-                      ? t("toolbar.autoSavePending")
-                      : docState.saveFeedback === "saving"
-                        ? t("toolbar.saving")
-                        : docState.saveFeedback === "saved"
-                          ? t("toolbar.saved")
-                          : null}
-                  </span>
-                ) : null}
-                <button
-                  type="button"
-                  className="app-top-toolbar__save"
-                  {...tauriDragExcludeProps}
-                  disabled={saveDisabled}
-                  aria-busy={docState.saving || docState.saveFeedback === "saving"}
-                  aria-label={
-                    docState.saving || docState.saveFeedback === "saving"
-                      ? t("toolbar.saving")
-                      : t("toolbar.save")
-                  }
-                  title={
-                    docState.saving || docState.saveFeedback === "saving"
-                      ? t("toolbar.saving")
-                      : isMacPlatform
-                        ? t("toolbar.saveMac")
-                        : t("toolbar.saveWin")
-                  }
-                  onClick={() => void docState.handleSave()}
-                >
-                  <svg
-                    className="app-top-toolbar__save-icon"
-                    width="19"
-                    height="19"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden={true}
-                  >
-                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-                    <polyline points="17 21 17 13 7 13 7 21" />
-                  </svg>
-                </button>
-              </>
+            {tauriRuntime && workspaceReady && editorUsable && docState.saveFeedback !== "idle" ? (
+              <span className="app-top-toolbar__save-status" aria-live="polite">
+                {docState.saveFeedback === "pending_auto"
+                  ? t("toolbar.autoSavePending")
+                  : docState.saveFeedback === "saving"
+                    ? t("toolbar.saving")
+                    : docState.saveFeedback === "saved"
+                      ? t("toolbar.saved")
+                      : null}
+              </span>
             ) : null}
-            {tauriRuntime && workspaceReady && !thoughtManagementPageOpen ? (
-              <button
-                type="button"
-                className="app-top-toolbar__thought-mgmt"
-                {...tauriDragExcludeProps}
-                disabled={!rootPath}
-                onClick={() => setThoughtManagementPageOpen(true)}
-                aria-label={t("toolbar.thoughtManagementPage")}
-                title={t("toolbar.thoughtManagementPageTitle")}
+            <button
+              type="button"
+              className="app-top-toolbar__save"
+              {...tauriDragExcludeProps}
+              disabled={saveDisabled}
+              aria-busy={docState.saving || docState.saveFeedback === "saving"}
+              aria-label={
+                docState.saving || docState.saveFeedback === "saving"
+                  ? t("toolbar.saving")
+                  : t("toolbar.save")
+              }
+              title={
+                docState.saving || docState.saveFeedback === "saving"
+                  ? t("toolbar.saving")
+                  : isMacPlatform
+                    ? t("toolbar.saveMac")
+                    : t("toolbar.saveWin")
+              }
+              onClick={() => void docState.handleSave()}
+            >
+              <svg
+                className="app-top-toolbar__save-icon"
+                width="19"
+                height="19"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden={true}
               >
-                <svg
-                  className="app-top-toolbar__thought-mgmt-icon"
-                  width="19"
-                  height="19"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden={true}
-                  focusable="false"
-                >
-                  <rect x="3" y="4" width="7" height="16" rx="1.5" />
-                  <path d="M14 8h7" />
-                  <path d="M14 12h7" />
-                  <path d="M14 16h7" />
-                </svg>
-              </button>
-            ) : null}
-            {!thoughtManagementPageOpen ? (
-              <button
-                type="button"
-                className={`main__right-panel-toggle${rightPanelOpen ? " is-active" : ""}`}
-                {...tauriDragExcludeProps}
-                onClick={() => setRightPanelOpen((o) => !o)}
-                disabled={!workspaceReady}
-                aria-pressed={rightPanelOpen}
-                aria-label={rightPanelOpen ? t("toolbar.hideSidePanel") : t("toolbar.showSidePanel")}
-                title={
-                  rightPanelOpen ? t("toolbar.hideSidePanelTitle") : t("toolbar.showSidePanelTitle")
-                }
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                <polyline points="17 21 17 13 7 13 7 21" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={`main__right-panel-toggle${rightPanelOpen ? " is-active" : ""}`}
+              {...tauriDragExcludeProps}
+              onClick={() => setRightPanelOpen((o) => !o)}
+              disabled={!workspaceReady}
+              aria-pressed={rightPanelOpen}
+              aria-label={rightPanelOpen ? t("toolbar.hideSidePanel") : t("toolbar.showSidePanel")}
+              title={
+                rightPanelOpen ? t("toolbar.hideSidePanelTitle") : t("toolbar.showSidePanelTitle")
+              }
+            >
+              <svg
+                className="main__right-panel-toggle__icon"
+                width="19"
+                height="19"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden={true}
+                focusable="false"
               >
-                <svg
-                  className="main__right-panel-toggle__icon"
-                  width="19"
-                  height="19"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden={true}
-                  focusable="false"
-                >
-                  {/* 与文件夹图标相近的视口占比：外框约 3–21，右侧窄栏 */}
-                  <rect x="3" y="3" width="18" height="18" rx="2.5" />
-                  <path d="M15 5.5v13" />
-                </svg>
-              </button>
-            ) : null}
+                <rect x="3" y="3" width="18" height="18" rx="2.5" />
+                <path d="M15 5.5v13" />
+              </svg>
+            </button>
             {renderWindowControls("trailing")}
           </div>
         </div>
@@ -1326,8 +1243,7 @@ function App() {
       >
         <ActivityBar
           activeView={leftPanelView}
-          onViewChange={setLeftPanelView}
-          onOpenThoughtManagement={() => setThoughtManagementPageOpen(true)}
+          onViewChange={(v) => void changeView(v)}
           onOpenCognitiveReport={() => setCognitiveReportOpen(true)}
           onOpenSettings={() => setAiSettingsOpen(true)}
         />
@@ -1343,9 +1259,11 @@ function App() {
                   tauriRuntime ? (tauriDragExcludeProps as ButtonHTMLAttributes<HTMLButtonElement>) : undefined
                 }
                 onSelectFile={(p) => {
-                  setPreferredNewMarkdownDir(parentDirOfRelPath(p));
-                  setLeftPanelView("files");
-                  void docState.openOrFocusTab(p);
+                  void changeView("files").then((ok) => {
+                    if (!ok) return;
+                    setPreferredNewMarkdownDir(parentDirOfRelPath(p));
+                    void docState.openOrFocusTab(p);
+                  });
                 }}
                 fileOps={fileTreeFileOps}
                 newMarkdownAction={
@@ -1444,6 +1362,26 @@ function App() {
               crepeApiRef={crepeEditorApiRef}
             />
           </main>
+        ) : leftPanelView === "thoughts" ? (
+          thoughtManagementSessionActive ? (
+            <main className="main main--full-view app-thought-management-route">
+              <ThoughtMgmtAiConversationSessionProvider
+                workspaceReady={workspaceReady}
+                workspaceRoot={rootPath}
+                tauriRuntime={tauriRuntime}
+              >
+                <ThoughtManagementPanel
+                  workspaceReady={workspaceReady}
+                  tauriRuntime={tauriRuntime}
+                  onThoughtDetailDirtyChange={setThoughtMgmtBodyDirty}
+                  onOpenNote={(relPath) => {
+                    setLeftPanelView("files");
+                    void onOpenCoachMarkdownPath(relPath);
+                  }}
+                />
+              </ThoughtMgmtAiConversationSessionProvider>
+            </main>
+          ) : null
         ) : (
         <main className="main">
           {docState.activePath != null &&
@@ -1762,25 +1700,6 @@ function App() {
           </AiConversationSessionProvider>
         )}
       </div>
-      {thoughtManagementSessionActive ? (
-        <div className="app-thought-management-route">
-          <ThoughtMgmtAiConversationSessionProvider
-            workspaceReady={workspaceReady}
-            workspaceRoot={rootPath}
-            tauriRuntime={tauriRuntime}
-          >
-            <ThoughtManagementPanel
-              workspaceReady={workspaceReady}
-              tauriRuntime={tauriRuntime}
-              onThoughtDetailDirtyChange={handleThoughtMgmtDetailDirtyChange}
-              onOpenNote={(relPath) => {
-                setThoughtManagementPageOpen(false);
-                void onOpenCoachMarkdownPath(relPath);
-              }}
-            />
-          </ThoughtMgmtAiConversationSessionProvider>
-        </div>
-      ) : null}
       {aiSettingsOpen ? (
         <Suspense fallback={null}>
           <AiLlmSettingsModal
