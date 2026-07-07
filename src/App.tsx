@@ -38,6 +38,7 @@ import { LinkRecommendationPanel } from "./components/LinkRecommendationPanel";
 import { RightPanelShell, type RightPanelTab } from "./components/RightPanelShell";
 import { ThoughtMaturityToastHost } from "./components/ThoughtMaturityToastHost";
 import { ThoughtManagementPanel } from "./components/ThoughtManagementPanel";
+import { ThoughtSavePopover } from "./components/ThoughtSavePopover";
 import { ThoughtVaultHubModal } from "./components/ThoughtVaultHubModal";
 import { WorkspaceSearchModal } from "./components/WorkspaceSearchModal";
 import { EditorFindBar } from "./components/EditorFindBar";
@@ -173,6 +174,7 @@ function App() {
   const [cognitiveReportOpen, setCognitiveReportOpen] = useState(false);
   const [thoughtVaultHubOpen, setThoughtVaultHubOpen] = useState(false);
   const [thoughtMgmtBodyDirty, setThoughtMgmtBodyDirty] = useState(false);
+  const [editorSaveThoughtText, setEditorSaveThoughtText] = useState<string | null>(null);
   const [workspaceSearchOpen, setWorkspaceSearchOpen] = useState(false);
   /** 同标签重复点全文搜索结果时仍触发预览滚动 */
   const [workspaceSearchGotoEpoch, setWorkspaceSearchGotoEpoch] = useState(0);
@@ -1558,6 +1560,7 @@ function App() {
                               onEditorDispose={() => {
                                 crepeEditorApiRef.current = null;
                               }}
+                              onSaveAsThought={setEditorSaveThoughtText}
                             />
                           </Suspense>
                         </div>
@@ -1729,6 +1732,15 @@ function App() {
           void onOpenCoachMarkdownPath(relPath);
         }}
       />
+      {editorSaveThoughtText != null && (
+        <ThoughtSavePopover
+          content={editorSaveThoughtText}
+          defaultRelPath={docState.activePath}
+          isSelection
+          onSaved={() => setEditorSaveThoughtText(null)}
+          onCancel={() => setEditorSaveThoughtText(null)}
+        />
+      )}
       <CognitiveReportPanel open={cognitiveReportOpen} onClose={() => setCognitiveReportOpen(false)} />
     </AiNoteContextProvider>
   );

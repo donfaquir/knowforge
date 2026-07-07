@@ -140,6 +140,7 @@ type Props = {
   ) => void | Promise<void>;
   /** 输入 `[[` 时 wikilink 候选列表（工作区 Markdown 叶子）；默认空 */
   wikiSuggestFiles?: WikiSuggestFileRow[];
+  onSaveAsThought?: (text: string) => void;
 };
 
 function CrepeInner({
@@ -151,6 +152,7 @@ function CrepeInner({
   onEditorDispose,
   onOpenInternalMarkdownLink,
   wikiSuggestFiles = [],
+  onSaveAsThought,
 }: Props) {
   const docKeyRef = useRef(docKey);
   docKeyRef.current = docKey;
@@ -168,6 +170,8 @@ function CrepeInner({
   const suppressMarkdownUntilBaselineRef = useRef(true);
   /** 与 queueMicrotask 配对，防止快速连续换文时误解除抑制 */
   const injectGenRef = useRef(0);
+  const onSaveAsThoughtRef = useRef(onSaveAsThought);
+  onSaveAsThoughtRef.current = onSaveAsThought;
   /** composition 滚动修复清理函数 */
   const compositionCleanupRef = useRef<(() => void) | null>(null);
 
@@ -187,6 +191,22 @@ function CrepeInner({
           [CrepeFeature.Latex]: false,
         },
         featureConfigs: {
+          [CrepeFeature.Toolbar]: {
+            buildToolbar: (builder: { addGroup: (key: string, label: string) => { addItem: (key: string, item: { icon: string; active: (ctx: unknown) => boolean; onRun?: (ctx: unknown) => void }) => unknown } }) => {
+              builder.addGroup("thought", "Thought").addItem("save-thought", {
+                icon: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`,
+                active: () => false,
+                onRun: (ctx) => {
+                  const view = (ctx as { get: (key: unknown) => EditorView }).get(editorViewCtx);
+                  const { from, to } = view.state.selection;
+                  const text = view.state.doc.textBetween(from, to, "\n");
+                  if (text.trim()) {
+                    onSaveAsThoughtRef.current?.(text.trim());
+                  }
+                },
+              });
+            },
+          },
           [CrepeFeature.CodeMirror]: {
             languages: crepeCodeMirrorLanguages,
           },
