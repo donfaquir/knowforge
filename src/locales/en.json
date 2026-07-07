@@ -766,5 +766,14 @@
     "editorMetaCol": "Basic info",
     "editorPromptCol": "System prompt & tools",
     "editorSaveSuccess": "Saved successfully"
+  },
+  "activityBar": {
+    "label": "Activity bar",
+    "files": "Files",
+    "graph": "Understanding graph",
+    "linkRec": "Link recommendations",
+    "thoughts": "All thoughts",
+    "report": "Cognitive growth report",
+    "settings": "Settings"
   }
 }

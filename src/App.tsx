@@ -42,6 +42,7 @@ import { ThoughtVaultHubModal } from "./components/ThoughtVaultHubModal";
 import { WorkspaceSearchModal } from "./components/WorkspaceSearchModal";
 import { EditorFindBar } from "./components/EditorFindBar";
 import { GraphTabShell } from "./components/GraphTabShell";
+import { ActivityBar, type LeftPanelView } from "./components/ActivityBar";
 import { KF_PRIVATE_LOCK_ICON_DOC_BAR_PX } from "./constants/kfPrivateUi";
 import { useKfPrivateForPath } from "./hooks/useKfPrivateForPath";
 import { useOpenDocs } from "./hooks/useOpenDocs";
@@ -162,6 +163,7 @@ function App() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("outline");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [leftPanelView, setLeftPanelView] = useState<LeftPanelView>("files");
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [initialDepthMode, setInitialDepthMode] = useState<DepthMode | undefined>(undefined);
@@ -1055,11 +1057,11 @@ function App() {
       openMarkdownTab={onOpenCoachMarkdownPath}
     >
     <div
-      className={`layout${showRightColumn ? " layout--with-right-panel" : ""}${tauriRuntime ? " layout--tauri" : ""}${sidebarOpen ? "" : " layout--sidebar-collapsed"}${titlebarPlatformClass}${anyDragging ? " layout--resizing" : ""}`}
+      className={`layout${showRightColumn && leftPanelView === "files" ? " layout--with-right-panel" : ""}${tauriRuntime ? " layout--tauri" : ""}${sidebarOpen ? "" : " layout--sidebar-collapsed"}${titlebarPlatformClass}${anyDragging ? " layout--resizing" : ""}`}
       style={
         {
           "--sidebar-width": sidebarOpen ? `${leftResizable.width}px` : undefined,
-          "--right-panel-width": showRightColumn ? `${rightResizable.width}px` : undefined,
+          "--right-panel-width": showRightColumn && leftPanelView === "files" ? `${rightResizable.width}px` : undefined,
         } as React.CSSProperties
       }
     >
@@ -1216,9 +1218,10 @@ function App() {
                 isKfPrivate={isPathKfPrivate}
                 onRenameTab={onRenameTabFromBar}
                 onSelect={(p) => {
-                  if (p === docState.activePath) {
+                  if (p === docState.activePath && leftPanelView === "files") {
                     return;
                   }
+                  setLeftPanelView("files");
                   logPerfMark("markdown.tab_switch.select", {
                     from: docState.activePath,
                     to: p,
@@ -1359,6 +1362,13 @@ function App() {
         {...tauriWindowDragProps}
         aria-hidden={!sidebarOpen}
       >
+        <ActivityBar
+          activeView={leftPanelView}
+          onViewChange={setLeftPanelView}
+          onOpenThoughtManagement={() => setThoughtManagementPageOpen(true)}
+          onOpenCognitiveReport={() => setCognitiveReportOpen(true)}
+          onOpenSettings={() => setAiSettingsOpen(true)}
+        />
         <aside className="sidebar">
           <nav className="sidebar__nav" aria-label={t("toolbar.files")}>
             {rootPath ? (
@@ -1372,6 +1382,7 @@ function App() {
                 }
                 onSelectFile={(p) => {
                   setPreferredNewMarkdownDir(parentDirOfRelPath(p));
+                  setLeftPanelView("files");
                   void docState.openOrFocusTab(p);
                 }}
                 fileOps={fileTreeFileOps}
@@ -1421,63 +1432,6 @@ function App() {
                     <span className="sidebar__root-path__ltr">{rootPath}</span>
                   </span>
                 </div>
-                {tauriRuntime && workspaceReady ? (
-                  <button
-                    type="button"
-                    className="sidebar__thought-hub"
-                    {...tauriDragExcludeProps}
-                    aria-label={t("sidebar.thoughtVaultHub")}
-                    title={t("sidebar.thoughtVaultHubTitle")}
-                    onClick={() => setThoughtVaultHubOpen(true)}
-                  >
-                    <svg
-                      className="sidebar__thought-hub-icon"
-                      width="18"
-                      height="18"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden={true}
-                    >
-                      <path d="M8 6h13" />
-                      <path d="M8 12h13" />
-                      <path d="M8 18h13" />
-                      <path d="M3 6h.01" />
-                      <path d="M3 12h.01" />
-                      <path d="M3 18h.01" />
-                    </svg>
-                  </button>
-                ) : null}
-                {tauriRuntime ? (
-                  <button
-                    type="button"
-                    className="sidebar__ai-settings"
-                    {...tauriDragExcludeProps}
-                    aria-label={t("sidebar.aiSettings")}
-                    title={t("sidebar.aiSettingsTitle")}
-                    onClick={() => setAiSettingsOpen(true)}
-                  >
-                    <svg
-                      className="sidebar__ai-settings-icon"
-                      width="18"
-                      height="18"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden={true}
-                    >
-                      {/* 经典六齿齿轮廓（圆角齿）+ 中心圆，与常见「设置」图标一致 */}
-                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
-                  </button>
-                ) : null}
               </div>
             </footer>
           ) : null}
@@ -1492,8 +1446,43 @@ function App() {
         )}
       </div>
       <div
-        className={`content-area${showRightColumn ? " content-area--with-right-panel" : ""}${!sidebarOpen ? " content-area--sidebar-collapsed" : ""}`}
+        className={`content-area${showRightColumn && leftPanelView === "files" ? " content-area--with-right-panel" : ""}${!sidebarOpen ? " content-area--sidebar-collapsed" : ""}`}
       >
+        {leftPanelView === "graph" ? (
+          <main className="main main--full-view">
+            <GraphTabShell
+              workspaceReady={workspaceReady}
+              workspaceRoot={rootPath}
+              tauriRuntime={tauriRuntime}
+              onOpenNote={(relPath) => {
+                setLeftPanelView("files");
+                void onOpenCoachMarkdownPath(relPath);
+              }}
+            />
+          </main>
+        ) : leftPanelView === "linkRec" ? (
+          <main className="main main--full-view">
+            <LinkRecommendationPanel
+              workspaceRoot={rootPath}
+              activeRelPath={docState.activePath}
+              panelActive={leftPanelView === "linkRec"}
+              savedMarkdownSnapshot={
+                docState.activePath &&
+                current &&
+                !current.loading &&
+                !current.loadError
+                  ? current.savedContent
+                  : undefined
+              }
+              editorContentInjectEpoch={
+                docState.activePath ? (current?.contentInjectEpoch ?? 0) : 0
+              }
+              workspaceReady={workspaceReady}
+              tauriRuntime={tauriRuntime}
+              crepeApiRef={crepeEditorApiRef}
+            />
+          </main>
+        ) : (
         <main className="main">
           {docState.activePath != null &&
             docState.hasDiskStaleConflict(docState.activePath) &&
@@ -1739,7 +1728,8 @@ function App() {
             )}
           </div>
         </main>
-        {showRightColumn && (
+        )}
+        {showRightColumn && leftPanelView === "files" && (
           <div
             className={`panel-resizer panel-resizer--right${rightResizable.isDragging ? " panel-resizer--active" : ""}`}
             onMouseDown={rightResizable.handleMouseDown}
@@ -1747,7 +1737,7 @@ function App() {
             aria-label={t("toolbar.resizeRight")}
           />
         )}
-        {showRightColumn && (
+        {showRightColumn && leftPanelView === "files" && (
           <AiConversationSessionProvider
             workspaceReady={workspaceReady}
             workspaceRoot={rootPath}

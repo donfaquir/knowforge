@@ -1,13 +1,33 @@
 # Plan Index
 
 > 总控表：所有待办 spec 的状态、优先级一览。
-> 最后更新：2026-07-06
+> 最后更新：2026-07-07
 
 ---
 
 ## Active
 
-（暂无进行中的 spec）
+| Spec | 优先级 | 状态 | 工期 | 说明 |
+|------|--------|------|------|------|
+| [Spec 0: Activity Bar](spec-00-activity-bar.md) | P0 | 待开发 | ~3 天 | 左侧全局导航栏：文件/图谱/推荐切换面板 + 想法/报告/设置快捷入口 |
+| [Spec 1: 面板精简](spec-01-right-panel-simplify.md) | P0 | 待开发 | ~2 天 | 5 Tab → 3 Tab，graph/linkRec 入口由 Activity Bar 提供，复习默认开启（依赖 Spec 0） |
+| [Spec 2: 选中保存 Thought](spec-02-editor-save-thought.md) | P0 | 待开发 | ~2 天 | 编辑器选中文字 → Milkdown Toolbar → ThoughtSavePopover |
+| [Spec 3: 写作教练手动触发](spec-03-writing-coach-manual.md) | P1 | 待开发 | ~1 天 | Cmd+Shift+W + Command Palette 入口 |
+| [Spec 4: 新手引导](spec-04-onboarding-flow.md) | P0 | 待开发 | ~2 周 | 预录示例 + 4 步引导 + 绕过 LLM 体验挑战复习（依赖 Spec 0+1+2） |
+
+**总工期**：~3 周（Spec 0 → Spec 1 串行 ~5 天 | Spec 2+3 并行 ~2 天 → Spec 4 ~2 周）
+
+**决策依据**：[产品分析：PM 视角](product-analysis-pm-202607.md)
+
+### 方向讨论文档（已归档，供后续 Phase 参考）
+
+| 文档 | 关注点 |
+|------|--------|
+| [产品评估 v1](_archive_product/product-evaluation-202607.md) | 首次全景评估，P0-3 已过时 |
+| [产品深层评估](_archive_product/product-full-assessment-202607.md) | 知识分层假设审视 |
+| [独立二审](_archive_product/product-assessment-independent-202607.md) | 对前两份的补充与修正 |
+| [Thought 生命周期重设计](_archive_product/thought-lifecycle-redesign-202607.md) | 四阶段生命周期（潜伏→萌芽→成长→成熟），Phase 2 |
+| [Phase 1 重审：30 秒目标](_archive_product/phase1-rethink-30s-goal-202607.md) | 潜伏机制，Phase 2 |
 
 ---
 

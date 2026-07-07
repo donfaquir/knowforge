@@ -766,5 +766,14 @@
     "editorMetaCol": "基本信息",
     "editorPromptCol": "系统提示词与工具",
     "editorSaveSuccess": "保存成功"
+  },
+  "activityBar": {
+    "label": "活动栏",
+    "files": "文件",
+    "graph": "理解图谱",
+    "linkRec": "链接推荐",
+    "thoughts": "全部想法",
+    "report": "认知成长报告",
+    "settings": "设置"
   }
 }

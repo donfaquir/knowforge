@@ -186,6 +186,83 @@ body {
   display: none;
 }
 
+/* ── Activity Bar: narrow icon rail, first flex child in .app-sidebar-column ── */
+
+.activity-bar {
+  flex: 0 0 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  border-right: 1px solid rgba(0, 0, 0, 0.08);
+  background: var(--app-chrome-bg);
+  overflow: hidden;
+}
+
+.activity-bar__top {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.activity-bar__bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: auto;
+}
+
+.activity-bar__btn {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  position: relative;
+  color: var(--fg-dim, #666);
+  padding: 0;
+}
+
+.activity-bar__btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--fg-default, #333);
+}
+
+.activity-bar__btn--active {
+  color: var(--fg-default, #1a1a1a);
+}
+
+.activity-bar__btn--active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--accent-color, #0066cc);
+  border-radius: 1px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .activity-bar {
+    border-right-color: rgba(255, 255, 255, 0.08);
+  }
+  .activity-bar__btn {
+    color: var(--fg-dim, #999);
+  }
+  .activity-bar__btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--fg-default, #ddd);
+  }
+  .activity-bar__btn--active {
+    color: var(--fg-default, #eee);
+  }
+}
+
 .app-top-toolbar__start {
   flex: 0 0 var(--sidebar-width, 196px);
   box-sizing: border-box;
@@ -2464,6 +2541,11 @@ html:lang(zh-Hans) .settings-lang-toggle .app-modal__btn {
   min-width: 0;
   /* 与侧栏同色（顶栏另用 --app-toolbar-bg），主列上沿与左右竖向分区连贯 */
   background: var(--app-chrome-bg);
+}
+
+.main--full-view {
+  flex: 1;
+  overflow: auto;
 }
 
 .main__disk-notice {
