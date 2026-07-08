@@ -144,7 +144,6 @@ export function AiConversationPanel() {
     workspaceReady,
     tauriRuntime,
     includeVaultContext,
-    setIncludeVaultContext,
     isVaultSearching,
     setIsVaultSearching,
     depthMode,
@@ -220,6 +219,7 @@ export function AiConversationPanel() {
   /** Iter 5 #4：工具调用总开关从 vault config 读取（默认 true,旧 vault 缺字段时取 true）。
    *  通过 VAULT_CONFIG_UPDATED_EVENT 在设置保存后实时同步,无需重开会话。 */
   const [toolsEnabled, setToolsEnabled] = useState(true);
+  const [activeModelLabel, setActiveModelLabel] = useState<string | null>(null);
 
   /** Iter 5 #3：内置 skill manifest 缓存。skill 在后端 setup() 注册一次后不变，挂载时取一次即可。 */
   const [skillsCache, setSkillsCache] = useState<SkillManifestJson[]>([]);
@@ -241,6 +241,9 @@ export function AiConversationPanel() {
         const cfg = await invoke<VaultConfigForUi>("get_vault_config_for_ui");
         if (disposed) return;
         setToolsEnabled(cfg.ai.toolsEnabled !== false);
+        const p = cfg.ai?.providers?.find((x: ProviderProfileForUi) => x.id === cfg.ai?.activeProviderId);
+        const model = p?.lastUsedModel?.trim() || p?.defaultModel?.trim() || null;
+        setActiveModelLabel(model ? `${p!.label} / ${model}` : null);
       } catch {
         /* 加载失败保持默认 true,避免阻塞用户 */
       }
@@ -1603,17 +1606,6 @@ export function AiConversationPanel() {
             </span>
           </label>
         ) : null}
-        <label className="ai-chat__attach ai-chat__attach--above-input">
-          <input
-            type="checkbox"
-            checked={includeVaultContext}
-            onChange={(e) => setIncludeVaultContext(e.target.checked)}
-            disabled={isStreaming || isVaultSearching}
-            aria-describedby="ai-chat-vault-hint"
-            {...dragExcludeProps}
-          />
-          <span id="ai-chat-vault-hint">{t("aiPanel.vaultSearch")}</span>
-        </label>
         <div className="ai-chat__composer-field">
           <div className="ai-chat__composer-stack">
             {slashOpen ? (
@@ -1718,6 +1710,9 @@ export function AiConversationPanel() {
             </div>
           </div>
         </div>
+        {activeModelLabel ? (
+          <div className="ai-chat__model-label">{activeModelLabel}</div>
+        ) : null}
       </div>
 
       {copyToast ? (

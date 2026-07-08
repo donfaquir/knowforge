@@ -1330,6 +1330,14 @@ body {
   border-top: 1px solid rgba(0, 0, 0, 0.08);
 }
 
+.ai-chat__model-label {
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: right;
+  color: var(--kf-text-muted, #94a3b8);
+  padding: 0 2px;
+}
+
 /* 输入区与底栏工具条分区：正文仅在 textarea 内，不叠压深度/发送 */
 .ai-chat__composer-field {
   width: 100%;
