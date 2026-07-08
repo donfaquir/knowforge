@@ -108,15 +108,9 @@ body {
   z-index: 2;
 }
 
-/* macOS Overlay 标题栏：系统已处理窗口圆角，不再需要自定义裁切；内容下移避免被交通灯遮挡 */
-.layout--platform-mac #root {
+/* macOS Overlay 标题栏：系统已处理窗口圆角，不再需要自定义裁切 */
+.layout.layout--platform-mac {
   border-radius: 0;
-  overflow: visible;
-}
-
-.layout--platform-mac .layout {
-  border-radius: 0;
-  padding-top: 28px;
 }
 
 .layout.layout--tauri [data-tauri-drag-region] {
