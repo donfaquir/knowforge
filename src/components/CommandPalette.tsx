@@ -20,6 +20,7 @@ type Props = {
   onOpenThoughtVaultHub?: () => void;
   onOpenWorkspaceSearch?: () => void;
   onTriggerWritingCoach?: () => void;
+  onStartOnboarding?: () => void;
 };
 
 export function CommandPalette({
@@ -29,6 +30,7 @@ export function CommandPalette({
   onOpenThoughtVaultHub,
   onOpenWorkspaceSearch,
   onTriggerWritingCoach,
+  onStartOnboarding,
 }: Props) {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
@@ -45,10 +47,13 @@ export function CommandPalette({
   onOpenWorkspaceSearchRef.current = onOpenWorkspaceSearch;
   const onTriggerWritingCoachRef = useRef(onTriggerWritingCoach);
   onTriggerWritingCoachRef.current = onTriggerWritingCoach;
+  const onStartOnboardingRef = useRef(onStartOnboarding);
+  onStartOnboardingRef.current = onStartOnboarding;
 
   const hasThoughtVaultHub = onOpenThoughtVaultHub != null;
   const hasWorkspaceSearch = onOpenWorkspaceSearch != null;
   const hasWritingCoach = onTriggerWritingCoach != null;
+  const hasOnboarding = onStartOnboarding != null;
 
   const items: CommandItem[] = useMemo(() => {
     const base: CommandItem[] = [
@@ -95,8 +100,19 @@ export function CommandPalette({
         },
       });
     }
+    if (hasOnboarding) {
+      base.push({
+        id: "onboarding",
+        label: t("commandPalette.onboarding"),
+        keywords: "引导 新手 onboarding guide tutorial 教程",
+        onSelect: () => {
+          onStartOnboardingRef.current?.();
+          onCloseRef.current();
+        },
+      });
+    }
     return base;
-  }, [t, hasThoughtVaultHub, hasWorkspaceSearch, hasWritingCoach]);
+  }, [t, hasThoughtVaultHub, hasWorkspaceSearch, hasWritingCoach, hasOnboarding]);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();

@@ -654,7 +654,8 @@
     "cognitiveReport": "认知成长报告",
     "thoughtVaultHub": "全库想法中心",
     "workspaceSearch": "全文搜索 Vault",
-    "writingCoach": "写作教练"
+    "writingCoach": "写作教练",
+    "onboarding": "重新引导"
   },
   "editorFind": {
     "title": "篇内查找",
@@ -769,6 +770,36 @@
     "editorMetaCol": "基本信息",
     "editorPromptCol": "系统提示词与工具",
     "editorSaveSuccess": "保存成功"
+  },
+  "onboarding": {
+    "step1Title": "欢迎来到 KnowForge",
+    "step1Subtitle": "让你的笔记帮你思考",
+    "step1Desc": "KnowForge 将你的 Markdown 笔记变成主动学习系统。它把关键洞察提取为「想法」，并通过间隔挑战复习帮你真正内化所学内容。",
+    "step1Start": "开始体验",
+    "step1Skip": "跳过引导",
+    "step2Title": "试试挑战复习",
+    "step2Desc": "这是一条示例想法。阅读后，试着回答下面的挑战问题。",
+    "step2AnswerPlaceholder": "在此输入你的回答…",
+    "step2Submit": "提交",
+    "step2SkipQuestion": "跳过",
+    "step2FeedbackIntro": "反馈",
+    "step2MaturityHint": "通过后，🌱 幼苗 会成长为 🌿 成长中",
+    "step2Next": "下一步",
+    "step3Title": "配置 AI（可选）",
+    "step3Desc": "配置 AI 服务后，KnowForge 可以对你自己的笔记生成挑战问题。你随时可以在设置中配置。",
+    "step3Skip": "稍后再说",
+    "step3Saved": "配置已保存！",
+    "step4Title": "你已准备好",
+    "step4Desc": "现在你可以做这三件事：",
+    "step4Tip1Title": "保存想法",
+    "step4Tip1Desc": "在编辑器中选中文字 → 点击书签图标",
+    "step4Tip2Title": "复习想法",
+    "step4Tip2Desc": "打开右侧面板的「复习」标签",
+    "step4Tip3Title": "快捷复习",
+    "step4Tip3Desc": "按 ⌘⇧Y / Ctrl+Shift+Y 快速跳转",
+    "step4Done": "开始使用 KnowForge",
+    "stepOf": "{{current}} / {{total}}",
+    "prev": "返回"
   },
   "activityBar": {
     "label": "活动栏",

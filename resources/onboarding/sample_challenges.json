@@ -1,0 +1,51 @@
+{
+  "thoughts": [
+    {
+      "key": "feynman",
+      "body_zh": "费曼学习法的核心不是「简化」——是「发现你无法简化的地方」。当你无法用简单语言解释一个概念时，说明你的理解有漏洞。",
+      "body_en": "The core of the Feynman technique isn't 'simplifying' — it's 'discovering what you can't simplify.' When you can't explain a concept in plain language, it reveals gaps in your understanding.",
+      "summary_zh": "费曼学习法的核心洞察",
+      "summary_en": "Core insight of the Feynman technique"
+    },
+    {
+      "key": "spaced-repetition",
+      "body_zh": "间隔效应说明大脑在「快要忘记」的时刻复习效果最好。这解释了为什么考前突击虽然能通过考试，但两周后什么都不记得。",
+      "body_en": "The spacing effect shows that the brain learns best when reviewing at the moment of near-forgetting. This explains why cramming before an exam might pass the test, but leaves nothing two weeks later.",
+      "summary_zh": "间隔重复与遗忘曲线",
+      "summary_en": "Spaced repetition and the forgetting curve"
+    },
+    {
+      "key": "hicks-law",
+      "body_zh": "少即是多不是美学口号——它是认知负载理论的应用。每增加一个选项，用户做决定的时间指数增长（Hick's Law）。",
+      "body_en": "Less is more isn't an aesthetic slogan — it's applied cognitive load theory. Each additional option increases decision time exponentially (Hick's Law).",
+      "summary_zh": "Hick's Law 与认知负载",
+      "summary_en": "Hick's Law and cognitive load"
+    }
+  ],
+  "challenges": [
+    {
+      "thoughtKey": "feynman",
+      "questionType": "apply",
+      "question_zh": "你最近学了一个新的编程概念，请试着用费曼学习法的思路来检验你是否真正理解了它。你会怎么做？",
+      "question_en": "You recently learned a new programming concept. How would you apply the Feynman technique to test whether you truly understand it?",
+      "sampleFeedback_zh": "很好的思考！你抓住了费曼学习法的关键——不是简单重复，而是通过「教别人」来暴露理解的盲区。坚持这个习惯，你会发现学习效率大幅提升。",
+      "sampleFeedback_en": "Great thinking! You've grasped the key insight — it's not about simplifying, but about exposing gaps in understanding through teaching. Keep this habit, and you'll see a significant boost in learning efficiency."
+    },
+    {
+      "thoughtKey": "spaced-repetition",
+      "questionType": "explain",
+      "question_zh": "为什么「快要忘记」的时刻复习效果最好？用你自己的话解释这背后的原理。",
+      "question_en": "Why is reviewing most effective at the moment of near-forgetting? Explain the underlying principle in your own words.",
+      "sampleFeedback_zh": "不错的解释！关键在于：大脑在「费力回忆」时形成的记忆痕迹更深。就像锻炼肌肉，适度的挑战才能促进成长。",
+      "sampleFeedback_en": "Nice explanation! The key point: the brain forms deeper memory traces when 'effortful retrieval' is required. Like exercising muscles, moderate challenge promotes growth."
+    },
+    {
+      "thoughtKey": "hicks-law",
+      "questionType": "apply",
+      "question_zh": "想象你正在设计一个设置页面，有 15 个选项。根据 Hick's Law，你会如何优化用户体验？",
+      "question_en": "Imagine you're designing a settings page with 15 options. Based on Hick's Law, how would you optimize the user experience?",
+      "sampleFeedback_zh": "很棒的思路！把选项分组、设置合理的默认值、隐藏高级选项——这些都是 Hick's Law 的实际应用。好的设计就是帮用户减少不必要的决策。",
+      "sampleFeedback_en": "Great approach! Grouping options, setting sensible defaults, hiding advanced options — these are all practical applications of Hick's Law. Good design helps users avoid unnecessary decisions."
+    }
+  ]
+}

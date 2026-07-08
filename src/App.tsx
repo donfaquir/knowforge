@@ -44,6 +44,7 @@ import { WorkspaceSearchModal } from "./components/WorkspaceSearchModal";
 import { EditorFindBar } from "./components/EditorFindBar";
 import { GraphTabShell } from "./components/GraphTabShell";
 import { ActivityBar, type LeftPanelView } from "./components/ActivityBar";
+import { OnboardingOverlay } from "./components/OnboardingOverlay";
 import { KF_PRIVATE_LOCK_ICON_DOC_BAR_PX } from "./constants/kfPrivateUi";
 import { useKfPrivateForPath } from "./hooks/useKfPrivateForPath";
 import { useOpenDocs } from "./hooks/useOpenDocs";
@@ -176,6 +177,7 @@ function App() {
   const [thoughtMgmtBodyDirty, setThoughtMgmtBodyDirty] = useState(false);
   const [editorSaveThoughtText, setEditorSaveThoughtText] = useState<string | null>(null);
   const [workspaceSearchOpen, setWorkspaceSearchOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   /** 同标签重复点全文搜索结果时仍触发预览滚动 */
   const [workspaceSearchGotoEpoch, setWorkspaceSearchGotoEpoch] = useState(0);
   const [editorFindOpen, setEditorFindOpen] = useState(false);
@@ -312,6 +314,13 @@ function App() {
     setRightPanelOpen(true);
     setRightPanelTab("review");
   }, []);
+
+  useEffect(() => {
+    if (!workspaceReady || !tauriRuntime) return;
+    if (localStorage.getItem("knowforge:onboardingCompleted")) return;
+    invoke("seed_onboarding_content").catch(() => {});
+    setOnboardingOpen(true);
+  }, [workspaceReady, tauriRuntime]);
 
   const {
     setPreferredNewMarkdownDir,
@@ -1732,6 +1741,7 @@ function App() {
             ? () => writingCoachRef.current?.triggerManually()
             : undefined
         }
+        onStartOnboarding={() => setOnboardingOpen(true)}
       />
       <WorkspaceSearchModal
         open={workspaceSearchOpen}
@@ -1759,6 +1769,11 @@ function App() {
         />
       )}
       <CognitiveReportPanel open={cognitiveReportOpen} onClose={() => setCognitiveReportOpen(false)} />
+      <OnboardingOverlay
+        open={onboardingOpen}
+        onClose={() => setOnboardingOpen(false)}
+        tauriRuntime={tauriRuntime}
+      />
     </AiNoteContextProvider>
   );
 }

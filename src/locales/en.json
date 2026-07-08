@@ -654,7 +654,8 @@
     "cognitiveReport": "Cognitive growth report",
     "thoughtVaultHub": "All thoughts hub",
     "workspaceSearch": "Search workspace",
-    "writingCoach": "Writing coach"
+    "writingCoach": "Writing coach",
+    "onboarding": "Restart onboarding guide"
   },
   "editorFind": {
     "title": "Find in document",
@@ -769,6 +770,36 @@
     "editorMetaCol": "Basic info",
     "editorPromptCol": "System prompt & tools",
     "editorSaveSuccess": "Saved successfully"
+  },
+  "onboarding": {
+    "step1Title": "Welcome to KnowForge",
+    "step1Subtitle": "Let your notes help you think",
+    "step1Desc": "KnowForge turns your Markdown notes into an active learning system. It extracts key insights as \"Thoughts\" and uses spaced repetition challenges to help you truly internalize what you've written.",
+    "step1Start": "Start the tour",
+    "step1Skip": "Skip guide",
+    "step2Title": "Try a challenge review",
+    "step2Desc": "Here's a sample Thought. Read it, then try answering the challenge question below.",
+    "step2AnswerPlaceholder": "Type your answer here…",
+    "step2Submit": "Submit",
+    "step2SkipQuestion": "Skip",
+    "step2FeedbackIntro": "Feedback",
+    "step2MaturityHint": "After passing, 🌱 seedling grows into 🌿 growing",
+    "step2Next": "Next",
+    "step3Title": "Configure AI (optional)",
+    "step3Desc": "With an AI provider configured, KnowForge can generate challenge questions for your own notes. You can always set this up later in Settings.",
+    "step3Skip": "Set up later",
+    "step3Saved": "Configuration saved!",
+    "step4Title": "You're all set!",
+    "step4Desc": "Here are three things you can do right now:",
+    "step4Tip1Title": "Save a thought",
+    "step4Tip1Desc": "Select text in the editor → click the bookmark icon",
+    "step4Tip2Title": "Review your thoughts",
+    "step4Tip2Desc": "Open the Review tab in the right panel",
+    "step4Tip3Title": "Quick review shortcut",
+    "step4Tip3Desc": "Press ⌘⇧Y / Ctrl+Shift+Y to jump to review",
+    "step4Done": "Start using KnowForge",
+    "stepOf": "{{current}} / {{total}}",
+    "prev": "Back"
   },
   "activityBar": {
     "label": "Activity bar",
