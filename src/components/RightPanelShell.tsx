@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   RightPanelOutlineIcon,
-  RightPanelLinkRecIcon,
   RightPanelReviewIcon,
 } from "./treeCollapseIcons";
 
@@ -88,19 +87,6 @@ export function RightPanelShell({
           <button
             type="button"
             role="tab"
-            id="right-panel-tab-linkRec"
-            aria-selected={tab === "linkRec"}
-            aria-controls="right-panel-panel-linkRec"
-            className={`right-panel-shell__segment${tab === "linkRec" ? " is-active" : ""}`}
-            aria-label={t("rightPanel.linkRecTabTitle")}
-            title={t("rightPanel.linkRecTabTitle")}
-            onClick={() => onViewChange("linkRec")}
-          >
-            <RightPanelLinkRecIcon />
-          </button>
-          <button
-            type="button"
-            role="tab"
             id="right-panel-tab-review"
             aria-selected={tab === "review"}
             aria-controls="right-panel-panel-review"
@@ -148,16 +134,6 @@ export function RightPanelShell({
         {aiPanel}
       </div>
       <div
-        id="right-panel-panel-linkRec"
-        role="tabpanel"
-        aria-labelledby="right-panel-tab-linkRec"
-        hidden={tab !== "linkRec"}
-        inert={tab !== "linkRec" ? true : undefined}
-        className="right-panel-shell__panel"
-      >
-        {linkRecPanel}
-      </div>
-      <div
         id="right-panel-panel-review"
         role="tabpanel"
         aria-labelledby="right-panel-tab-review"
@@ -166,6 +142,16 @@ export function RightPanelShell({
         className="right-panel-shell__panel"
       >
         {reviewPanel}
+      </div>
+      <div
+        id="right-panel-panel-linkRec"
+        role="tabpanel"
+        aria-labelledby="right-panel-tab-linkRec"
+        hidden={tab !== "linkRec"}
+        inert={tab !== "linkRec" ? true : undefined}
+        className="right-panel-shell__panel"
+      >
+        {linkRecPanel}
       </div>
     </div>
   );
