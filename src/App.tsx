@@ -521,6 +521,7 @@ function App() {
     }
     setThoughtMgmtBodyDirty(false);
     setLeftPanelView(view);
+    if (view === "files") setSidebarOpen(true);
     return true;
   }, [leftPanelView, thoughtMgmtBodyDirty, t]);
 
