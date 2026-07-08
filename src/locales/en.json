@@ -443,7 +443,8 @@
     "saved": "Thought saved",
     "saveFailed": "Could not save thought",
     "noFile": "Select a target note",
-    "markInaccurate": "Not accurate"
+    "markInaccurate": "Not accurate",
+    "targetNote": "Thought document"
   },
   "thoughtPanel": {
     "title": "Thoughts in this note",

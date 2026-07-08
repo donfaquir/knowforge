@@ -443,7 +443,8 @@
     "saved": "已保存为想法",
     "saveFailed": "保存想法失败",
     "noFile": "请选择目标笔记",
-    "markInaccurate": "不准确"
+    "markInaccurate": "不准确",
+    "targetNote": "想法关联文档"
   },
   "thoughtPanel": {
     "title": "本页想法",

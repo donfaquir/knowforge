@@ -1466,15 +1466,6 @@ export function AiConversationPanel() {
             }
             onSaved={handleThoughtSaved}
             onCancel={handleThoughtPopoverCancel}
-            depthSlot={
-              <DepthSlider
-                compact
-                value={depthMode}
-                onChange={setDepthMode}
-                autoResolved={autoResolved}
-                disabled={isStreaming}
-              />
-            }
           />
         ) : null}
 
