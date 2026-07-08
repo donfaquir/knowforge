@@ -1244,12 +1244,6 @@ function App() {
         <ActivityBar
           activeView={leftPanelView}
           onViewChange={(v) => void changeView(v)}
-          onOpenLinkRec={() => {
-            void changeView("files");
-            setRightPanelOpen(true);
-            setRightPanelTab("linkRec");
-          }}
-          linkRecActive={rightPanelOpen && rightPanelTab === "linkRec" && leftPanelView === "files"}
           onOpenCognitiveReport={() => setCognitiveReportOpen(true)}
           onOpenSettings={() => setAiSettingsOpen(true)}
         />
@@ -1640,6 +1634,7 @@ function App() {
               onViewChange={setRightPanelTab}
               onAfterSelectAiTab={() => setSidebarOpen(false)}
               outlineTabEnabled={editorReady}
+              linkRecTabEnabled={docState.activePath != null}
               tauriDragExclude={tauriRuntime}
               outlineToolbarEnd={
                 rightPanelTab === "outline" && editorReady ? (

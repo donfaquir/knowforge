@@ -6,8 +6,6 @@ export type LeftPanelView = "files" | "graph" | "thoughts";
 type Props = {
   activeView: LeftPanelView;
   onViewChange: (view: LeftPanelView) => void;
-  onOpenLinkRec: () => void;
-  linkRecActive: boolean;
   onOpenCognitiveReport: () => void;
   onOpenSettings: () => void;
 };
@@ -47,28 +45,6 @@ function GraphIcon() {
       <circle cx="18" cy="6" r="2.5" fill="currentColor" stroke="none" />
       <circle cx="15" cy="17" r="2.5" fill="currentColor" stroke="none" />
       <path d="M8 9.5 13.5 6.5M16.5 8 14.5 15" />
-    </svg>
-  );
-}
-
-function LinkRecIcon() {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" />
-      <path d="M5 3v3" />
-      <path d="M19 18v3" />
-      <path d="M3 5h3" />
-      <path d="M18 19h3" />
     </svg>
   );
 }
@@ -152,8 +128,6 @@ const VIEW_I18N_KEYS: Record<LeftPanelView, string> = {
 export function ActivityBar({
   activeView,
   onViewChange,
-  onOpenLinkRec,
-  linkRecActive,
   onOpenCognitiveReport,
   onOpenSettings,
 }: Props) {
@@ -179,16 +153,6 @@ export function ActivityBar({
             </button>
           );
         })}
-        <button
-          type="button"
-          className={`activity-bar__btn${linkRecActive ? " activity-bar__btn--active" : ""}`}
-          aria-label={t("activityBar.linkRec")}
-          data-tooltip={t("activityBar.linkRec")}
-          aria-pressed={linkRecActive}
-          onClick={onOpenLinkRec}
-        >
-          <LinkRecIcon />
-        </button>
       </div>
 
       <div className="activity-bar__bottom">

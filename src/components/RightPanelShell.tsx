@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   RightPanelOutlineIcon,
+  RightPanelLinkRecIcon,
   RightPanelReviewIcon,
 } from "./treeCollapseIcons";
 
@@ -12,6 +13,7 @@ type Props = {
   onViewChange: (tab: RightPanelTab) => void;
   tauriDragExclude: boolean;
   outlineTabEnabled: boolean;
+  linkRecTabEnabled: boolean;
   outlineToolbarEnd?: ReactNode;
   outlinePanel: ReactNode;
   aiPanel: ReactNode;
@@ -26,6 +28,7 @@ export function RightPanelShell({
   onViewChange,
   tauriDragExclude,
   outlineTabEnabled,
+  linkRecTabEnabled,
   outlineToolbarEnd,
   outlinePanel,
   aiPanel,
@@ -107,6 +110,22 @@ export function RightPanelShell({
                 </span>
               ) : null}
             </span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="right-panel-tab-linkRec"
+            aria-selected={tab === "linkRec"}
+            aria-controls="right-panel-panel-linkRec"
+            className={`right-panel-shell__segment${tab === "linkRec" ? " is-active" : ""}`}
+            aria-label={t("rightPanel.linkRecTabTitle")}
+            title={t("rightPanel.linkRecTabTitle")}
+            disabled={!linkRecTabEnabled}
+            onClick={() => {
+              if (linkRecTabEnabled) onViewChange("linkRec");
+            }}
+          >
+            <RightPanelLinkRecIcon />
           </button>
         </div>
         {outlineToolbarEnd != null && outlineToolbarEnd !== false ? (
