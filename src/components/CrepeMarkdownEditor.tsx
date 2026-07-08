@@ -174,6 +174,8 @@ function CrepeInner({
   onSaveAsThoughtRef.current = onSaveAsThought;
   /** composition 滚动修复清理函数 */
   const compositionCleanupRef = useRef<(() => void) | null>(null);
+  const scrollTopByDocRef = useRef<Map<string, number>>(new Map());
+  const prevDocKeyForScrollRef = useRef(docKey);
 
   useLayoutEffect(() => {
     internalMarkdownLinkOpenRef.current = onOpenInternalMarkdownLink ?? null;
@@ -309,6 +311,19 @@ function CrepeInner({
     const gen = ++injectGenRef.current;
     suppressMarkdownUntilBaselineRef.current = true;
     wikiLinkContextRef.currentRelPath = docKeyRef.current;
+
+    let scrollRoot: HTMLElement | null = null;
+    try {
+      const view = ed.ctx.get(editorViewCtx);
+      scrollRoot = view.dom.closest("[data-milkdown-root]") as HTMLElement | null;
+    } catch { /* editor not ready */ }
+
+    const prevKey = prevDocKeyForScrollRef.current;
+    if (scrollRoot && prevKey !== docKey) {
+      scrollTopByDocRef.current.set(prevKey, scrollRoot.scrollTop);
+    }
+    prevDocKeyForScrollRef.current = docKey;
+
     const injectTrace = startPerfTrace("markdown.crepe.replace_all", {
       relPath: docKeyRef.current,
       chars: markdownRef.current.length,
@@ -317,6 +332,11 @@ function CrepeInner({
     });
     ed.action(replaceAll(markdownRef.current, false));
     endPerfTrace(injectTrace);
+
+    if (scrollRoot) {
+      const saved = scrollTopByDocRef.current.get(docKey);
+      scrollRoot.scrollTop = saved ?? 0;
+    }
     // 换文首帧避免同步序列化整篇 Markdown，先用注入正文对齐 baseline，减少主线程阻塞
     onChangeRef.current(docKeyRef.current, markdownRef.current, { baseline: true });
     queueMicrotask(() => {
