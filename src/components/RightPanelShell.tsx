@@ -2,10 +2,11 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   RightPanelOutlineIcon,
+  RightPanelLinkRecIcon,
   RightPanelReviewIcon,
 } from "./treeCollapseIcons";
 
-export type RightPanelTab = "outline" | "ai" | "review";
+export type RightPanelTab = "outline" | "ai" | "linkRec" | "review";
 
 type Props = {
   tab: RightPanelTab;
@@ -15,6 +16,7 @@ type Props = {
   outlineToolbarEnd?: ReactNode;
   outlinePanel: ReactNode;
   aiPanel: ReactNode;
+  linkRecPanel: ReactNode;
   reviewPanel: ReactNode;
   reviewTabBadgeCount?: number | null;
   onAfterSelectAiTab?: () => void;
@@ -28,6 +30,7 @@ export function RightPanelShell({
   outlineToolbarEnd,
   outlinePanel,
   aiPanel,
+  linkRecPanel,
   reviewPanel,
   reviewTabBadgeCount = null,
   onAfterSelectAiTab,
@@ -85,6 +88,19 @@ export function RightPanelShell({
           <button
             type="button"
             role="tab"
+            id="right-panel-tab-linkRec"
+            aria-selected={tab === "linkRec"}
+            aria-controls="right-panel-panel-linkRec"
+            className={`right-panel-shell__segment${tab === "linkRec" ? " is-active" : ""}`}
+            aria-label={t("rightPanel.linkRecTabTitle")}
+            title={t("rightPanel.linkRecTabTitle")}
+            onClick={() => onViewChange("linkRec")}
+          >
+            <RightPanelLinkRecIcon />
+          </button>
+          <button
+            type="button"
+            role="tab"
             id="right-panel-tab-review"
             aria-selected={tab === "review"}
             aria-controls="right-panel-panel-review"
@@ -130,6 +146,16 @@ export function RightPanelShell({
         className="right-panel-shell__panel"
       >
         {aiPanel}
+      </div>
+      <div
+        id="right-panel-panel-linkRec"
+        role="tabpanel"
+        aria-labelledby="right-panel-tab-linkRec"
+        hidden={tab !== "linkRec"}
+        inert={tab !== "linkRec" ? true : undefined}
+        className="right-panel-shell__panel"
+      >
+        {linkRecPanel}
       </div>
       <div
         id="right-panel-panel-review"

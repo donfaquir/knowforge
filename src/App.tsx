@@ -1243,6 +1243,12 @@ function App() {
         <ActivityBar
           activeView={leftPanelView}
           onViewChange={(v) => void changeView(v)}
+          onOpenLinkRec={() => {
+            void changeView("files");
+            setRightPanelOpen(true);
+            setRightPanelTab("linkRec");
+          }}
+          linkRecActive={rightPanelOpen && rightPanelTab === "linkRec" && leftPanelView === "files"}
           onOpenCognitiveReport={() => setCognitiveReportOpen(true)}
           onOpenSettings={() => setAiSettingsOpen(true)}
         />
@@ -1342,28 +1348,6 @@ function App() {
                 setLeftPanelView("files");
                 void onOpenCoachMarkdownPath(relPath);
               }}
-            />
-          </main>
-        ) : leftPanelView === "linkRec" ? (
-          <main className="main main--full-view">
-            <LinkRecommendationPanel
-              workspaceRoot={rootPath}
-              activeRelPath={docState.activePath}
-              panelActive={leftPanelView === "linkRec"}
-              savedMarkdownSnapshot={
-                docState.activePath &&
-                current &&
-                !current.loading &&
-                !current.loadError
-                  ? current.savedContent
-                  : undefined
-              }
-              editorContentInjectEpoch={
-                docState.activePath ? (current?.contentInjectEpoch ?? 0) : 0
-              }
-              workspaceReady={workspaceReady}
-              tauriRuntime={tauriRuntime}
-              crepeApiRef={crepeEditorApiRef}
             />
           </main>
         ) : leftPanelView === "thoughts" ? (
@@ -1700,6 +1684,27 @@ function App() {
                 </>
               }
               aiPanel={<AiConversationPanel />}
+              linkRecPanel={
+                <LinkRecommendationPanel
+                  workspaceRoot={rootPath}
+                  activeRelPath={docState.activePath}
+                  panelActive={rightPanelOpen && rightPanelTab === "linkRec"}
+                  savedMarkdownSnapshot={
+                    docState.activePath &&
+                    current &&
+                    !current.loading &&
+                    !current.loadError
+                      ? current.savedContent
+                      : undefined
+                  }
+                  editorContentInjectEpoch={
+                    docState.activePath ? (current?.contentInjectEpoch ?? 0) : 0
+                  }
+                  workspaceReady={workspaceReady}
+                  tauriRuntime={tauriRuntime}
+                  crepeApiRef={crepeEditorApiRef}
+                />
+              }
               reviewPanel={<RightPanelReviewTab onClose={() => setRightPanelTab("ai")} />}
               reviewTabBadgeCount={reviewTabBadgeCount}
             />

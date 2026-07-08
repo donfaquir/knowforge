@@ -1,11 +1,13 @@
 import type React from "react";
 import { useTranslation } from "react-i18next";
 
-export type LeftPanelView = "files" | "graph" | "linkRec" | "thoughts";
+export type LeftPanelView = "files" | "graph" | "thoughts";
 
 type Props = {
   activeView: LeftPanelView;
   onViewChange: (view: LeftPanelView) => void;
+  onOpenLinkRec: () => void;
+  linkRecActive: boolean;
   onOpenCognitiveReport: () => void;
   onOpenSettings: () => void;
 };
@@ -138,20 +140,20 @@ function SettingsIcon() {
 const VIEW_ICONS: Record<LeftPanelView, () => React.JSX.Element> = {
   files: FilesIcon,
   graph: GraphIcon,
-  linkRec: LinkRecIcon,
   thoughts: ThoughtsIcon,
 };
 
 const VIEW_I18N_KEYS: Record<LeftPanelView, string> = {
   files: "activityBar.files",
   graph: "activityBar.graph",
-  linkRec: "activityBar.linkRec",
   thoughts: "activityBar.thoughts",
 };
 
 export function ActivityBar({
   activeView,
   onViewChange,
+  onOpenLinkRec,
+  linkRecActive,
   onOpenCognitiveReport,
   onOpenSettings,
 }: Props) {
@@ -177,6 +179,16 @@ export function ActivityBar({
             </button>
           );
         })}
+        <button
+          type="button"
+          className={`activity-bar__btn${linkRecActive ? " activity-bar__btn--active" : ""}`}
+          aria-label={t("activityBar.linkRec")}
+          data-tooltip={t("activityBar.linkRec")}
+          aria-pressed={linkRecActive}
+          onClick={onOpenLinkRec}
+        >
+          <LinkRecIcon />
+        </button>
       </div>
 
       <div className="activity-bar__bottom">
