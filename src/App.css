@@ -302,9 +302,6 @@ body {
   border-right: none;
 }
 
-.layout.layout--sidebar-collapsed .app-top-toolbar__thought-hub {
-  display: none;
-}
 
 .app-top-toolbar__editor {
   flex: 1;
@@ -584,6 +581,12 @@ body {
 .layout--platform-mac .app-top-toolbar__start {
   padding-left: 74px;
   gap: calc(8px * var(--tool-strip-scale));
+}
+
+/* 侧栏折叠时放开宽度约束，让 74px 左内边距 + 按钮不被裁切 */
+.layout--platform-mac.layout--sidebar-collapsed .app-top-toolbar__start {
+  flex-basis: auto;
+  width: auto;
 }
 
 .layout--platform-windows .app-top-toolbar__window-controls--desktop,
