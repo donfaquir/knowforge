@@ -460,7 +460,7 @@ impl Default for CognitiveConfig {
             passive_highlight_enabled: default_passive_highlight_enabled(),
             passive_highlight_confidence_min: default_passive_highlight_confidence_min(),
             passive_highlight_inaccuracy_counts: PassiveHighlightInaccuracyCounts::default(),
-            independent_review_enabled: false,
+            independent_review_enabled: true,
             challenge_review_daily_cap_independent: default_challenge_review_cap_independent(),
             challenge_review_daily_cap_inline: default_challenge_review_cap_inline(),
             challenge_review_inline_dates: ChallengeReviewInlineDates::default(),
@@ -1586,7 +1586,7 @@ mod tests {
         assert!(cfg.passive_highlight_enabled);
         assert!((cfg.passive_highlight_confidence_min - 0.55).abs() < f64::EPSILON);
         assert_eq!(cfg.passive_highlight_inaccuracy_counts.integrate, 0);
-        assert!(!cfg.independent_review_enabled);
+        assert!(cfg.independent_review_enabled);
         assert_eq!(cfg.challenge_review_daily_cap_independent, 3);
         assert_eq!(cfg.challenge_review_daily_cap_inline, 2);
         assert!(cfg.challenge_review_inline_dates.by_day.is_empty());

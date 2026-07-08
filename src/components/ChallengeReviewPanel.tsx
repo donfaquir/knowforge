@@ -235,7 +235,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
             {t("challengeReview.close")}
           </button>
         </div>
-        <p className="challenge-review-panel__hint">{t("challengeReview.panelDisabledHint")}</p>
+        <p className="challenge-review-panel__hint">{t("challengeReview.panelNeedsLlm")}</p>
         <div className="challenge-review-panel__footer-actions">
           <button type="button" className="challenge-review-panel__linkish" onClick={() => dispatchOpenAiSettings()}>
             {t("challengeReview.openAiSettings")}

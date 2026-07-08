@@ -35,7 +35,7 @@ export function AiConversationSessionProvider({
   initialDepthMode?: DepthMode;
 }) {
   const [isStreaming, setIsStreaming] = useState(false);
-  const [depthMode, setDepthMode] = useState<DepthMode>(initialDepthMode ?? "auto");
+  const [depthMode, setDepthMode] = useState<DepthMode>(initialDepthMode ?? "deep");
   const [autoResolved, setAutoResolved] = useState<AutoResolvedDepth | null>(null);
   const [enoughForThisChat, setEnoughForThisChat] = useState(false);
   const session = useWorkspaceAiConversations({

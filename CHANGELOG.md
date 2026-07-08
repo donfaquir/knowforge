@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.5] - 2026-07-08
+
+### Added
+- Activity Bar for global navigation (files, graph, thoughts) with instant CSS tooltips
+- Save-as-thought button in editor selection toolbar
+- 4-step onboarding wizard for new users
+- Writing coach: manual trigger, performance optimizations, and streaming support
+- Active model label displayed below the AI chat input box
+
+### Changed
+- Link recommendations moved from full-screen view to right sidebar tab (4th tab, disabled when no document is open)
+- Thought management rendered as Activity Bar view mode instead of a separate panel
+- Right panel simplified to 3 core tabs (outline, AI, review) plus link-rec
+- Open-folder action moved from top toolbar to sidebar footer
+- ThoughtSavePopover redesigned: section dividers, labels, search icon, options-bar grouping
+- Depth selector removed from thought-save popover; default depth changed to "deep"
+- New-file and new-folder icons redesigned for better visual distinction
+- Redundant "workspace keyword search" toggle removed from AI panel (semantic search covers it)
+
+### Fixed
+- Editor scroll position now saves/restores correctly when switching document tabs
+- macOS traffic light controls vertically centered in the toolbar
+- Sidebar toggle icon no longer clipped when sidebar is collapsed on macOS
+- Search icon stays visible when sidebar is collapsed
+- File tree auto-expands when clicking the files icon in Activity Bar
+- Activity Bar remains visible when sidebar is collapsed
+- Thought-save popover dropdown now closes on blur
+
 ## [0.7.4] - 2026-07-06
 
 ### Added

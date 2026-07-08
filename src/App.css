@@ -87,13 +87,13 @@ body {
   grid-template-columns: var(--sidebar-width, 196px) minmax(0, 1fr) var(--right-panel-width);
 }
 
-/* 收起侧栏：去掉首列，主区占满下方 */
+/* 收起侧栏：首列缩到 Activity Bar 宽度（36px） */
 .layout.layout--sidebar-collapsed {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 36px minmax(0, 1fr);
 }
 
 .layout.layout--sidebar-collapsed.layout--with-right-panel {
-  grid-template-columns: minmax(0, 1fr) var(--right-panel-width);
+  grid-template-columns: 36px minmax(0, 1fr) var(--right-panel-width);
 }
 
 /* 顶栏横跨整窗：左侧固定宽（与下方文件列对齐）+ 标签区 */
@@ -108,15 +108,9 @@ body {
   z-index: 2;
 }
 
-/* macOS Overlay 标题栏：系统已处理窗口圆角，不再需要自定义裁切；内容下移避免被交通灯遮挡 */
-.layout--platform-mac #root {
+/* macOS Overlay 标题栏：系统已处理窗口圆角，不再需要自定义裁切 */
+.layout.layout--platform-mac {
   border-radius: 0;
-  overflow: visible;
-}
-
-.layout--platform-mac .layout {
-  border-radius: 0;
-  padding-top: 28px;
 }
 
 .layout.layout--tauri [data-tauri-drag-region] {
@@ -182,8 +176,107 @@ body {
   position: relative;
 }
 
-.layout.layout--sidebar-collapsed .app-sidebar-column {
+.layout.layout--sidebar-collapsed .app-sidebar-column > .sidebar,
+.layout.layout--sidebar-collapsed .app-sidebar-column > .panel-resizer {
   display: none;
+}
+
+/* ── Activity Bar: narrow icon rail, first flex child in .app-sidebar-column ── */
+
+.activity-bar {
+  flex: 0 0 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  border-right: 1px solid rgba(0, 0, 0, 0.08);
+  background: var(--app-chrome-bg);
+  overflow: visible;
+}
+
+.activity-bar__top {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.activity-bar__bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: auto;
+}
+
+.activity-bar__btn {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  position: relative;
+  color: var(--fg-dim, #666);
+  padding: 0;
+}
+
+.activity-bar__btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--fg-default, #333);
+}
+
+.activity-bar__btn[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: #1a1a1a;
+  color: #f4f4f5;
+  pointer-events: none;
+  z-index: 100;
+}
+
+.activity-bar__btn--active {
+  color: var(--fg-default, #1a1a1a);
+}
+
+.activity-bar__btn--active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--accent-color, #0066cc);
+  border-radius: 1px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .activity-bar {
+    border-right-color: rgba(255, 255, 255, 0.08);
+  }
+  .activity-bar__btn {
+    color: var(--fg-dim, #999);
+  }
+  .activity-bar__btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--fg-default, #ddd);
+  }
+  .activity-bar__btn--active {
+    color: var(--fg-default, #eee);
+  }
+  .activity-bar__btn[data-tooltip]:hover::after {
+    background: #e4e4e7;
+    color: #18181b;
+  }
 }
 
 .app-top-toolbar__start {
@@ -204,10 +297,11 @@ body {
 }
 
 .layout.layout--sidebar-collapsed .app-top-toolbar__start {
-  flex: 0 0 auto;
-  width: auto;
+  flex: 0 0 36px;
+  width: 36px;
   border-right: none;
 }
+
 
 .app-top-toolbar__editor {
   flex: 1;
@@ -489,6 +583,12 @@ body {
   gap: calc(8px * var(--tool-strip-scale));
 }
 
+/* 侧栏折叠时放开宽度约束，让 74px 左内边距 + 按钮不被裁切 */
+.layout--platform-mac.layout--sidebar-collapsed .app-top-toolbar__start {
+  flex-basis: auto;
+  width: auto;
+}
+
 .layout--platform-windows .app-top-toolbar__window-controls--desktop,
 .layout--platform-linux .app-top-toolbar__window-controls--desktop {
   gap: 0;
@@ -641,17 +741,10 @@ body {
   opacity: 0.92;
 }
 
-/* 全屏想法管理：叠在第二行文件树+主编辑之上（顶栏仍可见） */
 .app-thought-management-route {
-  grid-column: 1 / -1;
-  grid-row: 2;
-  z-index: 30;
-  min-height: 0;
-  min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--app-chrome-bg);
-  box-shadow: 0 -1px 0 var(--app-toolbar-bottom-line);
 }
 
 .content-area {
@@ -670,7 +763,7 @@ body {
 }
 
 .layout.layout--sidebar-collapsed .content-area {
-  grid-column: 1 / -1;
+  grid-column: 2 / -1;
 }
 
 .content-area--with-right-panel {
@@ -1237,6 +1330,14 @@ body {
   border-top: 1px solid rgba(0, 0, 0, 0.08);
 }
 
+.ai-chat__model-label {
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: right;
+  color: var(--kf-text-muted, #94a3b8);
+  padding: 0 2px;
+}
+
 /* 输入区与底栏工具条分区：正文仅在 textarea 内，不叠压深度/发送 */
 .ai-chat__composer-field {
   width: 100%;
@@ -1460,6 +1561,14 @@ body {
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.028);
   border: 1px solid rgba(0, 0, 0, 0.06);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+}
+
+.sidebar__root:hover {
+  background: rgba(0, 0, 0, 0.06);
 }
 
 .sidebar__root-icon {
@@ -2466,6 +2575,11 @@ html:lang(zh-Hans) .settings-lang-toggle .app-modal__btn {
   background: var(--app-chrome-bg);
 }
 
+.main--full-view {
+  flex: 1;
+  overflow: auto;
+}
+
 .main__disk-notice {
   flex-shrink: 0;
   display: flex;
@@ -3367,6 +3481,10 @@ html:lang(zh-Hans) .settings-lang-toggle .app-modal__btn {
   .sidebar__root {
     background: rgba(0, 0, 0, 0.28);
     border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .sidebar__root:hover {
+    background: rgba(255, 255, 255, 0.08);
   }
 
   .sidebar__root-icon {

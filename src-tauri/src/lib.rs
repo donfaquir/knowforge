@@ -35,6 +35,7 @@ mod understanding_graph;
 mod link_recommendation;
 mod topic_network;
 mod tools;
+mod onboarding;
 mod skills;
 
 /// 供前端展示的文件树节点（目录带 children，Markdown 文件为叶子）
@@ -64,7 +65,7 @@ struct MarkdownFileSignature {
     modified_ns: String,
 }
 
-struct WorkspaceState {
+pub(crate) struct WorkspaceState {
     /// 当前已授权工作区根目录，仅允许命令访问这里
     root: Mutex<Option<PathBuf>>,
     /// 本应用已成功写入的路径与时间，用于忽略紧随其后的 notify
@@ -214,7 +215,7 @@ pub(crate) fn sanitize_io_error(err: std::io::Error, permission_context: &'stati
     }
 }
 
-fn lock_workspace_root(state: &tauri::State<'_, WorkspaceState>) -> Result<PathBuf, String> {
+pub(crate) fn lock_workspace_root(state: &tauri::State<'_, WorkspaceState>) -> Result<PathBuf, String> {
     let guard = match state.root.lock() {
         Ok(g) => g,
         Err(poisoned) => {
@@ -1800,7 +1801,8 @@ pub fn run() {
             skills::commands::update_custom_skill,
             skills::commands::delete_custom_skill,
             skills::commands::reload_custom_skills,
-            skills::commands::list_available_tools
+            skills::commands::list_available_tools,
+            onboarding::seed_onboarding_content
         ])
         .setup(|app| {
             use tauri::Manager;

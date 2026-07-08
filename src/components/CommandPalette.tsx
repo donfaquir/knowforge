@@ -19,6 +19,8 @@ type Props = {
   onOpenCognitiveReport: () => void;
   onOpenThoughtVaultHub?: () => void;
   onOpenWorkspaceSearch?: () => void;
+  onTriggerWritingCoach?: () => void;
+  onStartOnboarding?: () => void;
 };
 
 export function CommandPalette({
@@ -27,6 +29,8 @@ export function CommandPalette({
   onOpenCognitiveReport,
   onOpenThoughtVaultHub,
   onOpenWorkspaceSearch,
+  onTriggerWritingCoach,
+  onStartOnboarding,
 }: Props) {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
@@ -41,9 +45,15 @@ export function CommandPalette({
   onOpenThoughtVaultHubRef.current = onOpenThoughtVaultHub;
   const onOpenWorkspaceSearchRef = useRef(onOpenWorkspaceSearch);
   onOpenWorkspaceSearchRef.current = onOpenWorkspaceSearch;
+  const onTriggerWritingCoachRef = useRef(onTriggerWritingCoach);
+  onTriggerWritingCoachRef.current = onTriggerWritingCoach;
+  const onStartOnboardingRef = useRef(onStartOnboarding);
+  onStartOnboardingRef.current = onStartOnboarding;
 
   const hasThoughtVaultHub = onOpenThoughtVaultHub != null;
   const hasWorkspaceSearch = onOpenWorkspaceSearch != null;
+  const hasWritingCoach = onTriggerWritingCoach != null;
+  const hasOnboarding = onStartOnboarding != null;
 
   const items: CommandItem[] = useMemo(() => {
     const base: CommandItem[] = [
@@ -79,8 +89,30 @@ export function CommandPalette({
         },
       });
     }
+    if (hasWritingCoach) {
+      base.push({
+        id: "writing-coach",
+        label: t("commandPalette.writingCoach"),
+        keywords: "写作教练 writing coach 逻辑追问 reasoning",
+        onSelect: () => {
+          onTriggerWritingCoachRef.current?.();
+          onCloseRef.current();
+        },
+      });
+    }
+    if (hasOnboarding) {
+      base.push({
+        id: "onboarding",
+        label: t("commandPalette.onboarding"),
+        keywords: "引导 新手 onboarding guide tutorial 教程",
+        onSelect: () => {
+          onStartOnboardingRef.current?.();
+          onCloseRef.current();
+        },
+      });
+    }
     return base;
-  }, [t, hasThoughtVaultHub, hasWorkspaceSearch]);
+  }, [t, hasThoughtVaultHub, hasWorkspaceSearch, hasWritingCoach, hasOnboarding]);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();

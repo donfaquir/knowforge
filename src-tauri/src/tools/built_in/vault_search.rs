@@ -125,6 +125,7 @@ impl Tool for VaultSearchKeywordTool {
                 max_chars_per_snippet: Some(max_chars_per_snippet),
                 ..Default::default()
             }),
+            redact_private_override: None,
         };
 
         let result = tauri::async_runtime::spawn_blocking(move || {

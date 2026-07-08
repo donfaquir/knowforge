@@ -4,7 +4,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { insertThoughtToNote } from "../utils/thoughtFrontmatterEdit";
@@ -40,8 +40,6 @@ type Props = {
   isSelection?: boolean;
   onSaved: () => void;
   onCancel: () => void;
-  /** 与路径输入同一行：紧凑深度选择 */
-  depthSlot?: ReactNode;
   /** 被动高亮入口：展示「不准确」反馈 */
   variant?: "default" | "passive";
   onMarkInaccurate?: () => void | Promise<void>;
@@ -53,7 +51,6 @@ export function ThoughtSavePopover({
   isSelection,
   onSaved,
   onCancel,
-  depthSlot,
   variant = "default",
   onMarkInaccurate,
 }: Props) {
@@ -148,18 +145,23 @@ export function ThoughtSavePopover({
   const popover = (
     <div className="thought-save-popover" ref={popoverRef} role="dialog" aria-label={t("thoughtSave.title")}>
       <div className="thought-save-popover__header">{t(isSelection ? "thoughtSave.titleSelection" : "thoughtSave.title")}</div>
+      <hr className="thought-save-popover__divider" />
 
-      <div className="thought-save-popover__field-row">
-        {depthSlot ? <div className="thought-save-popover__depth-wrap">{depthSlot}</div> : null}
-        <div className="thought-save-popover__field">
+      <div className="thought-save-popover__section">
+        <div className="thought-save-popover__label">{t("thoughtSave.targetNote")}</div>
+        <div className="thought-save-popover__file-field">
+          <svg className="thought-save-popover__search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
           <input
             className="thought-save-popover__file-input"
             type="text"
             value={filterText}
             onChange={(e) => handleInputChange(e.target.value)}
             onFocus={() => setDropdownOpen(true)}
+            onBlur={() => setDropdownOpen(false)}
             placeholder={t("thoughtSave.filePlaceholder")}
-            autoFocus
             disabled={saving}
           />
           {dropdownOpen && !loading && filteredFiles.length > 0 && (
@@ -187,20 +189,22 @@ export function ThoughtSavePopover({
         </div>
       </div>
 
-      <label className="thought-save-popover__options">
-        <input
-          type="checkbox"
-          checked={temporary}
-          onChange={(e) => setTemporary(e.target.checked)}
-          disabled={saving}
-        />
-        <span>{t("thoughtSave.temporary")}</span>
-      </label>
+      <div className="thought-save-popover__options-bar">
+        <label className="thought-save-popover__options">
+          <input
+            type="checkbox"
+            checked={temporary}
+            onChange={(e) => setTemporary(e.target.checked)}
+            disabled={saving}
+          />
+          <span>{t("thoughtSave.temporary")}</span>
+        </label>
+      </div>
 
       {error && <div className="thought-save-popover__error" role="alert">{error}</div>}
 
-      {variant === "passive" && onMarkInaccurate ? (
-        <div className="thought-save-popover__passive-actions">
+      <div className="thought-save-popover__actions">
+        {variant === "passive" && onMarkInaccurate ? (
           <button
             type="button"
             className="thought-save-popover__btn thought-save-popover__btn--inaccurate"
@@ -209,26 +213,25 @@ export function ThoughtSavePopover({
           >
             {t("thoughtSave.markInaccurate")}
           </button>
+        ) : <div />}
+        <div className="thought-save-popover__actions-end">
+          <button
+            type="button"
+            className="thought-save-popover__btn thought-save-popover__btn--cancel"
+            onClick={onCancel}
+            disabled={saving}
+          >
+            {t("thoughtSave.cancel")}
+          </button>
+          <button
+            type="button"
+            className="thought-save-popover__btn thought-save-popover__btn--save"
+            disabled={!canSave}
+            onClick={() => void handleSave()}
+          >
+            {saving ? "..." : t("thoughtSave.save")}
+          </button>
         </div>
-      ) : null}
-
-      <div className="thought-save-popover__actions">
-        <button
-          type="button"
-          className="thought-save-popover__btn thought-save-popover__btn--save"
-          disabled={!canSave}
-          onClick={() => void handleSave()}
-        >
-          {saving ? "..." : t("thoughtSave.save")}
-        </button>
-        <button
-          type="button"
-          className="thought-save-popover__btn thought-save-popover__btn--cancel"
-          onClick={onCancel}
-          disabled={saving}
-        >
-          {t("thoughtSave.cancel")}
-        </button>
       </div>
     </div>
   );
