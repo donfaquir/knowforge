@@ -1,7 +1,7 @@
 import type React from "react";
 import { useTranslation } from "react-i18next";
 
-export type LeftPanelView = "files" | "graph" | "thoughts";
+export type LeftPanelView = "files" | "thoughts";
 
 type Props = {
   activeView: LeftPanelView;
@@ -24,27 +24,6 @@ function FilesIcon() {
       aria-hidden
     >
       <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 2H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2Z" />
-    </svg>
-  );
-}
-
-function GraphIcon() {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <circle cx="6" cy="8" r="2.5" fill="currentColor" stroke="none" />
-      <circle cx="18" cy="6" r="2.5" fill="currentColor" stroke="none" />
-      <circle cx="15" cy="17" r="2.5" fill="currentColor" stroke="none" />
-      <path d="M8 9.5 13.5 6.5M16.5 8 14.5 15" />
     </svg>
   );
 }
@@ -115,13 +94,11 @@ function SettingsIcon() {
 
 const VIEW_ICONS: Record<LeftPanelView, () => React.JSX.Element> = {
   files: FilesIcon,
-  graph: GraphIcon,
   thoughts: ThoughtsIcon,
 };
 
 const VIEW_I18N_KEYS: Record<LeftPanelView, string> = {
   files: "activityBar.files",
-  graph: "activityBar.graph",
   thoughts: "activityBar.thoughts",
 };
 
