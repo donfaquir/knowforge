@@ -810,5 +810,12 @@
     "thoughts": "All thoughts",
     "report": "Cognitive growth report",
     "settings": "Settings"
+  },
+  "aiGuide": {
+    "title": "{{feature}} requires an AI model",
+    "configure": "Configure AI Model",
+    "descConversation": "Configure an AI model to chat, analyze notes, and get deep insights",
+    "descChallengeReview": "Configure an AI model to automatically generate challenge questions from your notes",
+    "descSkill": "Configure an AI model to use and manage Skill extensions"
   }
 }

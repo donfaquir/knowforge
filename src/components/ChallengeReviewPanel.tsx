@@ -17,6 +17,8 @@ import type { VaultConfigForUi } from "../types/vaultAiConfig";
 import { localTodayKey, useCognitiveFrequencyControl } from "../hooks/useCognitiveFrequencyControl";
 import { trackKnowforgeEvent } from "../utils/knowforgeAnalytics";
 import { dispatchOpenAiSettings, VAULT_CONFIG_UPDATED_EVENT } from "../utils/vaultConfigBroadcast";
+import { useAiConfigStatus } from "../hooks/useAiConfigStatus";
+import AiNotConfiguredGuide from "./AiNotConfiguredGuide";
 import { AiAssistantMarkdown } from "./AiAssistantMarkdown";
 import "./ChallengeReviewPanel.css";
 
@@ -28,6 +30,7 @@ type Props = {
 export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
   const { t, i18n } = useTranslation();
   const { openMarkdownTab } = useAiNoteContext();
+  const { isConfigured: aiConfigured } = useAiConfigStatus(true);
   const freqCtrl = useCognitiveFrequencyControl();
   const [queue, setQueue] = useState<ListReviewQueueResponse | null>(null);
   const [independent, setIndependent] = useState(false);
@@ -227,7 +230,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
     </div>
   );
 
-  if (!independent) {
+  if (!independent || !aiConfigured) {
     return (
       <div className="challenge-review-panel">
         <div className="challenge-review-panel__header">
@@ -236,12 +239,11 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
             {t("challengeReview.close")}
           </button>
         </div>
-        <p className="challenge-review-panel__hint">{t("challengeReview.panelNeedsLlm")}</p>
-        <div className="challenge-review-panel__footer-actions">
-          <button type="button" className="challenge-review-panel__linkish" onClick={() => dispatchOpenAiSettings()}>
-            {t("challengeReview.openAiSettings")}
-          </button>
-        </div>
+        <AiNotConfiguredGuide
+          featureName={t("challengeReview.panelTitle")}
+          featureDescription={t("aiGuide.descChallengeReview")}
+          compact
+        />
       </div>
     );
   }

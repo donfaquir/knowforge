@@ -761,7 +761,7 @@ export function AiLlmSettingsModal({
       organizationId: p.organizationId.trim() || null,
       lastUsedModel: p.defaultModel.trim() || null,
       isRemote: p.isRemote,
-      ...(p.apiKeyChanged && p.apiKey.trim() ? { apiKey: p.apiKey.trim() } : {}),
+      ...(p.apiKeyChanged ? { apiKey: p.apiKey.trim() } : {}),
     }));
 
     const patch: VaultConfigSavePatch = {

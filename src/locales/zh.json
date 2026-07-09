@@ -810,5 +810,12 @@
     "thoughts": "全部想法",
     "report": "认知成长报告",
     "settings": "设置"
+  },
+  "aiGuide": {
+    "title": "{{feature}} 需要 AI 模型",
+    "configure": "配置 AI 模型",
+    "descConversation": "配置 AI 模型后，可与 AI 对话、分析笔记、获取深度洞见",
+    "descChallengeReview": "配置 AI 模型后，系统将根据你的笔记自动生成挑战问题",
+    "descSkill": "配置 AI 模型后，可使用和管理 Skill 扩展能力"
   }
 }
