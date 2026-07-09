@@ -198,7 +198,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
     let disposed = false;
     const pending: UnlistenFn[] = [];
 
-    const WATCHDOG_TIMEOUT_MS = 30_000;
+    const WATCHDOG_TIMEOUT_MS = 60_000;
     let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
 
     function resetWatchdog() {

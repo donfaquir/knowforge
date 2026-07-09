@@ -228,6 +228,42 @@ pub async fn run_agent_stream(
 
     let mut iteration: u32 = 0;
 
+    let hb_stop = CancellationToken::new();
+    let bg_hb_app = app.clone();
+    let bg_hb_sid = session_id.clone();
+    let bg_hb_stop = hb_stop.clone();
+    let bg_heartbeat = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        interval.tick().await;
+        loop {
+            tokio::select! {
+                _ = bg_hb_stop.cancelled() => break,
+                _ = interval.tick() => {
+                    let _ = bg_hb_app.emit(
+                        "llm:heartbeat",
+                        serde_json::json!({
+                            "sessionId": bg_hb_sid,
+                            "loopIteration": 0,
+                        }),
+                    );
+                }
+            }
+        }
+    });
+    struct HeartbeatGuard {
+        stop: CancellationToken,
+        handle: Option<tokio::task::JoinHandle<()>>,
+    }
+    impl Drop for HeartbeatGuard {
+        fn drop(&mut self) {
+            self.stop.cancel();
+            if let Some(h) = self.handle.take() {
+                h.abort();
+            }
+        }
+    }
+    let _hb_guard = HeartbeatGuard { stop: hb_stop, handle: Some(bg_heartbeat) };
+
     loop {
         iteration += 1;
         emit_heartbeat(&app, &session_id, iteration);
@@ -539,7 +575,6 @@ pub async fn run_agent_stream(
             } else {
                 vec![None; normalized_calls.len()]
             };
-
         for (i, tc) in normalized_calls.iter().enumerate() {
             let effective_content = if let Some(Some(pr)) = processed.get(i) {
                 if pr.was_summarized {
