@@ -40,6 +40,15 @@ pub struct TimelineThoughtOut {
     pub history: Vec<HistoryEntryOut>,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MonthlySnapshot {
+    pub year_month: String,
+    pub seedling: usize,
+    pub growing: usize,
+    pub mature: usize,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CognitiveReportForUi {
@@ -51,6 +60,7 @@ pub struct CognitiveReportForUi {
     pub prev_month_maturity: Option<MaturityCounts>,
     pub total_ai_references: usize,
     pub timelines: Vec<TimelineThoughtOut>,
+    pub monthly_snapshots: Vec<MonthlySnapshot>,
 }
 
 #[derive(Deserialize, Serialize, Default, Clone)]
@@ -242,6 +252,20 @@ pub fn generate_cognitive_report_blocking(root: &Path) -> Result<CognitiveReport
         let _ = fs::write(&snap_path, bytes);
     }
 
+    let monthly_snapshots: Vec<MonthlySnapshot> = snap
+        .months
+        .iter()
+        .rev()
+        .take(6)
+        .rev()
+        .map(|m| MonthlySnapshot {
+            year_month: m.year_month.clone(),
+            seedling: m.seedling,
+            growing: m.growing,
+            mature: m.mature,
+        })
+        .collect();
+
     Ok(CognitiveReportForUi {
         scanned_files,
         total_thoughts,
@@ -251,6 +275,7 @@ pub fn generate_cognitive_report_blocking(root: &Path) -> Result<CognitiveReport
         prev_month_maturity,
         total_ai_references: total_refs,
         timelines,
+        monthly_snapshots,
     })
 }
 

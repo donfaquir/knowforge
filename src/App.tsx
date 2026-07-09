@@ -29,7 +29,7 @@ import { KfPrivateLockIcon } from "./components/KfPrivateLockIcon";
 import { OutlineBulkToolbar } from "./components/OutlineBulkToolbar";
 import { OutlinePanel } from "./components/OutlinePanel";
 import type { CrepeMarkdownEditorApi } from "./components/CrepeMarkdownEditor";
-import { CognitiveReportPanel } from "./components/CognitiveReportPanel";
+import { CognitiveReportPanel } from "./components/cognitive-report/CognitiveReportPanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { EditorThoughtsPanel } from "./components/EditorThoughtsPanel";
 import { EditorWritingCoachHost, type EditorWritingCoachHostHandle } from "./components/EditorWritingCoachHost";
