@@ -104,6 +104,12 @@ pub struct KfThoughtMeta {
     /// 上次成功回顾时间（ISO8601，用于遗忘曲线）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_reviewed_at: Option<String>,
+    /// SM-2 easiness factor (default 2.5, floor 1.3)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srs_easiness_factor: Option<f64>,
+    /// SM-2 current interval in days
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srs_interval_days: Option<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<ThoughtHistoryEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -443,6 +449,8 @@ pub fn new_thought_meta(id: &str, temporary: bool, source: &str) -> KfThoughtMet
         temporary,
         challenge_pass_count: 0,
         last_reviewed_at: None,
+        srs_easiness_factor: None,
+        srs_interval_days: None,
         history: vec![ThoughtHistoryEntry {
             date: now,
             entry_type: "created".to_string(),
@@ -1114,20 +1122,111 @@ pub fn append_ai_thought_reference_to_markdown(
 
 /// 挑战回顾「通过」时写回：递增 YAML 元数据 + 更新侧车 SQLite；**不改写正文 callout**。
 ///
-/// `passed == false` 时原文不变（跳过或敷衍时不写 `last_reviewed_at`）。
+/// SM-2 quality rating derived from evaluation outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChallengeQuality {
+    Passed,  // q=4: genuine engagement, correct
+    Sloppy,  // q=3: attempted but halfhearted
+    Failed,  // q=1: did not pass
+}
+
+impl ChallengeQuality {
+    fn sm2_q(self) -> f64 {
+        match self {
+            ChallengeQuality::Passed => 4.0,
+            ChallengeQuality::Sloppy => 3.0,
+            ChallengeQuality::Failed => 1.0,
+        }
+    }
+
+    fn is_pass(self) -> bool {
+        matches!(self, ChallengeQuality::Passed)
+    }
+}
+
+/// SM-2 scheduling state.
+#[derive(Debug, Clone)]
+pub struct SrsState {
+    pub easiness_factor: f64,
+    pub interval_days: f64,
+    pub repetition_count: u32,
+}
+
+impl SrsState {
+    pub fn initial() -> Self {
+        Self {
+            easiness_factor: 2.5,
+            interval_days: 0.0,
+            repetition_count: 0,
+        }
+    }
+
+    /// Migrate from legacy fixed-interval data.
+    pub fn from_legacy(challenge_pass_count: u32, existing_ef: Option<f64>, existing_interval: Option<f64>) -> Self {
+        if let (Some(ef), Some(iv)) = (existing_ef, existing_interval) {
+            return Self {
+                easiness_factor: ef,
+                interval_days: iv,
+                repetition_count: challenge_pass_count,
+            };
+        }
+        let interval = match challenge_pass_count {
+            0 => 0.0,
+            1 => 1.0,
+            2 => 6.0,
+            n => {
+                let mut iv = 6.0;
+                for _ in 2..n {
+                    iv *= 2.5;
+                }
+                iv
+            }
+        };
+        Self {
+            easiness_factor: 2.5,
+            interval_days: interval,
+            repetition_count: challenge_pass_count,
+        }
+    }
+}
+
+/// Compute the next SM-2 state after a review with the given quality.
+pub fn sm2_next(state: &SrsState, quality: ChallengeQuality) -> SrsState {
+    let q = quality.sm2_q();
+    let new_ef = (state.easiness_factor + (0.1 - (5.0 - q) * (0.08 + (5.0 - q) * 0.02)))
+        .max(1.3);
+
+    if q < 3.0 {
+        SrsState {
+            easiness_factor: new_ef,
+            interval_days: 1.0,
+            repetition_count: 0,
+        }
+    } else {
+        let new_interval = match state.repetition_count {
+            0 => 1.0,
+            1 => 6.0,
+            _ => (state.interval_days * new_ef).round().max(1.0),
+        };
+        SrsState {
+            easiness_factor: new_ef,
+            interval_days: new_interval,
+            repetition_count: state.repetition_count + 1,
+        }
+    }
+}
+
+/// Update thought metadata after challenge review (any outcome).
+///
+/// `quality == Failed` still writes back SRS state (to reset interval);
+/// only `Passed` increments `challenge_pass_count` and advances maturity.
 pub fn apply_challenge_pass_to_markdown_vault(
     vault_root: &Path,
     _rel_path: &str,
     markdown: &str,
     thought_id: &str,
-    passed: bool,
+    quality: ChallengeQuality,
 ) -> Result<ApplyChallengePassToMarkdownOutcome, String> {
-    if !passed {
-        return Ok(ApplyChallengePassToMarkdownOutcome {
-            markdown: markdown.to_string(),
-            maturity_change: None,
-        });
-    }
     if thought_id.is_empty() {
         return Err("thought_id is empty".to_string());
     }
@@ -1159,10 +1258,23 @@ pub fn apply_challenge_pass_to_markdown_vault(
 
     let m = &mut meta_vec[idx];
     let prev_maturity = m.maturity;
-    m.challenge_pass_count = m.challenge_pass_count.saturating_add(1);
-    let pass_count = m.challenge_pass_count;
+
+    let srs_before = SrsState::from_legacy(
+        m.challenge_pass_count,
+        m.srs_easiness_factor,
+        m.srs_interval_days,
+    );
+    let srs_after = sm2_next(&srs_before, quality);
+
+    m.srs_easiness_factor = Some(srs_after.easiness_factor);
+    m.srs_interval_days = Some(srs_after.interval_days);
     m.last_reviewed_at = Some(Utc::now().format("%Y-%m-%d").to_string());
-    m.maturity = maturity_after_challenge_pass(prev_maturity, pass_count);
+
+    if quality.is_pass() {
+        m.challenge_pass_count = m.challenge_pass_count.saturating_add(1);
+        m.maturity = maturity_after_challenge_pass(prev_maturity, m.challenge_pass_count);
+    }
+
     let maturity_change = if prev_maturity != m.maturity {
         Some(ThoughtMaturityChangedCore {
             thought_id: thought_id.to_string(),
@@ -1175,9 +1287,15 @@ pub fn apply_challenge_pass_to_markdown_vault(
     };
     let now_rfc = Utc::now().to_rfc3339();
     m.updated = now_rfc.clone();
+
+    let entry_type = if quality.is_pass() {
+        "challenge-review-pass"
+    } else {
+        "challenge-review-attempt"
+    };
     m.history.push(ThoughtHistoryEntry {
         date: now_rfc,
-        entry_type: "challenge-review-pass".to_string(),
+        entry_type: entry_type.to_string(),
         source: "challenge-review".to_string(),
         diff_summary: None,
     });
@@ -1192,6 +1310,8 @@ pub fn apply_challenge_pass_to_markdown_vault(
         &m.updated,
         m.challenge_pass_count,
         m.last_reviewed_at.as_deref(),
+        m.srs_easiness_factor,
+        m.srs_interval_days,
     )?;
 
     Ok(ApplyChallengePassToMarkdownOutcome {
@@ -1680,12 +1800,20 @@ kf-thoughts:
     }
 
     #[test]
-    fn apply_challenge_pass_skipped_when_not_passed() {
+    fn apply_challenge_failed_still_writes_srs_state() {
         let dir = tempdir().unwrap();
         let root = dir.path();
         let md = "---\nkfVaultNoteId: nx\nkf-thoughts:\n- id: t1\n  maturity: growing\n  created: '2026-01-01T00:00:00Z'\n  updated: '2026-01-01T00:00:00Z'\n  temporary: false\n---\nBody\n";
-        let out = apply_challenge_pass_to_markdown_vault(root, "a.md", md, "t1", false).unwrap();
-        assert_eq!(out.markdown, md);
+        let conn = vault_thoughts_db::open_thoughts_db(root).unwrap();
+        vault_thoughts_db::upsert_thought_body(
+            &conn, "t1", "nx", "a.md", "Body", None,
+            "growing", false, false,
+            "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", 0, None,
+        ).unwrap();
+        let out = apply_challenge_pass_to_markdown_vault(root, "a.md", md, "t1", ChallengeQuality::Failed).unwrap();
+        assert!(out.markdown.contains("srsEasinessFactor"), "SRS EF should be written: {}", out.markdown);
+        assert!(out.markdown.contains("srsIntervalDays"), "SRS interval should be written: {}", out.markdown);
+        assert!(out.markdown.contains("challengePassCount: 0"), "pass count should NOT increment on failure: {}", out.markdown);
         assert!(out.maturity_change.is_none());
     }
 
@@ -1712,14 +1840,85 @@ kf-thoughts:
         )
         .unwrap();
         let out =
-            apply_challenge_pass_to_markdown_vault(root, "note.md", md, "thought-x", true).unwrap();
+            apply_challenge_pass_to_markdown_vault(root, "note.md", md, "thought-x", ChallengeQuality::Passed).unwrap();
         assert!(out.markdown.contains("mature"), "{}", out.markdown);
         assert!(out.markdown.contains("challengePassCount: 1"), "{}", out.markdown);
         assert!(out.markdown.contains("lastReviewedAt"), "{}", out.markdown);
+        assert!(out.markdown.contains("srsEasinessFactor"), "{}", out.markdown);
         let ch = out.maturity_change.expect("growing→mature should emit change");
         assert_eq!(ch.thought_id, "thought-x");
         assert_eq!(ch.from_maturity, "growing");
         assert_eq!(ch.to_maturity, "mature");
+    }
+
+    #[test]
+    fn sm2_easy_answer_increases_interval() {
+        let state = SrsState::initial();
+        // q=4 → EF unchanged (0.1 - 1*0.1 = 0), interval = 1 (first rep)
+        let s1 = sm2_next(&state, ChallengeQuality::Passed);
+        assert_eq!(s1.interval_days, 1.0);
+        assert_eq!(s1.repetition_count, 1);
+        assert!((s1.easiness_factor - 2.5).abs() < 0.001);
+
+        // second rep → interval = 6
+        let s2 = sm2_next(&s1, ChallengeQuality::Passed);
+        assert_eq!(s2.interval_days, 6.0);
+        assert_eq!(s2.repetition_count, 2);
+
+        // third rep → interval = round(6 * 2.5) = 15
+        let s3 = sm2_next(&s2, ChallengeQuality::Passed);
+        assert!(s3.interval_days > 6.0, "interval should grow: {}", s3.interval_days);
+        assert_eq!(s3.repetition_count, 3);
+    }
+
+    #[test]
+    fn sm2_hard_answer_resets_interval() {
+        let state = SrsState {
+            easiness_factor: 2.5,
+            interval_days: 15.0,
+            repetition_count: 3,
+        };
+        let next = sm2_next(&state, ChallengeQuality::Failed);
+        assert_eq!(next.interval_days, 1.0);
+        assert_eq!(next.repetition_count, 0);
+        assert!(next.easiness_factor < 2.5);
+    }
+
+    #[test]
+    fn sm2_ef_floor_at_1_3() {
+        let mut state = SrsState {
+            easiness_factor: 1.3,
+            interval_days: 1.0,
+            repetition_count: 0,
+        };
+        for _ in 0..10 {
+            state = sm2_next(&state, ChallengeQuality::Failed);
+        }
+        assert!(state.easiness_factor >= 1.3, "EF should not drop below 1.3: {}", state.easiness_factor);
+    }
+
+    #[test]
+    fn sm2_sloppy_does_not_reset() {
+        let state = SrsState {
+            easiness_factor: 2.5,
+            interval_days: 6.0,
+            repetition_count: 2,
+        };
+        let next = sm2_next(&state, ChallengeQuality::Sloppy);
+        assert!(next.interval_days > 1.0, "sloppy (q=3) should NOT reset interval: {}", next.interval_days);
+        assert_eq!(next.repetition_count, 3);
+    }
+
+    #[test]
+    fn srs_state_from_legacy_migration() {
+        let legacy = SrsState::from_legacy(3, None, None);
+        assert_eq!(legacy.easiness_factor, 2.5);
+        assert_eq!(legacy.repetition_count, 3);
+        assert!(legacy.interval_days > 0.0);
+
+        let existing = SrsState::from_legacy(3, Some(2.2), Some(12.0));
+        assert_eq!(existing.easiness_factor, 2.2);
+        assert_eq!(existing.interval_days, 12.0);
     }
 
     #[test]

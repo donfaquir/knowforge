@@ -60,14 +60,15 @@ export function ChallengeReviewInline({
         sloppy: ev.sloppy,
         thoughtId: thought.thoughtId,
       });
+      await invoke("apply_challenge_pass_to_thought", {
+        args: {
+          relPath: thought.relPath,
+          thoughtId: thought.thoughtId,
+          passed: ev.passed && !ev.sloppy,
+          sloppy: ev.sloppy,
+        },
+      });
       if (ev.passed && !ev.sloppy) {
-        await invoke("apply_challenge_pass_to_thought", {
-          args: {
-            relPath: thought.relPath,
-            thoughtId: thought.thoughtId,
-            passed: true,
-          },
-        });
         void trackKnowforgeEvent("review.inline_pass_applied", { thoughtId: thought.thoughtId });
       }
     } catch {

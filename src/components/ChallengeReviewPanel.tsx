@@ -135,14 +135,15 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
         passed: ev.passed,
         sloppy: ev.sloppy,
       });
+      await invoke("apply_challenge_pass_to_thought", {
+        args: {
+          relPath: currentItem.relPath,
+          thoughtId: currentItem.thoughtId,
+          passed: ev.passed && !ev.sloppy,
+          sloppy: ev.sloppy,
+        },
+      });
       if (ev.passed && !ev.sloppy) {
-        await invoke("apply_challenge_pass_to_thought", {
-          args: {
-            relPath: currentItem.relPath,
-            thoughtId: currentItem.thoughtId,
-            passed: true,
-          },
-        });
         await freqCtrl.recordChallengeIndependentShown(currentItem.thoughtId);
         await freqCtrl.reload();
         if (!freqCtrl.canStartMoreIndependentReviewsToday()) {

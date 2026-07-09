@@ -23,16 +23,29 @@ use crate::{is_markdown_path, join_under_root, sanitize_io_error};
 pub struct ApplyChallengePassArgs {
     pub rel_path: String,
     pub thought_id: String,
-    /// 未通过或敷衍时不写回元数据
+    /// Challenge passed cleanly
     #[serde(default = "default_passed_true")]
     pub passed: bool,
+    /// Sloppy attempt (tried but halfhearted)
+    #[serde(default)]
+    pub sloppy: bool,
 }
 
 fn default_passed_true() -> bool {
     true
 }
 
-/// 读改写落盘：将挑战通过状态写入笔记 Markdown。
+fn args_to_quality(args: &ApplyChallengePassArgs) -> thought_parser::ChallengeQuality {
+    if args.passed && !args.sloppy {
+        thought_parser::ChallengeQuality::Passed
+    } else if args.sloppy {
+        thought_parser::ChallengeQuality::Sloppy
+    } else {
+        thought_parser::ChallengeQuality::Failed
+    }
+}
+
+/// 读改写落盘：将挑战回顾状态（SM-2 调度）写入笔记 Markdown。
 ///
 /// 写入采用同目录临时文件 + `rename`（与 `atomic_write_string_in_parent` / `vault_config::atomic_write_json` 同类），
 /// 避免并发 `fs::write` 同一路径导致截断或读到半成品；**不**解决两路读改写逻辑冲突（仍依赖调用方串行或业务层协调）。
@@ -54,12 +67,13 @@ pub fn apply_challenge_pass_blocking(
     }
     let content =
         fs::read_to_string(&canonical_file).map_err(|e| sanitize_io_error(e, "reading file"))?;
+    let quality = args_to_quality(&args);
     let outcome = thought_parser::apply_challenge_pass_to_markdown_vault(
         canonical_root,
         &rel_path,
         &content,
         &args.thought_id,
-        args.passed,
+        quality,
     )?;
     if outcome.markdown == content {
         return Ok(None);
@@ -532,8 +546,8 @@ pub async fn evaluate_challenge_answer(
 
 // --- 回顾队列：遗忘曲线 MVP + 日 cap 顺延（`.knowforge/challenge-review-cap-state.json`） ---
 
-/// 排期间隔（天）：第 n 次成功回顾后的下一次间隔取下标 `min(n,4)`（与迭代 4 文档 §5 对齐）。
-const REVIEW_INTERVALS_DAYS: &[i64] = &[1, 3, 7, 14, 30];
+/// Legacy fixed intervals (kept only for `from_legacy` migration path in SrsState).
+const _LEGACY_REVIEW_INTERVALS_DAYS: &[i64] = &[1, 3, 7, 14, 30];
 
 const CAP_STATE_FILE: &str = ".knowforge/challenge-review-cap-state.json";
 
@@ -635,7 +649,7 @@ fn list_review_queue_blocking(canonical_root: &Path) -> Result<ListReviewQueueRe
         else {
             continue;
         };
-        let Some(next_due) = next_due_after_anchor(anchor, e.challenge_pass_count) else {
+        let Some(next_due) = next_due_after_anchor(anchor, &e) else {
             continue;
         };
         if next_due > today {
@@ -647,7 +661,16 @@ fn list_review_queue_blocking(canonical_root: &Path) -> Result<ListReviewQueueRe
 
     due_rows.sort_by(|a, b| {
         b.0.cmp(&a.0)
-            .then_with(|| a.2.created.cmp(&b.2.created))
+            .then_with(|| {
+                let ef_a = a.2.srs_easiness_factor.unwrap_or(2.5);
+                let ef_b = b.2.srs_easiness_factor.unwrap_or(2.5);
+                ef_a.partial_cmp(&ef_b).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
+                let iv_a = a.2.srs_interval_days.unwrap_or(1.0);
+                let iv_b = b.2.srs_interval_days.unwrap_or(1.0);
+                iv_a.partial_cmp(&iv_b).unwrap_or(std::cmp::Ordering::Equal)
+            })
             .then_with(|| a.2.rel_path.cmp(&b.2.rel_path))
     });
 
@@ -736,10 +759,14 @@ fn review_anchor_date(created: &str, last: Option<&str>, pass_count: u32) -> Opt
     parse_meta_date(created)
 }
 
-/// `completed_pass_count` 为当前 `challenge_pass_count`；下一到期日 = 锚点 + 间隔[`min(count,4)`]。
-fn next_due_after_anchor(anchor: NaiveDate, completed_pass_count: u32) -> Option<NaiveDate> {
-    let idx = (completed_pass_count as usize).min(REVIEW_INTERVALS_DAYS.len() - 1);
-    let days = REVIEW_INTERVALS_DAYS[idx];
+/// Next due date = anchor + SM-2 interval (or legacy fallback for un-migrated thoughts).
+fn next_due_after_anchor(anchor: NaiveDate, entry: &thought_retrieval::VaultThoughtEntry) -> Option<NaiveDate> {
+    let days = if let Some(iv) = entry.srs_interval_days {
+        iv.round().max(1.0) as i64
+    } else {
+        let idx = (entry.challenge_pass_count as usize).min(_LEGACY_REVIEW_INTERVALS_DAYS.len() - 1);
+        _LEGACY_REVIEW_INTERVALS_DAYS[idx]
+    };
     anchor.checked_add_signed(Duration::days(days))
 }
 
@@ -819,22 +846,48 @@ mod tests {
         assert!(!g.skipped);
     }
 
+    fn make_entry(pass_count: u32, ef: Option<f64>, iv: Option<f64>) -> thought_retrieval::VaultThoughtEntry {
+        thought_retrieval::VaultThoughtEntry {
+            rel_path: "test.md".to_string(),
+            thought_id: "t1".to_string(),
+            excerpt: String::new(),
+            maturity: thought_parser::ThoughtMaturity::Seedling,
+            created: "2026-01-01T00:00:00Z".to_string(),
+            last_reviewed_at: None,
+            challenge_pass_count: pass_count,
+            temporary: false,
+            private_omitted: false,
+            srs_easiness_factor: ef,
+            srs_interval_days: iv,
+        }
+    }
+
     #[test]
     fn next_due_first_review_one_day_after_created() {
         let created = "2026-01-01T00:00:00Z";
         let anchor = review_anchor_date(created, None, 0).unwrap();
         assert_eq!(anchor, NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
-        let next = next_due_after_anchor(anchor, 0).unwrap();
+        let entry = make_entry(0, None, None);
+        let next = next_due_after_anchor(anchor, &entry).unwrap();
         assert_eq!(next, NaiveDate::from_ymd_opt(2026, 1, 2).unwrap());
     }
 
     #[test]
-    fn next_due_after_one_pass_uses_three_day_gap() {
+    fn next_due_legacy_after_one_pass_uses_three_day_gap() {
         let last = "2026-04-10";
         let anchor = review_anchor_date("2026-01-01T00:00:00Z", Some(last), 1).unwrap();
         assert_eq!(anchor, NaiveDate::from_ymd_opt(2026, 4, 10).unwrap());
-        let next = next_due_after_anchor(anchor, 1).unwrap();
+        let entry = make_entry(1, None, None);
+        let next = next_due_after_anchor(anchor, &entry).unwrap();
         assert_eq!(next, NaiveDate::from_ymd_opt(2026, 4, 13).unwrap());
+    }
+
+    #[test]
+    fn next_due_sm2_uses_srs_interval() {
+        let anchor = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        let entry = make_entry(2, Some(2.5), Some(15.0));
+        let next = next_due_after_anchor(anchor, &entry).unwrap();
+        assert_eq!(next, NaiveDate::from_ymd_opt(2026, 5, 16).unwrap());
     }
 
     #[test]

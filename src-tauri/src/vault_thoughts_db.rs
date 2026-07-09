@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// 与 `thought_parser::USER_VERSION` 区分：侧车库独立迁移版本
-pub const THOUGHTS_DB_USER_VERSION: i32 = 2;
+pub const THOUGHTS_DB_USER_VERSION: i32 = 3;
 
 /// 单条想法正文上限（Unicode 标量个数近似为字符数）
 pub const MAX_THOUGHT_BODY_CHARS: usize = 131_072;
@@ -49,6 +49,26 @@ fn migrate_v1_to_v2(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+fn migrate_v2_to_v3(conn: &Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(thoughts)")
+        .map_err(|e| format!("PRAGMA table_info 失败: {e}"))?;
+    let cols: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    if cols.iter().any(|c| c == "srs_easiness_factor") {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE thoughts ADD COLUMN srs_easiness_factor REAL;\
+         ALTER TABLE thoughts ADD COLUMN srs_interval_days REAL;",
+    )
+    .map_err(|e| format!("迁移 thoughts V3 (SRS) 失败: {e}"))?;
+    Ok(())
+}
+
 fn init_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         r#"
@@ -75,6 +95,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
     .map_err(|e| format!("初始化 thoughts 表失败: {e}"))?;
 
     migrate_v1_to_v2(conn)?;
+    migrate_v2_to_v3(conn)?;
 
     let ver: i32 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -205,13 +226,17 @@ pub fn update_thought_after_challenge(
     updated_at: &str,
     challenge_pass_count: u32,
     last_reviewed_at: Option<&str>,
+    srs_easiness_factor: Option<f64>,
+    srs_interval_days: Option<f64>,
 ) -> Result<(), String> {
     conn.execute(
         r#"UPDATE thoughts SET
             maturity = ?2,
             updated_at = ?3,
             challenge_pass_count = ?4,
-            last_reviewed_at = ?5
+            last_reviewed_at = ?5,
+            srs_easiness_factor = ?6,
+            srs_interval_days = ?7
         WHERE thought_id = ?1"#,
         params![
             thought_id,
@@ -219,6 +244,8 @@ pub fn update_thought_after_challenge(
             updated_at,
             challenge_pass_count,
             last_reviewed_at,
+            srs_easiness_factor,
+            srs_interval_days,
         ],
     )
     .map_err(|e| format!("更新 thought 成熟度失败: {e}"))?;
@@ -254,40 +281,43 @@ pub fn graph_thought_stats(conn: &Connection) -> Result<Vec<(String, usize, u8)>
 }
 
 /// 回顾排期：侧车行 + 元数据列（YAML 不再扫 callout）；不含独立想法
+pub struct ThoughtRowForReview {
+    pub rel_path: String,
+    pub thought_id: String,
+    pub body: String,
+    pub maturity: String,
+    pub temporary: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub challenge_pass_count: i64,
+    pub last_reviewed_at: Option<String>,
+    pub srs_easiness_factor: Option<f64>,
+    pub srs_interval_days: Option<f64>,
+}
+
 pub fn list_thought_rows_for_review(
     conn: &Connection,
-) -> Result<
-    Vec<(
-        String,
-        String,
-        String,
-        String,
-        bool,
-        String,
-        String,
-        i64,
-        Option<String>,
-    )>,
-    String,
-> {
+) -> Result<Vec<ThoughtRowForReview>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT note_rel_path, thought_id, body, maturity, temporary, created_at, updated_at, challenge_pass_count, last_reviewed_at FROM thoughts WHERE standalone = 0",
+            "SELECT note_rel_path, thought_id, body, maturity, temporary, created_at, updated_at, challenge_pass_count, last_reviewed_at, srs_easiness_factor, srs_interval_days FROM thoughts WHERE standalone = 0",
         )
         .map_err(|e| e.to_string())?;
     let iter = stmt
         .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)? != 0,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)?,
-                row.get::<_, Option<String>>(8)?,
-            ))
+            Ok(ThoughtRowForReview {
+                rel_path: row.get(0)?,
+                thought_id: row.get(1)?,
+                body: row.get(2)?,
+                maturity: row.get(3)?,
+                temporary: row.get::<_, i64>(4)? != 0,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+                challenge_pass_count: row.get(7)?,
+                last_reviewed_at: row.get(8)?,
+                srs_easiness_factor: row.get(9)?,
+                srs_interval_days: row.get(10)?,
+            })
         })
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
