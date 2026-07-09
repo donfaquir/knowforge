@@ -1773,6 +1773,11 @@ function App() {
       <OnboardingOverlay
         open={onboardingOpen}
         onClose={() => setOnboardingOpen(false)}
+        onStartChallenge={() => {
+          setOnboardingOpen(false);
+          localStorage.setItem("knowforge:onboardingCompleted", "true");
+          requestOpenChallengeReview();
+        }}
         tauriRuntime={tauriRuntime}
       />
     </AiNoteContextProvider>

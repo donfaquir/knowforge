@@ -86,6 +86,9 @@ pub fn should_skip_chunk(text: &str) -> bool {
     if is_code_block(trimmed) {
         return true;
     }
+    if is_code_heavy(trimmed) {
+        return true;
+    }
     if is_quote_block(trimmed) {
         return true;
     }
@@ -112,7 +115,47 @@ fn is_pure_list(text: &str) -> bool {
 
 fn is_code_block(text: &str) -> bool {
     let trimmed = text.trim();
-    trimmed.starts_with("```") && trimmed.ends_with("```") && trimmed.matches("```").count() >= 2
+    if trimmed.starts_with("```") && trimmed.ends_with("```") && trimmed.matches("```").count() >= 2
+    {
+        return true;
+    }
+    // Partial fenced code (split boundary) — any ``` fence present means mostly code
+    if trimmed.contains("```") {
+        return true;
+    }
+    false
+}
+
+fn is_code_heavy(text: &str) -> bool {
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return false;
+    }
+    let code_lines = lines
+        .iter()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("```")
+                || l.starts_with("    ")
+                || l.starts_with('\t')
+                || looks_like_code(t)
+        })
+        .count();
+    code_lines * 100 / lines.len() > 60
+}
+
+fn looks_like_code(line: &str) -> bool {
+    let indicators = [
+        "def ", "fn ", "func ", "class ", "import ", "from ", "return ",
+        "if (", "if(", "for (", "for(", "while (", "while(",
+        "const ", "let ", "var ", "async ", "await ",
+        "pub ", "use ", "mod ", "struct ", "enum ",
+        "});", ");", "};", "} else", "} catch",
+    ];
+    indicators.iter().any(|p| line.starts_with(p))
+        || (line.ends_with(';') && !line.ends_with("；"))
+        || (line.ends_with('{') || line.ends_with('}'))
+        || (line.starts_with('#') && line.contains("include"))
 }
 
 fn is_quote_block(text: &str) -> bool {
@@ -652,6 +695,14 @@ mod tests {
     fn test_should_skip_code_block() {
         let code = "```rust\nfn main() {\n    println!(\"hello\");\n}\n```";
         assert!(should_skip_chunk(code));
+
+        // Partial fenced code (split boundary — only opening fence)
+        let partial = "```python\nfrom langgraph.graph import StateGraph, END\ndef build_agent_graph(llm):";
+        assert!(should_skip_chunk(partial));
+
+        // Code-heavy content without fences
+        let code_heavy = "def build_agent():\n    llm = get_llm()\n    return llm.run()\n\ndef main():\n    agent = build_agent()";
+        assert!(should_skip_chunk(code_heavy));
     }
 
     #[test]

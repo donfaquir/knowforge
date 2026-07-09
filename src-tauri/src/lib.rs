@@ -1722,6 +1722,22 @@ async fn list_latent_candidates(
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+async fn trigger_latent_scan(
+    state: tauri::State<'_, WorkspaceState>,
+    embed_cache: tauri::State<'_, std::sync::Arc<semantic_index::EmbeddingCache>>,
+) -> Result<Vec<latent_paragraphs::CandidateForUi>, String> {
+    let root = lock_workspace_root(&state)?;
+    let ec = embed_cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = semantic_index::open_embedding_db(&root)?;
+        latent_paragraphs::scan_vault(&conn, &ec, &root)?;
+        latent_paragraphs::list_candidates(&conn, 100)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(WorkspaceState::default())
@@ -1819,7 +1835,8 @@ pub fn run() {
             skills::commands::reload_custom_skills,
             skills::commands::list_available_tools,
             onboarding::seed_onboarding_content,
-            list_latent_candidates
+            list_latent_candidates,
+            trigger_latent_scan
         ])
         .setup(|app| {
             use tauri::Manager;
