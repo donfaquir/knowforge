@@ -94,6 +94,7 @@ fn init_embedding_schema(conn: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|e| format!("init embedding schema: {e}"))?;
+    crate::latent_paragraphs::init_candidates_schema(conn)?;
     Ok(())
 }
 
@@ -1226,6 +1227,21 @@ fn rebuild_index_impl(vault_root: &Path, app: &AppHandle, resume: bool) -> Resul
         }),
     );
 
+    // Fire-and-forget latent paragraph scan after successful rebuild
+    if indexed_chunks > 0 {
+        let scan_root = vault_root.to_path_buf();
+        let scan_app = app.clone();
+        std::thread::spawn(move || {
+            if let Ok(conn) = open_embedding_db(&scan_root) {
+                if let Some(ec) = scan_app.try_state::<std::sync::Arc<EmbeddingCache>>() {
+                    if let Err(e) = crate::latent_paragraphs::scan_vault(&conn, &ec, &scan_root) {
+                        eprintln!("[latent_paragraphs] scan_vault error: {e}");
+                    }
+                }
+            }
+        });
+    }
+
     Ok(IndexBuildResult {
         indexed_chunks,
         indexed_thoughts,
@@ -1538,5 +1554,19 @@ pub fn incremental_reindex_note(vault_root: &Path, app: &AppHandle, rel_path: &s
         if let Some(ec) = app.try_state::<Arc<EmbeddingCache>>() {
             ec.invalidate();
         }
+        let scan_root = vault_root.to_path_buf();
+        let scan_rel = rel_path.to_string();
+        let scan_app = app.clone();
+        std::thread::spawn(move || {
+            if let Ok(conn) = open_embedding_db(&scan_root) {
+                if let Some(ec) = scan_app.try_state::<Arc<EmbeddingCache>>() {
+                    if let Err(e) = crate::latent_paragraphs::incremental_scan_for_note(
+                        &conn, &ec, &scan_root, &scan_rel,
+                    ) {
+                        eprintln!("[latent_paragraphs] incremental scan error: {e}");
+                    }
+                }
+            }
+        });
     }
 }

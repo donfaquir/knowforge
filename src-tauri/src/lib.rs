@@ -32,6 +32,7 @@ mod rebuild_progress;
 mod semantic_index;
 mod workspace_text_search;
 mod understanding_graph;
+mod latent_paragraphs;
 mod link_recommendation;
 mod topic_network;
 mod tools;
@@ -1706,6 +1707,21 @@ async fn add_manual_topic_semantic(
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[tauri::command]
+async fn list_latent_candidates(
+    state: tauri::State<'_, WorkspaceState>,
+    limit: Option<usize>,
+) -> Result<Vec<latent_paragraphs::CandidateForUi>, String> {
+    let root = lock_workspace_root(&state)?;
+    let limit = limit.unwrap_or(100).min(500);
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = semantic_index::open_embedding_db(&root)?;
+        latent_paragraphs::list_candidates(&conn, limit)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(WorkspaceState::default())
@@ -1802,7 +1818,8 @@ pub fn run() {
             skills::commands::delete_custom_skill,
             skills::commands::reload_custom_skills,
             skills::commands::list_available_tools,
-            onboarding::seed_onboarding_content
+            onboarding::seed_onboarding_content,
+            list_latent_candidates
         ])
         .setup(|app| {
             use tauri::Manager;
