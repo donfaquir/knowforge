@@ -233,6 +233,8 @@ export type GenerateChallengeQuestionArgs = {
   depthMode?: DepthMode;
   /** 与 Knowforge 设置一致：`en` | `zh`，驱动模型输出自然语言 */
   uiLocale?: "en" | "zh";
+  markingReason?: string;
+  pairedExcerpt?: string;
 };
 
 /** `evaluate_challenge_answer` 请求 */
@@ -301,6 +303,11 @@ export type ReviewQueueItem = {
   nextDueAt: string;
   overdueDays: number;
   privateOmitted: boolean;
+  sourceType: "thought" | "candidate";
+  candidateId?: string;
+  markingReason?: string;
+  pairedExcerpt?: string;
+  startLine?: number;
 };
 
 export type ListReviewQueueResponse = {

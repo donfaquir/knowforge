@@ -127,6 +127,10 @@ pub struct GenerateChallengeQuestionArgs {
     /// 与前端 Knowforge 语言一致：`en` / `zh`（可选，缺省则按摘录语言推断问句语言）
     #[serde(default)]
     pub ui_locale: Option<String>,
+    #[serde(default)]
+    pub marking_reason: Option<String>,
+    #[serde(default)]
+    pub paired_excerpt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -274,6 +278,51 @@ fn depth_tone_line(d: DepthMode) -> &'static str {
     }
 }
 
+fn candidate_degraded_question(
+    reason: &str,
+    _excerpt: &str,
+    paired: Option<&str>,
+    locale: Option<&str>,
+) -> String {
+    let is_en = ui_locale_is_en(locale);
+    match reason {
+        "high_similarity" => {
+            if let Some(p) = paired {
+                if is_en {
+                    format!("Your notes contain similar content in another file ({p}). What's the unique perspective in this paragraph?")
+                } else {
+                    format!("你的笔记在另一个文件（{p}）中有类似内容。这段话的独特之处是什么？")
+                }
+            } else if is_en {
+                "Your notes contain similar paragraphs. What's the key difference between them?".to_string()
+            } else {
+                "你的笔记中有多段相似内容，它们的核心区别是什么？".to_string()
+            }
+        }
+        "semantic_isolated" => {
+            if is_en {
+                "This idea seems isolated from your other notes. What connections can you draw to other topics you've written about?".to_string()
+            } else {
+                "这个想法和你的其他笔记似乎没有关联。你能找到它与其他主题之间的联系吗？".to_string()
+            }
+        }
+        "cross_doc_recurrence" => {
+            if is_en {
+                "A similar concept appears across several of your notes. Has your understanding of it evolved over time?".to_string()
+            } else {
+                "你在多篇笔记中提到了类似的概念，你对它的理解有变化吗？".to_string()
+            }
+        }
+        _ => {
+            if is_en {
+                "What's the core insight in this paragraph, and do you still agree with it?".to_string()
+            } else {
+                "这段话的核心观点是什么？你现在还同意吗？".to_string()
+            }
+        }
+    }
+}
+
 fn normalize_template_kind(raw: Option<&str>) -> String {
     let s = raw.unwrap_or("apply").trim().to_ascii_lowercase();
     match s.as_str() {
@@ -302,6 +351,20 @@ pub async fn generate_challenge_question(
     let provider = match create_provider(&ai, None, http_client.inner()) {
         Ok(p) => p,
         Err(_) => {
+            if let Some(ref reason) = args.marking_reason {
+                let q = candidate_degraded_question(
+                    reason,
+                    args.thought_excerpt.trim(),
+                    args.paired_excerpt.as_deref(),
+                    args.ui_locale.as_deref(),
+                );
+                return Ok(GenerateChallengeQuestionResponse {
+                    question: q,
+                    template_kind: "apply".to_string(),
+                    degraded: true,
+                    should_skip: false,
+                });
+            }
             return Ok(GenerateChallengeQuestionResponse {
                 question: String::new(),
                 template_kind: "apply".to_string(),
@@ -321,16 +384,37 @@ pub async fn generate_challenge_question(
         });
     }
 
+    let is_candidate = args.marking_reason.is_some();
+
     let depth = resolve_depth_for_challenge(
         args.depth_mode,
         args.conversation_query.as_deref(),
     );
     let tone = depth_tone_line(depth);
-    let mut user_block = format!(
-        "Source note path (for context only): `{}`\n\nSaved thought excerpt:\n---\n{}\n---\n",
-        args.rel_path.trim(),
-        excerpt
-    );
+    let mut user_block = if is_candidate {
+        let reason_hint = match args.marking_reason.as_deref() {
+            Some("high_similarity") => "This paragraph was flagged because it is very similar to content in another note.",
+            Some("semantic_isolated") => "This paragraph was flagged because it seems disconnected from the user's other notes.",
+            Some("cross_doc_recurrence") => "This paragraph was flagged because a similar concept appears across multiple notes.",
+            _ => "",
+        };
+        let mut b = format!(
+            "Source note path: `{}`\n\nThis is a paragraph from the user's notes (not yet a formal Thought):\n---\n{}\n---\n{}\n",
+            args.rel_path.trim(),
+            excerpt,
+            reason_hint,
+        );
+        if let Some(ref paired) = args.paired_excerpt {
+            b.push_str(&format!("\nRelated paragraph from another note:\n---\n{paired}\n---\n"));
+        }
+        b
+    } else {
+        format!(
+            "Source note path (for context only): `{}`\n\nSaved thought excerpt:\n---\n{}\n---\n",
+            args.rel_path.trim(),
+            excerpt,
+        )
+    };
     if let Some(ref q) = args.conversation_query {
         let t = q.trim();
         if !t.is_empty() {
@@ -361,10 +445,17 @@ pub async fn generate_challenge_question(
     };
     let raw = provider.chat_completion(&msgs, Some(&overrides)).await;
 
-    let fallback_q = if ui_locale_is_en(args.ui_locale.as_deref()) {
-        FALLBACK_CHALLENGE_QUESTION_EN
+    let fallback_q = if is_candidate {
+        candidate_degraded_question(
+            args.marking_reason.as_deref().unwrap_or(""),
+            excerpt,
+            args.paired_excerpt.as_deref(),
+            args.ui_locale.as_deref(),
+        )
+    } else if ui_locale_is_en(args.ui_locale.as_deref()) {
+        FALLBACK_CHALLENGE_QUESTION_EN.to_string()
     } else {
-        FALLBACK_CHALLENGE_QUESTION_ZH
+        FALLBACK_CHALLENGE_QUESTION_ZH.to_string()
     };
 
     let raw = match raw {
@@ -630,6 +721,65 @@ fn today_inline_thought_blocklist(
         .unwrap_or_default()
 }
 
+fn mix_latent_candidates(canonical_root: &Path, today_key: &str) -> Vec<ReviewQueueItem> {
+    let embed_conn = match crate::semantic_index::open_embedding_db(canonical_root) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let candidates = match crate::latent_paragraphs::list_candidates(&embed_conn, 20) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    candidates
+        .into_iter()
+        .map(|c| ReviewQueueItem {
+            rel_path: c.rel_path,
+            thought_id: String::new(),
+            excerpt: c.excerpt,
+            maturity: thought_parser::ThoughtMaturity::Seedling,
+            created: String::new(),
+            last_reviewed_at: None,
+            challenge_pass_count: 0,
+            next_due_at: today_key.to_string(),
+            overdue_days: 0,
+            private_omitted: false,
+            source_type: "candidate".to_string(),
+            candidate_id: Some(c.id),
+            marking_reason: Some(c.marking_reason),
+            paired_excerpt: c.paired_rel_path,
+            start_line: Some(c.start_line),
+        })
+        .collect()
+}
+
+fn interleave_candidates(
+    thoughts: Vec<ReviewQueueItem>,
+    candidates: Vec<ReviewQueueItem>,
+    cap: usize,
+) -> Vec<ReviewQueueItem> {
+    if candidates.is_empty() {
+        return thoughts;
+    }
+    if thoughts.is_empty() {
+        return candidates.into_iter().take(cap).collect();
+    }
+    let mut result = Vec::with_capacity(thoughts.len() + candidates.len());
+    let mut ci = 0;
+    for (i, t) in thoughts.into_iter().enumerate() {
+        result.push(t);
+        if (i + 1) % 3 == 0 && ci < candidates.len() {
+            result.push(candidates[ci].clone());
+            ci += 1;
+        }
+    }
+    while ci < candidates.len() && result.len() < cap {
+        result.push(candidates[ci].clone());
+        ci += 1;
+    }
+    result.truncate(cap);
+    result
+}
+
 fn list_review_queue_blocking(canonical_root: &Path) -> Result<ListReviewQueueResponse, String> {
     let (entries, meta) =
         thought_retrieval::enumerate_vault_thought_entries_blocking(canonical_root)?;
@@ -707,7 +857,7 @@ fn list_review_queue_blocking(canonical_root: &Path) -> Result<ListReviewQueueRe
         save_review_cap_state(canonical_root, &cap_state)?;
     }
 
-    let items: Vec<ReviewQueueItem> = eligible
+    let thought_items: Vec<ReviewQueueItem> = eligible
         .into_iter()
         .take(cap)
         .map(|(overdue_days, next_due, e)| ReviewQueueItem {
@@ -721,8 +871,16 @@ fn list_review_queue_blocking(canonical_root: &Path) -> Result<ListReviewQueueRe
             next_due_at: next_due.format("%Y-%m-%d").to_string(),
             overdue_days,
             private_omitted: e.private_omitted,
+            source_type: "thought".to_string(),
+            candidate_id: None,
+            marking_reason: None,
+            paired_excerpt: None,
+            start_line: None,
         })
         .collect();
+
+    let candidate_items = mix_latent_candidates(canonical_root, &today_key);
+    let items = interleave_candidates(thought_items, candidate_items, cap);
 
     Ok(ListReviewQueueResponse {
         items,
@@ -786,6 +944,16 @@ pub struct ReviewQueueItem {
     /// 已相对 `next_due_at` 过期的日历天数（越大越优先）
     pub overdue_days: i64,
     pub private_omitted: bool,
+    /// "thought" | "candidate"
+    pub source_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marking_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paired_excerpt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize)]

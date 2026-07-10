@@ -661,6 +661,95 @@ pub fn dismiss_candidate(conn: &Connection, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn get_candidate_chunk_text(
+    conn: &Connection,
+    candidate_id: &str,
+) -> Result<(String, CandidateForUi), String> {
+    let row = conn
+        .query_row(
+            "SELECT tc.id, tc.rel_path, tc.paragraph_start_line, tc.paragraph_end_line,
+                    tc.marking_reason, tc.similarity_score, tc.paired_rel_path, tc.chunk_id
+             FROM thought_candidates tc WHERE tc.id = ?1",
+            params![candidate_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i32>(2)?,
+                    row.get::<_, i32>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<f64>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            },
+        )
+        .map_err(|e| format!("get candidate: {e}"))?;
+    let (id, rel_path, start_line, end_line, reason, score, paired, chunk_id) = row;
+    let chunk_text: String = conn
+        .query_row(
+            "SELECT chunk_text FROM doc_chunks WHERE chunk_id = ?1",
+            params![chunk_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("get chunk text: {e}"))?;
+    let candidate = CandidateForUi {
+        id,
+        rel_path,
+        excerpt: excerpt(&chunk_text),
+        marking_reason: reason,
+        similarity_score: score,
+        paired_rel_path: paired,
+        start_line,
+        end_line,
+    };
+    Ok((chunk_text, candidate))
+}
+
+pub fn promote_candidate(
+    embed_conn: &Connection,
+    canonical_root: &std::path::Path,
+    candidate_id: &str,
+) -> Result<String, String> {
+    let (chunk_text, candidate) = get_candidate_chunk_text(embed_conn, candidate_id)?;
+
+    let abs_path = canonical_root.join(&candidate.rel_path);
+    if !abs_path.exists() {
+        return Err(format!("source file not found: {}", candidate.rel_path));
+    }
+    let existing = std::fs::read_to_string(&abs_path)
+        .map_err(|e| format!("read source file: {e}"))?;
+
+    let parsed = crate::thought_parser::parse_note_thoughts_for_workspace(
+        canonical_root,
+        &candidate.rel_path,
+        &existing,
+    );
+    let count = parsed.meta.len().max(parsed.blocks.len());
+
+    let (new_markdown, resp) = crate::thought_parser::insert_thought_into_markdown(
+        canonical_root,
+        &candidate.rel_path,
+        &existing,
+        &chunk_text,
+        false,
+        Some(candidate.start_line as usize),
+        count,
+    )?;
+
+    std::fs::write(&abs_path, &new_markdown)
+        .map_err(|e| format!("write updated note: {e}"))?;
+
+    embed_conn
+        .execute(
+            "UPDATE thought_candidates SET promoted_thought_id = ?1 WHERE id = ?2",
+            params![resp.thought_id, candidate_id],
+        )
+        .map_err(|e| format!("update promoted_thought_id: {e}"))?;
+
+    Ok(resp.thought_id)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

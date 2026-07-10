@@ -385,7 +385,7 @@
     "generating": "Generating deepening question...",
     "defaultQuestion": "Want me to explore this topic further?",
     "acceptedUserMessageDefault": "I'd like to explore another angle.",
-    "thoughtQuestion": "{{excerpt}} \u2014 Want me to dig deeper from here?",
+    "thoughtQuestion": "{{excerpt}} — Want me to dig deeper from here?",
     "snoozeConfirm": "Snooze deepening invitations. How long?",
     "snoozeBtn": "Not now",
     "snoozeDays_one": "{{count}} day",
@@ -439,7 +439,14 @@
     "reason_too_easy": "Too easy",
     "reason_irrelevant": "Irrelevant to content",
     "reason_too_vague": "Too vague",
-    "reason_duplicate": "Repeated question"
+    "reason_duplicate": "Repeated question",
+    "candidateLabel": "An idea from {{file}}",
+    "promotePrompt": "Is this idea worth tracking long-term?",
+    "promoteTrack": "Start tracking",
+    "promoteDismiss": "No thanks",
+    "promoteSkip": "Ask me later",
+    "promoteSuccess": "Added as a formal thought",
+    "promoteDismissed": "Skipped, won't recommend again"
   },
   "thoughtSave": {
     "buttonTitle": "Save as thought",

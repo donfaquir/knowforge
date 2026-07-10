@@ -20,6 +20,7 @@ import { dispatchOpenAiSettings, VAULT_CONFIG_UPDATED_EVENT } from "../utils/vau
 import { useAiConfigStatus } from "../hooks/useAiConfigStatus";
 import AiNotConfiguredGuide from "./AiNotConfiguredGuide";
 import { AiAssistantMarkdown } from "./AiAssistantMarkdown";
+import { CandidatePromoteCard } from "./CandidatePromoteCard";
 import { ChallengeFeedbackBar } from "./ChallengeFeedbackBar";
 import "./ChallengeReviewPanel.css";
 
@@ -99,12 +100,15 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
     if (!currentItem) return;
     setBusy(true);
     try {
+      const isCandidate = currentItem.sourceType === "candidate";
       const g = await invoke<GenerateChallengeQuestionResponse>("generate_challenge_question", {
         args: {
           thoughtExcerpt: currentItem.excerpt || currentItem.created,
           relPath: currentItem.relPath,
           depthMode,
           uiLocale: getAppLocale(),
+          ...(isCandidate && currentItem.markingReason ? { markingReason: currentItem.markingReason } : {}),
+          ...(isCandidate && currentItem.pairedExcerpt ? { pairedExcerpt: currentItem.pairedExcerpt } : {}),
         },
       });
       setTemplateKind(g.templateKind || undefined);
@@ -136,24 +140,28 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
       });
       setEvalRes(ev);
       setPhase("result");
+      const isCandidate = currentItem.sourceType === "candidate";
       void trackKnowforgeEvent("review.panel_evaluated", {
         thoughtId: currentItem.thoughtId,
         passed: ev.passed,
         sloppy: ev.sloppy,
+        sourceType: currentItem.sourceType,
       });
-      await invoke("apply_challenge_pass_to_thought", {
-        args: {
-          relPath: currentItem.relPath,
-          thoughtId: currentItem.thoughtId,
-          passed: ev.passed && !ev.sloppy,
-          sloppy: ev.sloppy,
-        },
-      });
-      if (ev.passed && !ev.sloppy) {
-        await freqCtrl.recordChallengeIndependentShown(currentItem.thoughtId);
-        await freqCtrl.reload();
-        if (!freqCtrl.canStartMoreIndependentReviewsToday()) {
-          setIndependentCapBlocked(true);
+      if (!isCandidate) {
+        await invoke("apply_challenge_pass_to_thought", {
+          args: {
+            relPath: currentItem.relPath,
+            thoughtId: currentItem.thoughtId,
+            passed: ev.passed && !ev.sloppy,
+            sloppy: ev.sloppy,
+          },
+        });
+        if (ev.passed && !ev.sloppy) {
+          await freqCtrl.recordChallengeIndependentShown(currentItem.thoughtId);
+          await freqCtrl.reload();
+          if (!freqCtrl.canStartMoreIndependentReviewsToday()) {
+            setIndependentCapBlocked(true);
+          }
         }
       }
     } catch {
@@ -348,12 +356,20 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
               >
                 <div className="challenge-review-panel__queue-row-top">
                   <span className="challenge-review-panel__queue-idx">{i + 1}</span>
-                  <span className="challenge-review-panel__queue-path" title={it.relPath}>
-                    {it.relPath}
-                  </span>
-                  <span className="challenge-review-panel__queue-due">
-                    {t("challengeReview.dueLabel", { days: it.overdueDays })}
-                  </span>
+                  {it.sourceType === "candidate" ? (
+                    <span className="challenge-review-panel__candidate-tag">
+                      {t("challengeReview.candidateLabel", { file: it.relPath.split("/").pop() ?? it.relPath })}
+                    </span>
+                  ) : (
+                    <span className="challenge-review-panel__queue-path" title={it.relPath}>
+                      {it.relPath}
+                    </span>
+                  )}
+                  {it.sourceType !== "candidate" ? (
+                    <span className="challenge-review-panel__queue-due">
+                      {t("challengeReview.dueLabel", { days: it.overdueDays })}
+                    </span>
+                  ) : null}
                 </div>
                 {it.privateOmitted ? (
                   <div className="challenge-review-panel__queue-excerpt challenge-review-panel__queue-excerpt--muted">
@@ -375,14 +391,20 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
       {phase === "pick" ? (
         <>
           <div className="challenge-review-panel__meta">
-            <span>{currentItem.relPath}</span>
-            <span className="challenge-review-panel__due">
-              {t("challengeReview.dueLabel", { days: currentItem.overdueDays })}
-            </span>
+            <span>{currentItem.sourceType === "candidate"
+              ? t("challengeReview.candidateLabel", { file: currentItem.relPath.split("/").pop() ?? currentItem.relPath })
+              : currentItem.relPath}</span>
+            {currentItem.sourceType !== "candidate" ? (
+              <span className="challenge-review-panel__due">
+                {t("challengeReview.dueLabel", { days: currentItem.overdueDays })}
+              </span>
+            ) : null}
           </div>
-          <div className="challenge-review-panel__created">
-            {t("challengeReview.createdLabel", { time: createdDisplay(currentItem.created) })}
-          </div>
+          {currentItem.sourceType !== "candidate" ? (
+            <div className="challenge-review-panel__created">
+              {t("challengeReview.createdLabel", { time: createdDisplay(currentItem.created) })}
+            </div>
+          ) : null}
           {currentItem.excerpt && !currentItem.privateOmitted ? (
             <div className="challenge-review-panel__excerpt">{currentItem.excerpt}</div>
           ) : null}
@@ -436,7 +458,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
       {phase === "result" && evalRes ? (
         <div className="challenge-review-panel__result">
           {evalRes.sloppy ? <p className="challenge-review-panel__sloppy">{t("challengeReview.sloppyHint")}</p> : null}
-          {evalRes.passed ? (
+          {evalRes.passed && currentItem?.sourceType !== "candidate" ? (
             <>
               <p className="challenge-review-panel__pass">{t("challengeReview.passed")}</p>
               {!evalRes.sloppy ? (
@@ -445,19 +467,28 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
             </>
           ) : null}
           <AiAssistantMarkdown content={evalRes.commentaryMd} className="challenge-review-panel__md" />
-          <ChallengeFeedbackBar
-            thoughtId={currentItem?.thoughtId}
-            questionText={question}
-            questionTemplate={templateKind}
-          />
-          <div className="challenge-review-panel__actions">
-            <button type="button" className="challenge-review-panel__btn" onClick={() => void goNext().catch(() => {})}>
-              {t("challengeReview.continueNext")}
-            </button>
-            <button type="button" className="challenge-review-panel__linkish" onClick={onClose}>
-              {t("challengeReview.endReview")}
-            </button>
-          </div>
+          {currentItem?.sourceType === "candidate" && currentItem.candidateId ? (
+            <CandidatePromoteCard
+              candidateId={currentItem.candidateId}
+              onDone={() => void goNext().catch(() => {})}
+            />
+          ) : (
+            <>
+              <ChallengeFeedbackBar
+                thoughtId={currentItem?.thoughtId}
+                questionText={question}
+                questionTemplate={templateKind}
+              />
+              <div className="challenge-review-panel__actions">
+                <button type="button" className="challenge-review-panel__btn" onClick={() => void goNext().catch(() => {})}>
+                  {t("challengeReview.continueNext")}
+                </button>
+                <button type="button" className="challenge-review-panel__linkish" onClick={onClose}>
+                  {t("challengeReview.endReview")}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       ) : null}
     </div>

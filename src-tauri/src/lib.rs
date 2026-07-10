@@ -1707,7 +1707,6 @@ async fn add_manual_topic_semantic(
         .map_err(|e| e.to_string())?
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[tauri::command]
 async fn list_latent_candidates(
     state: tauri::State<'_, WorkspaceState>,
@@ -1734,6 +1733,34 @@ async fn trigger_latent_scan(
         let conn = semantic_index::open_embedding_db(&root)?;
         latent_paragraphs::scan_vault(&conn, &ec, &root)?;
         latent_paragraphs::list_candidates(&conn, 100)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn promote_candidate_to_thought(
+    candidate_id: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    let root = lock_workspace_root(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let embed_conn = semantic_index::open_embedding_db(&root)?;
+        latent_paragraphs::promote_candidate(&embed_conn, &root, &candidate_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn dismiss_latent_candidate(
+    candidate_id: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let root = lock_workspace_root(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = semantic_index::open_embedding_db(&root)?;
+        latent_paragraphs::dismiss_candidate(&conn, &candidate_id)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1839,7 +1866,9 @@ pub fn run() {
             skills::commands::list_available_tools,
             onboarding::seed_onboarding_content,
             list_latent_candidates,
-            trigger_latent_scan
+            trigger_latent_scan,
+            promote_candidate_to_thought,
+            dismiss_latent_candidate
         ])
         .setup(|app| {
             use tauri::Manager;

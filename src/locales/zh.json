@@ -385,7 +385,7 @@
     "generating": "正在生成深化问题…",
     "defaultQuestion": "需要我从其他角度继续分析吗？",
     "acceptedUserMessageDefault": "换个角度继续聊聊。",
-    "thoughtQuestion": "{{excerpt}} \u2014 要不要从这里继续探讨？",
+    "thoughtQuestion": "{{excerpt}} — 要不要从这里继续探讨？",
     "snoozeConfirm": "暂停邀请后，新对话中将不再展示深化邀请。暂停多久？",
     "snoozeBtn": "最近不需要",
     "snoozeDays_one": "{{count}} 天",
@@ -439,7 +439,14 @@
     "reason_too_easy": "太简单了",
     "reason_irrelevant": "和内容不相关",
     "reason_too_vague": "问得太模糊",
-    "reason_duplicate": "和之前重复了"
+    "reason_duplicate": "和之前重复了",
+    "candidateLabel": "来自 {{file}} 的一段想法",
+    "promotePrompt": "这个想法值得长期追踪吗？",
+    "promoteTrack": "开始追踪",
+    "promoteDismiss": "不了",
+    "promoteSkip": "下次再问",
+    "promoteSuccess": "已添加为正式理解",
+    "promoteDismissed": "已跳过，不再推荐"
   },
   "thoughtSave": {
     "buttonTitle": "保存为想法",
