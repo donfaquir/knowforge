@@ -96,6 +96,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
 
     migrate_v1_to_v2(conn)?;
     migrate_v2_to_v3(conn)?;
+    crate::challenge_feedback::init_feedback_table(conn)?;
 
     let ver: i32 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))

@@ -12,6 +12,7 @@ import type {
 } from "../types/cognitiveTypes";
 import { trackKnowforgeEvent } from "../utils/knowforgeAnalytics";
 import { AiAssistantMarkdown } from "./AiAssistantMarkdown";
+import { ChallengeFeedbackBar } from "./ChallengeFeedbackBar";
 import "./ChallengeReviewInline.css";
 
 type Props = {
@@ -134,6 +135,11 @@ export function ChallengeReviewInline({
           <AiAssistantMarkdown
             className="challenge-review-inline__commentary"
             content={result?.commentaryMd ?? ""}
+          />
+          <ChallengeFeedbackBar
+            thoughtId={thought.thoughtId}
+            questionText={question}
+            questionTemplate={templateKind}
           />
           <button type="button" className="challenge-review-inline__btn challenge-review-inline__btn--ghost" onClick={onDismiss}>
             {t("challengeReview.close")}

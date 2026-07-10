@@ -260,6 +260,29 @@ export type EvaluateChallengeAnswerResponse = {
   templateKind?: string;
 };
 
+/** `get_feedback_stats` 响应 */
+export type FeedbackTemplateStats = {
+  template: string;
+  total: number;
+  helpful: number;
+  notHelpful: number;
+  helpfulRate: number;
+};
+
+export type FeedbackIssueCount = {
+  reason: string;
+  count: number;
+};
+
+export type FeedbackStats = {
+  totalRatings: number;
+  helpfulCount: number;
+  notHelpfulCount: number;
+  helpfulRate: number;
+  byTemplate: FeedbackTemplateStats[];
+  commonIssues: FeedbackIssueCount[];
+};
+
 /** `count_vault_thoughts_for_review` 响应 */
 export type CountVaultThoughtsForReviewResponse = {
   totalThoughts: number;

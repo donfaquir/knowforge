@@ -429,7 +429,17 @@
     "panelEmptySecondary": "When depth is sufficient, inline challenge review may still appear at the end of AI replies.",
     "panelIndependentCapHint": "Raise the daily cap in AI & LLM settings (applies after save).",
     "openAiSettings": "Open AI settings…",
-    "openSourceNote": "Open source note"
+    "openSourceNote": "Open source note",
+    "feedbackPrompt": "Was this question helpful?",
+    "helpful": "Helpful",
+    "notHelpful": "Not helpful",
+    "feedbackThanks": "Thanks for the feedback",
+    "feedbackReasonHint": "What was wrong? (optional)",
+    "feedbackSkipReason": "Submit as-is",
+    "reason_too_easy": "Too easy",
+    "reason_irrelevant": "Irrelevant to content",
+    "reason_too_vague": "Too vague",
+    "reason_duplicate": "Repeated question"
   },
   "thoughtSave": {
     "buttonTitle": "Save as thought",

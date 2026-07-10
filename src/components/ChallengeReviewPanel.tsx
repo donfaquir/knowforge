@@ -20,6 +20,7 @@ import { dispatchOpenAiSettings, VAULT_CONFIG_UPDATED_EVENT } from "../utils/vau
 import { useAiConfigStatus } from "../hooks/useAiConfigStatus";
 import AiNotConfiguredGuide from "./AiNotConfiguredGuide";
 import { AiAssistantMarkdown } from "./AiAssistantMarkdown";
+import { ChallengeFeedbackBar } from "./ChallengeFeedbackBar";
 import "./ChallengeReviewPanel.css";
 
 type Props = {
@@ -40,6 +41,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
   const [phase, setPhase] = useState<"pick" | "qa" | "result">("pick");
   const [busy, setBusy] = useState(false);
   const [evalRes, setEvalRes] = useState<EvaluateChallengeAnswerResponse | null>(null);
+  const [templateKind, setTemplateKind] = useState<string | undefined>();
   /** 当日独立回顾成功次数已达 cap */
   const [independentCapBlocked, setIndependentCapBlocked] = useState(false);
 
@@ -105,6 +107,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
           uiLocale: getAppLocale(),
         },
       });
+      setTemplateKind(g.templateKind || undefined);
       if (g.shouldSkip || !g.question.trim()) {
         setQuestion(t("challengeReview.fallbackQuestion"));
       } else {
@@ -442,6 +445,11 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
             </>
           ) : null}
           <AiAssistantMarkdown content={evalRes.commentaryMd} className="challenge-review-panel__md" />
+          <ChallengeFeedbackBar
+            thoughtId={currentItem?.thoughtId}
+            questionText={question}
+            questionTemplate={templateKind}
+          />
           <div className="challenge-review-panel__actions">
             <button type="button" className="challenge-review-panel__btn" onClick={() => void goNext().catch(() => {})}>
               {t("challengeReview.continueNext")}

@@ -429,7 +429,17 @@
     "panelEmptySecondary": "深度足够时，仍可能在 AI 对话末尾出现内联挑战回顾。",
     "panelIndependentCapHint": "可在「AI 与大模型」设置中提高每日上限（保存后生效）。",
     "openAiSettings": "打开 AI 设置…",
-    "openSourceNote": "打开来源笔记"
+    "openSourceNote": "打开来源笔记",
+    "feedbackPrompt": "这个问题对你有帮助吗？",
+    "helpful": "有帮助",
+    "notHelpful": "没帮助",
+    "feedbackThanks": "感谢反馈",
+    "feedbackReasonHint": "什么问题？（可选）",
+    "feedbackSkipReason": "直接提交",
+    "reason_too_easy": "太简单了",
+    "reason_irrelevant": "和内容不相关",
+    "reason_too_vague": "问得太模糊",
+    "reason_duplicate": "和之前重复了"
   },
   "thoughtSave": {
     "buttonTitle": "保存为想法",

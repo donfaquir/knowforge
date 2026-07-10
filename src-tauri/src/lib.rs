@@ -13,6 +13,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 mod ai_conversations;
+mod challenge_feedback;
 mod challenge_review;
 mod depth_decisions;
 mod cognitive_report;
@@ -1810,6 +1811,8 @@ pub fn run() {
             challenge_review::evaluate_challenge_answer,
             challenge_review::list_review_queue,
             challenge_review::count_vault_thoughts_for_review,
+            challenge_feedback::submit_challenge_feedback,
+            challenge_feedback::get_feedback_stats,
             search_thought_for_invite,
             list_depth_decisions,
             passive_highlight::detect_passive_highlight,

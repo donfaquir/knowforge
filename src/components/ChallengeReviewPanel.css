@@ -276,3 +276,96 @@
   justify-content: flex-start;
   flex-wrap: wrap;
 }
+
+/* --- ChallengeFeedbackBar --- */
+
+.challenge-feedback-bar {
+  margin: 10px 0 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--kf-text-muted, #64748b) 8%, transparent);
+  font-size: 0.82rem;
+}
+
+.challenge-feedback-bar--done {
+  background: color-mix(in srgb, #22c55e 10%, transparent);
+}
+
+.challenge-feedback-bar__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.challenge-feedback-bar__prompt {
+  color: var(--kf-text-muted, #64748b);
+  margin-right: 4px;
+}
+
+.challenge-feedback-bar__thanks {
+  color: #22c55e;
+}
+
+.challenge-feedback-bar__btn {
+  border: 1px solid color-mix(in srgb, var(--kf-border, #444) 60%, transparent);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.challenge-feedback-bar__btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--kf-text, #fff) 8%, transparent);
+}
+
+.challenge-feedback-bar__btn--helpful:hover:not(:disabled) {
+  border-color: #22c55e;
+  color: #22c55e;
+}
+
+.challenge-feedback-bar__btn--not-helpful:hover:not(:disabled) {
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.challenge-feedback-bar__reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.challenge-feedback-bar__tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.challenge-feedback-bar__tag {
+  border: 1px solid color-mix(in srgb, var(--kf-border, #444) 50%, transparent);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 2px 8px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.challenge-feedback-bar__tag:hover:not(:disabled) {
+  background: color-mix(in srgb, #ef4444 12%, transparent);
+  border-color: #ef4444;
+}
+
+.challenge-feedback-bar__tag--skip {
+  opacity: 0.6;
+}
+
+.challenge-feedback-bar__tag--skip:hover:not(:disabled) {
+  opacity: 1;
+  background: color-mix(in srgb, var(--kf-text, #fff) 8%, transparent);
+  border-color: var(--kf-border, #444);
+}
