@@ -417,11 +417,19 @@ fn compute_candidates(chunks: &[&DocChunkRow]) -> Vec<RawCandidate> {
         let doc_set: HashSet<&str> = members.iter().map(|&i| chunks[i].rel_path.as_str()).collect();
         if doc_set.len() >= 3 {
             for &idx in members {
+                // Collect other document paths in this cluster (excluding self)
+                let self_path = chunks[idx].rel_path.as_str();
+                let other_docs: Vec<&str> = doc_set.iter().copied().filter(|p| *p != self_path).collect();
+                let paired = if other_docs.is_empty() {
+                    None
+                } else {
+                    Some(other_docs.join(","))
+                };
                 marked.entry(idx).or_insert(RawCandidate {
                     chunk_idx: idx,
                     marking_reason: "cross_doc_recurrence",
                     similarity_score: Some(max_sim[idx] as f64),
-                    paired_rel_path: None,
+                    paired_rel_path: paired,
                 });
             }
         }

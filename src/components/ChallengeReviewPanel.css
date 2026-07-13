@@ -411,3 +411,22 @@
   color: #7c3aed;
   white-space: nowrap;
 }
+
+.challenge-review-panel__related-docs {
+  font-size: 0.78rem;
+  color: var(--text-muted, #888);
+  margin: 2px 0 4px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.challenge-review-panel__related-doc-tag {
+  font-size: 0.72rem;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, #3b82f6, transparent 88%);
+  color: #2563eb;
+  white-space: nowrap;
+}

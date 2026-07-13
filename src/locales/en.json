@@ -446,6 +446,7 @@
     "reasonHighSimilarity": "Similar phrasing found in another note — worth comparing",
     "reasonSemanticIsolated": "Disconnected from other notes — worth exploring",
     "reasonCrossDocRecurrence": "Related concepts across multiple notes — worth organizing",
+    "relatedDocs": "Related notes: ",
     "promotePrompt": "Is this idea worth tracking long-term?",
     "promoteTrack": "Start tracking",
     "promoteDismiss": "No thanks",

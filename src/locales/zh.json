@@ -446,6 +446,7 @@
     "reasonHighSimilarity": "与其他笔记存在近似表述，值得辨析",
     "reasonSemanticIsolated": "与其他笔记缺少关联，值得深入",
     "reasonCrossDocRecurrence": "多篇笔记涉及相近概念，值得梳理",
+    "relatedDocs": "相关笔记：",
     "promotePrompt": "这个想法值得长期追踪吗？",
     "promoteTrack": "开始追踪",
     "promoteDismiss": "不了",

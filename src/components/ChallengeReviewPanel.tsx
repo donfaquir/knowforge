@@ -412,15 +412,27 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
               {t("challengeReview.createdLabel", { time: createdDisplay(currentItem.created) })}
             </div>
           ) : currentItem.markingReason ? (
-            <div className="challenge-review-panel__created">
-              {currentItem.markingReason === "high_similarity"
-                ? t("challengeReview.reasonHighSimilarity")
-                : currentItem.markingReason === "semantic_isolated"
-                ? t("challengeReview.reasonSemanticIsolated")
-                : currentItem.markingReason === "cross_doc_recurrence"
-                ? t("challengeReview.reasonCrossDocRecurrence")
-                : currentItem.markingReason}
-            </div>
+            <>
+              <div className="challenge-review-panel__created">
+                {currentItem.markingReason === "high_similarity"
+                  ? t("challengeReview.reasonHighSimilarity")
+                  : currentItem.markingReason === "semantic_isolated"
+                  ? t("challengeReview.reasonSemanticIsolated")
+                  : currentItem.markingReason === "cross_doc_recurrence"
+                  ? t("challengeReview.reasonCrossDocRecurrence")
+                  : currentItem.markingReason}
+              </div>
+              {currentItem.pairedExcerpt ? (
+                <div className="challenge-review-panel__related-docs">
+                  {t("challengeReview.relatedDocs")}
+                  {currentItem.pairedExcerpt.split(",").map((p) => (
+                    <span key={p} className="challenge-review-panel__related-doc-tag">
+                      {displayName(p.trim())}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </>
           ) : null}
           {currentItem.excerpt && !currentItem.privateOmitted ? (
             <div className="challenge-review-panel__excerpt">{currentItem.excerpt}</div>
