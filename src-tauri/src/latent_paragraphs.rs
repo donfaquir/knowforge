@@ -14,6 +14,9 @@ const MAX_CANDIDATES: usize = 500;
 const MIN_CHUNK_CHARS: usize = 50;
 const EXCERPT_LEN: usize = 200;
 
+/// Bump this when filter logic changes to invalidate cached candidates.
+const FILTER_VERSION: i64 = 2;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CandidateForUi {
@@ -66,10 +69,41 @@ pub fn init_candidates_schema(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_tc_rel_path ON thought_candidates(rel_path);
         CREATE INDEX IF NOT EXISTS idx_tc_reason ON thought_candidates(marking_reason);
         CREATE INDEX IF NOT EXISTS idx_tc_chunk_id ON thought_candidates(chunk_id);
+        CREATE TABLE IF NOT EXISTS latent_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         "#,
     )
     .map_err(|e| format!("init thought_candidates schema: {e}"))?;
     Ok(())
+}
+
+/// Check if the stored filter version matches the current FILTER_VERSION.
+/// If outdated, clear all non-dismissed/non-promoted candidates so a fresh scan runs.
+pub fn invalidate_if_filter_changed(conn: &Connection) -> Result<bool, String> {
+    let stored: i64 = conn
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM latent_meta WHERE key = 'filter_version'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if stored == FILTER_VERSION {
+        return Ok(false);
+    }
+    conn.execute(
+        "DELETE FROM thought_candidates WHERE dismissed_at IS NULL AND promoted_thought_id IS NULL",
+        [],
+    )
+    .map_err(|e| format!("clear outdated candidates: {e}"))?;
+    conn.execute(
+        "INSERT OR REPLACE INTO latent_meta (key, value) VALUES ('filter_version', ?1)",
+        params![FILTER_VERSION.to_string()],
+    )
+    .map_err(|e| format!("update filter_version: {e}"))?;
+    eprintln!("[latent_paragraphs] filter version changed ({stored} → {FILTER_VERSION}), cleared old candidates");
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -176,22 +210,25 @@ fn is_quote_block(text: &str) -> bool {
     lines.iter().all(|line| line.trim_start().starts_with("> "))
 }
 
-/// Markdown table: lines containing `|` pipes or separator rows like `|---|`.
-/// Skip if > 50% of non-empty lines look like table rows.
+/// Markdown table detection. Skip if any of:
+/// - Contains a table separator row (e.g. `|---|---|`)
+/// - > 30% of non-empty lines contain pipe `|` characters
 fn is_table_heavy(text: &str) -> bool {
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
     if lines.len() < 2 {
         return false;
     }
-    let table_lines = lines
-        .iter()
-        .filter(|l| {
-            let t = l.trim();
-            // Table row: contains at least one `|` that isn't at the very start of a blockquote
-            t.contains('|')
-        })
-        .count();
-    table_lines * 100 / lines.len() > 50
+    // Fast path: if any line looks like a table separator, it's a table
+    let has_separator = lines.iter().any(|l| {
+        let t = l.trim();
+        t.contains("|") && t.contains("---")
+    });
+    if has_separator {
+        return true;
+    }
+    // Slow path: count lines with pipe chars
+    let table_lines = lines.iter().filter(|l| l.trim().contains('|')).count();
+    table_lines * 100 / lines.len() > 30
 }
 
 /// YAML frontmatter block: starts with `---` and ends with `---` or `...`
@@ -1039,7 +1076,8 @@ mod tests {
 
     #[test]
     fn test_keep_prose_with_pipe() {
-        let prose = "This is a paragraph about Unix pipes. We use | to chain commands.\nAnother line of normal prose about topics.\nA third line discussing ideas and concepts in detail.";
+        // Only 1 out of 5 lines contains `|` (20%), below the 30% threshold
+        let prose = "This is a paragraph about Unix pipes. We use | to chain commands.\nAnother line of normal prose about topics.\nA third line discussing ideas and concepts in detail.\nFourth line with more context about the subject.\nFifth line wrapping up the discussion on this matter.";
         assert!(!should_skip_chunk(prose), "prose mentioning | should not be skipped");
     }
 
