@@ -1638,11 +1638,12 @@ async fn get_thought_growth_story(
 #[tauri::command]
 async fn export_growth_story_as_image(
     thought_id: String,
-    markdown: String,
+    _markdown: String,
     state: tauri::State<'_, WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    use tauri::Manager;
+    #[allow(unused_imports)]
+    use tauri::Manager; // required for WebviewWindowBuilder::new(&app, ...)
     use tauri::Listener;
 
     let root = lock_workspace_root(&state)?;

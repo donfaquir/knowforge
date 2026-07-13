@@ -28,6 +28,7 @@ pub struct CandidateForUi {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ScanResult {
     pub total_chunks_scanned: usize,
     pub candidates_found: usize,

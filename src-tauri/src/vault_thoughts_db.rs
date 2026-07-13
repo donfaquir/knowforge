@@ -282,6 +282,7 @@ pub fn graph_thought_stats(conn: &Connection) -> Result<Vec<(String, usize, u8)>
 }
 
 /// 回顾排期：侧车行 + 元数据列（YAML 不再扫 callout）；不含独立想法
+#[allow(dead_code)]
 pub struct ThoughtRowForReview {
     pub rel_path: String,
     pub thought_id: String,

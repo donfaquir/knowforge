@@ -384,7 +384,8 @@ pub fn to_html_card(story: &GrowthStory) -> String {
     )
 }
 
-/// 生成 Markdown 格式的成长故事
+/// 生成 Markdown 格式的成长故事（used in tests; frontend generates its own Markdown export）
+#[allow(dead_code)]
 pub fn to_markdown(story: &GrowthStory) -> String {
     let maturity_emoji = match story.current_maturity.as_str() {
         "seedling" => "🌱",
