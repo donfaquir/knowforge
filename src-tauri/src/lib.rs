@@ -416,6 +416,40 @@ async fn open_workspace(
         cleanup_expired_tool_results(&cleanup_root).await;
     });
 
+    // Latent paragraph scan: if embedding index exists but no active candidates,
+    // run a scan so the review queue can show latent paragraph challenges.
+    {
+        let scan_root = canonical_root.clone();
+        let scan_app = app_handle.clone();
+        std::thread::spawn(move || {
+            let conn = match semantic_index::open_embedding_db(&scan_root) {
+                Ok(c) => c,
+                Err(_) => return, // no embedding DB yet, skip
+            };
+            let has_chunks: bool = conn
+                .query_row("SELECT count(*) FROM doc_chunks", [], |r| r.get::<_, i64>(0))
+                .unwrap_or(0)
+                > 0;
+            let has_candidates: bool = conn
+                .query_row(
+                    "SELECT count(*) FROM thought_candidates WHERE dismissed_at IS NULL AND promoted_thought_id IS NULL",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+                > 0;
+            if has_chunks && !has_candidates {
+                use tauri::Manager;
+                eprintln!("[open_workspace] embedding index exists but no latent candidates, triggering scan");
+                if let Some(ec) = scan_app.try_state::<std::sync::Arc<semantic_index::EmbeddingCache>>() {
+                    if let Err(e) = latent_paragraphs::scan_vault(&conn, &ec, &scan_root) {
+                        eprintln!("[open_workspace] latent scan error: {e}");
+                    }
+                }
+            }
+        });
+    }
+
     // 认知回顾推送：启动时检查一次，之后每 30 分钟定期检查
     {
         let push_root = canonical_root.clone();
