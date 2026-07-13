@@ -2,7 +2,7 @@
  * 通道一：独立挑战回顾面板（队列 + 单条问答 + 写回）。
  */
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAiNoteContext } from "../contexts/AiNoteContext";
 import { getAppLocale } from "../i18n";
@@ -35,6 +35,11 @@ function displayName(relPath: string): string {
   return name.replace(/\.md$/i, "");
 }
 
+/** Stable cache key for a review queue item */
+function itemCacheKey(item: ReviewQueueItem): string {
+  return item.candidateId || item.thoughtId || `${item.relPath}:${item.startLine ?? 0}`;
+}
+
 export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
   const { t, i18n } = useTranslation();
   const { openMarkdownTab } = useAiNoteContext();
@@ -51,6 +56,10 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
   const [templateKind, setTemplateKind] = useState<string | undefined>();
   /** 当日独立回顾成功次数已达 cap */
   const [independentCapBlocked, setIndependentCapBlocked] = useState(false);
+
+  // --- Pre-generation pipeline ---
+  const questionCacheRef = useRef<Map<string, GenerateChallengeQuestionResponse>>(new Map());
+  const prefetchingKeyRef = useRef<string | null>(null);
 
   const todayDayStats = useMemo(() => {
     const k = localTodayKey();
@@ -75,17 +84,69 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
     }
   }, []);
 
+  /** Build invoke args for generate_challenge_question */
+  const buildQuestionArgs = useCallback(
+    (item: ReviewQueueItem) => {
+      const isCandidate = item.sourceType === "candidate";
+      return {
+        thoughtExcerpt: item.excerpt || item.created,
+        relPath: item.relPath,
+        depthMode,
+        uiLocale: getAppLocale(),
+        ...(!isCandidate && item.thoughtId ? { thoughtId: item.thoughtId } : {}),
+        ...(isCandidate && item.markingReason ? { markingReason: item.markingReason } : {}),
+        ...(isCandidate && item.pairedExcerpt ? { pairedExcerpt: item.pairedExcerpt } : {}),
+      };
+    },
+    [depthMode],
+  );
+
+  /** Fire-and-forget: prefetch question for an item, then chain to the next */
+  const prefetchQuestion = useCallback(
+    (items: ReviewQueueItem[], startIdx: number) => {
+      const item = items[startIdx];
+      if (!item) return;
+      const key = itemCacheKey(item);
+      if (questionCacheRef.current.has(key) || prefetchingKeyRef.current === key) return;
+      prefetchingKeyRef.current = key;
+      invoke<GenerateChallengeQuestionResponse>("generate_challenge_question", {
+        args: buildQuestionArgs(item),
+      })
+        .then((g) => {
+          questionCacheRef.current.set(key, g);
+          // Chain: prefetch next item (max lookahead = 2)
+          if (startIdx + 1 < items.length && questionCacheRef.current.size < 3) {
+            prefetchQuestion(items, startIdx + 1);
+          }
+        })
+        .catch(() => {
+          // Ignore — will fall back to on-demand generation
+        })
+        .finally(() => {
+          if (prefetchingKeyRef.current === key) {
+            prefetchingKeyRef.current = null;
+          }
+        });
+    },
+    [buildQuestionArgs],
+  );
+
   const hydrateFromVault = useCallback(async () => {
     try {
       await freqCtrl.reload();
-      await reloadQueue();
+      const q = await reloadQueue();
       const cfg = await invoke<VaultConfigForUi>("get_vault_config_for_ui");
       setIndependent(cfg.cognitive.independentReviewEnabled === true);
       setIndependentCapBlocked(!freqCtrl.canStartMoreIndependentReviewsToday());
+      // Start pre-generating question for the first item
+      questionCacheRef.current.clear();
+      if (q && q.items.length > 0) {
+        prefetchQuestion(q.items, 0);
+      }
     } catch {
       setQueue(null);
     }
-  }, [freqCtrl.reload, freqCtrl.canStartMoreIndependentReviewsToday, reloadQueue]);
+  }, [freqCtrl.reload, freqCtrl.canStartMoreIndependentReviewsToday, reloadQueue, prefetchQuestion]);
 
   useEffect(() => {
     void hydrateFromVault();
@@ -101,32 +162,47 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
 
   const currentItem: ReviewQueueItem | undefined = queue?.items[cursor];
 
+  /** Apply a generated question response to UI state */
+  const applyQuestion = (g: GenerateChallengeQuestionResponse) => {
+    setTemplateKind(g.templateKind || undefined);
+    if (g.shouldSkip || !g.question.trim()) {
+      setQuestion(t("challengeReview.fallbackQuestion"));
+    } else {
+      setQuestion(g.question);
+    }
+    setPhase("qa");
+    setAnswer("");
+    setEvalRes(null);
+  };
+
   /** 仅用于本面板 onClick，不传入 memo 子组件；用 useCallback 也无法在 answer 变化时稳定引用，故保持为普通函数 */
   const startRound = async () => {
     if (!currentItem) return;
+
+    // 1. Try cache — instant response
+    const key = itemCacheKey(currentItem);
+    const cached = questionCacheRef.current.get(key);
+    if (cached) {
+      questionCacheRef.current.delete(key);
+      applyQuestion(cached);
+      // Kick off prefetch for upcoming items
+      if (queue?.items) {
+        prefetchQuestion(queue.items, cursor + 1);
+      }
+      return;
+    }
+
+    // 2. Cache miss — generate on demand
     setBusy(true);
     try {
-      const isCandidate = currentItem.sourceType === "candidate";
       const g = await invoke<GenerateChallengeQuestionResponse>("generate_challenge_question", {
-        args: {
-          thoughtExcerpt: currentItem.excerpt || currentItem.created,
-          relPath: currentItem.relPath,
-          depthMode,
-          uiLocale: getAppLocale(),
-          ...(!isCandidate && currentItem.thoughtId ? { thoughtId: currentItem.thoughtId } : {}),
-          ...(isCandidate && currentItem.markingReason ? { markingReason: currentItem.markingReason } : {}),
-          ...(isCandidate && currentItem.pairedExcerpt ? { pairedExcerpt: currentItem.pairedExcerpt } : {}),
-        },
+        args: buildQuestionArgs(currentItem),
       });
-      setTemplateKind(g.templateKind || undefined);
-      if (g.shouldSkip || !g.question.trim()) {
-        setQuestion(t("challengeReview.fallbackQuestion"));
-      } else {
-        setQuestion(g.question);
+      applyQuestion(g);
+      // Prefetch next item while user answers
+      if (queue?.items) {
+        prefetchQuestion(queue.items, cursor + 1);
       }
-      setPhase("qa");
-      setAnswer("");
-      setEvalRes(null);
     } finally {
       setBusy(false);
     }
@@ -200,12 +276,10 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
       setCursor(0);
       return;
     }
-    setCursor(() => {
-      if (passedLast) {
-        return 0;
-      }
-      return Math.min(prevCursor + 1, q.items.length - 1);
-    });
+    const nextCursor = passedLast ? 0 : Math.min(prevCursor + 1, q.items.length - 1);
+    setCursor(nextCursor);
+    // Prefetch for the upcoming item (it may already be cached from earlier)
+    prefetchQuestion(q.items, nextCursor);
   };
 
   const createdDisplay = useCallback(
@@ -456,11 +530,14 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
                   invoke("dismiss_latent_candidate", { candidateId: currentItem.candidateId })
                     .catch(() => {})
                     .finally(() => {
+                      questionCacheRef.current.clear();
                       void reloadQueue().then((q) => {
                         if (!q || q.items.length === 0) {
                           setCursor(0);
                         } else {
-                          setCursor((c) => Math.min(c, q.items.length - 1));
+                          const next = Math.min(cursor, q.items.length - 1);
+                          setCursor(next);
+                          prefetchQuestion(q.items, next);
                         }
                         setBusy(false);
                       });
