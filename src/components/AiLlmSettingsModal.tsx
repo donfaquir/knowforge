@@ -140,6 +140,8 @@ type FormState = {
   independentReviewEnabled: boolean;
   challengeReviewDailyCapIndependent: string;
   challengeReviewDailyCapInline: string;
+  cognitivePushEnabled: boolean;
+  cognitivePushFrequency: string;
   semanticEnabled: boolean;
   semanticAutoIndex: boolean;
   semanticSearchWeight: string;
@@ -248,6 +250,8 @@ function defaultForm(): FormState {
     independentReviewEnabled: false,
     challengeReviewDailyCapIndependent: "3",
     challengeReviewDailyCapInline: "2",
+    cognitivePushEnabled: false,
+    cognitivePushFrequency: "both",
     semanticEnabled: true,
     semanticAutoIndex: true,
     semanticSearchWeight: "0.6",
@@ -360,6 +364,8 @@ function vaultConfigToForm(cfg: VaultConfigForUi): FormState {
     independentReviewEnabled: cognitive.independentReviewEnabled === true,
     challengeReviewDailyCapIndependent: String(cognitive.challengeReviewDailyCapIndependent ?? 3),
     challengeReviewDailyCapInline: String(cognitive.challengeReviewDailyCapInline ?? 2),
+    cognitivePushEnabled: cognitive.cognitivePushEnabled === true,
+    cognitivePushFrequency: cognitive.cognitivePushFrequency ?? "both",
     semanticEnabled: semantic.enabled !== false,
     semanticAutoIndex: semantic.autoIndexOnSave !== false,
     semanticSearchWeight: String(semantic.searchWeight ?? 0.6),
@@ -779,6 +785,8 @@ export function AiLlmSettingsModal({
         independentReviewEnabled: form.independentReviewEnabled,
         challengeReviewDailyCapIndependent: capInd,
         challengeReviewDailyCapInline: capInline,
+        cognitivePushEnabled: form.cognitivePushEnabled,
+        cognitivePushFrequency: form.cognitivePushFrequency,
       },
       semantic: {
         enabled: form.semanticEnabled,
@@ -1607,6 +1615,36 @@ export function AiLlmSettingsModal({
                 autoComplete="off"
               />
               <p className="ai-settings__hint">{t("settings.challengeReviewDailyCapHint")}</p>
+            </fieldset>
+
+            <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
+              <legend className="ai-settings__legend">{t("settings.cognitivePushSection")}</legend>
+              <label className="ai-settings__check">
+                <input
+                  type="checkbox"
+                  checked={form.cognitivePushEnabled}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, cognitivePushEnabled: e.target.checked }))
+                  }
+                />
+                {t("settings.cognitivePushEnable")}
+              </label>
+              <label className="ai-settings__label" htmlFor="ai-cog-push-freq">
+                {t("settings.cognitivePushFrequency")}
+              </label>
+              <select
+                id="ai-cog-push-freq"
+                className="app-modal__field"
+                value={form.cognitivePushFrequency}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, cognitivePushFrequency: e.target.value }))
+                }
+              >
+                <option value="weekly">{t("settings.cognitivePushWeekly")}</option>
+                <option value="monthly">{t("settings.cognitivePushMonthly")}</option>
+                <option value="both">{t("settings.cognitivePushBoth")}</option>
+              </select>
+              <p className="ai-settings__hint">{t("settings.cognitivePushHint")}</p>
             </fieldset>
 
               </div>

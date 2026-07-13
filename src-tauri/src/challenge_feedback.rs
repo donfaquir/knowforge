@@ -16,6 +16,7 @@ pub fn init_feedback_table(conn: &Connection) -> Result<(), String> {
         );
         CREATE INDEX IF NOT EXISTS idx_cf_rating ON challenge_feedback(rating);
         CREATE INDEX IF NOT EXISTS idx_cf_template ON challenge_feedback(question_template);
+        CREATE INDEX IF NOT EXISTS idx_cf_thought_id ON challenge_feedback(thought_id);
         "#,
     )
     .map_err(|e| format!("init challenge_feedback table: {e}"))?;
@@ -167,6 +168,27 @@ pub fn query_feedback_stats(conn: &Connection) -> Result<FeedbackStats, String> 
     })
 }
 
+pub fn query_recent_questions(
+    conn: &Connection,
+    thought_id: &str,
+    limit: usize,
+) -> Result<Vec<String>, String> {
+    let cap = limit.min(20);
+    let mut stmt = conn
+        .prepare(
+            "SELECT question_text FROM challenge_feedback
+             WHERE thought_id = ?1
+             ORDER BY created_at DESC
+             LIMIT ?2",
+        )
+        .map_err(|e| format!("prepare recent questions: {e}"))?;
+    let rows = stmt
+        .query_map(params![thought_id, cap as i64], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query recent questions: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("read recent questions: {e}"))
+}
+
 #[tauri::command]
 pub async fn submit_challenge_feedback(
     state: tauri::State<'_, crate::WorkspaceState>,
@@ -250,6 +272,41 @@ mod tests {
         assert_eq!(stats.helpful_rate, 0.0);
         assert!(stats.by_template.is_empty());
         assert!(stats.common_issues.is_empty());
+    }
+
+    #[test]
+    fn query_recent_questions_returns_latest_n() {
+        let conn = setup_db();
+        for i in 0..7 {
+            insert_feedback(
+                &conn,
+                Some("t1"),
+                &format!("Question {i}"),
+                Some("apply"),
+                "helpful",
+                None,
+            )
+            .unwrap();
+        }
+        let qs = query_recent_questions(&conn, "t1", 5).unwrap();
+        assert_eq!(qs.len(), 5);
+        assert_eq!(qs[0], "Question 6");
+        assert_eq!(qs[4], "Question 2");
+    }
+
+    #[test]
+    fn query_recent_questions_filters_by_thought_id() {
+        let conn = setup_db();
+        insert_feedback(&conn, Some("t1"), "Q for t1", Some("apply"), "helpful", None).unwrap();
+        insert_feedback(&conn, Some("t2"), "Q for t2", Some("apply"), "helpful", None).unwrap();
+        insert_feedback(&conn, Some("t1"), "Q2 for t1", Some("compare"), "helpful", None).unwrap();
+
+        let qs = query_recent_questions(&conn, "t1", 10).unwrap();
+        assert_eq!(qs.len(), 2);
+        assert!(qs.iter().all(|q| q.contains("t1")));
+
+        let empty = query_recent_questions(&conn, "unknown", 10).unwrap();
+        assert!(empty.is_empty());
     }
 
     #[test]

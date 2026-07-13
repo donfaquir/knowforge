@@ -11,7 +11,6 @@ use crate::llm::LlmChatMessage;
 use tokio_util::sync::CancellationToken;
 use crate::lock_workspace_root;
 use crate::note_privacy;
-use crate::challenge_review;
 use crate::thought_retrieval::{self, SearchThoughtArgs};
 use crate::vault_config::{self, AiConfig, DepthMode};
 use crate::vault_context_search::{self, SearchWorkspaceContextArgs, SearchWorkspaceLimits};
@@ -353,7 +352,7 @@ fn filter_response(
 
     if reasoning_questions.is_empty() {
         // 模型输出若全被红线过滤，给一条中性提问，避免空白浮层（语言随界面）
-        let q = if challenge_review::ui_locale_is_zh(prep.ui_locale.as_deref()) {
+        let q = if crate::challenge_prompts::ui_locale_is_zh(prep.ui_locale.as_deref()) {
             FALLBACK_REASONING_QUESTION_ZH
         } else {
             FALLBACK_REASONING_QUESTION_EN

@@ -107,6 +107,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
           relPath: currentItem.relPath,
           depthMode,
           uiLocale: getAppLocale(),
+          ...(!isCandidate && currentItem.thoughtId ? { thoughtId: currentItem.thoughtId } : {}),
           ...(isCandidate && currentItem.markingReason ? { markingReason: currentItem.markingReason } : {}),
           ...(isCandidate && currentItem.pairedExcerpt ? { pairedExcerpt: currentItem.pairedExcerpt } : {}),
         },

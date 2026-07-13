@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ThoughtMgmtAiConversationPanel } from "./ThoughtMgmtAiConversationPanel";
 import { ThoughtMgmtAiConversationToolbar } from "./ThoughtMgmtAiConversationToolbar";
+import { ThoughtGrowthStoryCard } from "./ThoughtGrowthStoryCard";
 import type { ThoughtFocusContext } from "../types/aiConversation";
 import type { ThoughtDetail, VaultThoughtListPage, VaultThoughtListRow } from "../types/cognitiveTypes";
 import "./ThoughtManagementPanel.css";
@@ -193,6 +194,7 @@ export function ThoughtManagementPanel({
   const [showNew, setShowNew] = useState(false);
   const [newBody, setNewBody] = useState("");
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const [growthStoryOpen, setGrowthStoryOpen] = useState(false);
   const filterPopoverRef = useRef<HTMLDivElement>(null);
   const [listPage, setListPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
@@ -731,6 +733,16 @@ export function ThoughtManagementPanel({
                     <span>
                       {detail.temporary ? t("thoughtPanel.temporary") : t("thoughtManagement.flagNormal")}
                     </span>
+                    <span className="thought-mgmt__detail-meta-sep" aria-hidden={true}>
+                      ·
+                    </span>
+                    <button
+                      className="thought-mgmt__detail-growth-story-btn"
+                      onClick={() => setGrowthStoryOpen(true)}
+                      title={t("growthStory.viewGrowthStory", "查看成长故事")}
+                    >
+                      {t("growthStory.viewGrowthStory", "成长故事")}
+                    </button>
                   </div>
                   <div className="thought-mgmt__detail-meta-row thought-mgmt__detail-meta-row--sub">
                     <span title={detail.createdAt}>
@@ -780,6 +792,13 @@ export function ThoughtManagementPanel({
           </div>
         </aside>
       </div>
+      {detail && (
+        <ThoughtGrowthStoryCard
+          thoughtId={detail.thoughtId}
+          open={growthStoryOpen}
+          onClose={() => setGrowthStoryOpen(false)}
+        />
+      )}
     </div>
   );
 }

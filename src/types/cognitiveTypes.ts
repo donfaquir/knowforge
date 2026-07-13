@@ -60,6 +60,12 @@ export type CognitiveConfigForUi = {
   writingCoachBubbleSeconds: number;
   /** 忽略气泡后的冷却分钟数（默认 15） */
   writingCoachCooldownMinutes: number;
+  /** 认知回顾推送总开关（默认关） */
+  cognitivePushEnabled: boolean;
+  /** 推送频率："weekly" | "monthly" | "both"（默认 both） */
+  cognitivePushFrequency: string;
+  /** 上次推送时间（ISO 8601） */
+  cognitivePushLastSent?: string;
 };
 
 // --- 认知配置保存载荷（对齐 CognitiveConfigPatch） ---
@@ -88,6 +94,9 @@ export type CognitiveConfigSavePatch = {
   writingCoachTermMinChars?: number;
   writingCoachBubbleSeconds?: number;
   writingCoachCooldownMinutes?: number;
+  cognitivePushEnabled?: boolean;
+  cognitivePushFrequency?: string;
+  cognitivePushLastSent?: string | null;
 };
 
 // --- 理解区块（解析结果） ---
@@ -235,6 +244,7 @@ export type GenerateChallengeQuestionArgs = {
   uiLocale?: "en" | "zh";
   markingReason?: string;
   pairedExcerpt?: string;
+  thoughtId?: string;
 };
 
 /** `evaluate_challenge_answer` 请求 */
@@ -315,4 +325,25 @@ export type ListReviewQueueResponse = {
   totalThoughts: number;
   totalDue: number;
   meta: SearchThoughtMetaForUi;
+};
+
+// --- 成长故事导出 ---
+
+export type JourneyMilestone = {
+  date: string;
+  eventType: string;
+  description: string;
+};
+
+export type GrowthStory = {
+  thoughtId: string;
+  thoughtTitle: string;
+  contentPreview: string;
+  sourceFile: string;
+  createdAt: string;
+  currentMaturity: string;
+  journey: JourneyMilestone[];
+  totalChallenges: number;
+  totalDays: number;
+  passRate: number;
 };

@@ -569,6 +569,13 @@
     "challengeReviewDailyCapIndependent": "Independent review daily cap (successful completions)",
     "challengeReviewDailyCapInline": "Inline review daily cap (AI tab)",
     "challengeReviewDailyCapHint": "Each channel allows 1–20; the workspace clamps values on save.",
+    "cognitivePushSection": "Cognitive Review Notifications",
+    "cognitivePushEnable": "Enable desktop notification push",
+    "cognitivePushFrequency": "Push frequency",
+    "cognitivePushWeekly": "Weekly",
+    "cognitivePushMonthly": "Monthly",
+    "cognitivePushBoth": "Weekly + Monthly",
+    "cognitivePushHint": "Automatically check and push cognitive review notifications while the app is running. No weekly push when there's no review activity.",
     "errChallengeReviewCaps": "Review daily caps must be integers from 1 to 20.",
     "saving": "Saving…",
     "save": "Save",
@@ -837,5 +844,14 @@
     "descConversation": "Configure an AI model to chat, analyze notes, and get deep insights",
     "descChallengeReview": "Configure an AI model to automatically generate challenge questions from your notes",
     "descSkill": "Configure an AI model to use and manage Skill extensions"
+  },
+  "growthStory": {
+    "title": "Growth Story",
+    "loading": "Loading…",
+    "viewGrowthStory": "Growth Story",
+    "exportMarkdown": "Export Markdown",
+    "exportImage": "Export Image",
+    "days": " days",
+    "challenges": " challenges"
   }
 }

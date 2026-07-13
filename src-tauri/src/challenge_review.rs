@@ -82,27 +82,13 @@ pub fn apply_challenge_pass_blocking(
     Ok(outcome.maturity_change)
 }
 
+use crate::challenge_prompts::{
+    self, candidate_degraded_question, depth_tone_line, generate_ui_locale_paragraph,
+    normalize_template_kind, ui_locale_is_en, ui_locale_is_zh, FALLBACK_CHALLENGE_QUESTION_EN,
+    FALLBACK_CHALLENGE_QUESTION_ZH,
+};
+
 // --- LLM：生成挑战问句 ---
-
-/// 与主流式隔离的 system 提示（英文），输出 JSON。
-const SYSTEM_CHALLENGE_GENERATE: &str = r#"You design ONE short challenge question to help the user revisit a saved thought from their notes.
-
-Pick the best template kind:
-- "compare": contrast two ideas or test whether a distinction still holds in a scenario.
-- "apply": ask them to apply the thought to a new concrete situation.
-- "critique": challenge an implicit assumption politely.
-- "transfer": ask whether an idea from domain A could inform domain B.
-
-Rules:
-- The question must be answerable in a few sentences; no multi-part essays.
-- If the user message includes a "UI locale" line, write the `question` in that language (English vs Chinese) regardless of excerpt language.
-- Otherwise match the thought excerpt language (Chinese excerpt → Chinese question; English → English).
-- Respond with ONE JSON object only (no markdown fences, no prose). Keys (camelCase):
-  - "question": string (non-empty unless skipped)
-  - "templateKind": one of compare | apply | critique | transfer
-  - "skipped": boolean — true if the excerpt is too thin or unsafe to challenge; then set question to "".
-
-Example: {"question":"...","templateKind":"apply","skipped":false}"#;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,6 +117,8 @@ pub struct GenerateChallengeQuestionArgs {
     pub marking_reason: Option<String>,
     #[serde(default)]
     pub paired_excerpt: Option<String>,
+    #[serde(default)]
+    pub thought_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -196,36 +184,6 @@ pub struct EvaluateChallengeAnswerResponse {
     pub template_kind: Option<String>,
 }
 
-/// 通道一/二共用的降级问句（中文，与产品文档一致）
-pub const FALLBACK_CHALLENGE_QUESTION_ZH: &str = "你之前写过这个想法，现在还同意这个观点吗？";
-
-pub const FALLBACK_CHALLENGE_QUESTION_EN: &str =
-    "You wrote this idea before — do you still agree with it?";
-
-pub(crate) fn ui_locale_is_zh(ui_locale: Option<&str>) -> bool {
-    matches!(
-        ui_locale.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
-        Some("zh" | "zh-cn" | "zh-hans" | "zh-hant" | "zh-tw")
-    )
-}
-
-fn ui_locale_is_en(ui_locale: Option<&str>) -> bool {
-    matches!(
-        ui_locale.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
-        Some("en") | Some("en-us") | Some("en-gb")
-    )
-}
-
-/// 注入用户消息块，约束问句自然语言与 Knowforge 界面一致。
-fn generate_ui_locale_paragraph(ui_locale: Option<&str>) -> &'static str {
-    if ui_locale_is_zh(ui_locale) {
-        "UI locale: Chinese (Simplified). Write the JSON `question` field in natural Chinese (简体中文), even if the excerpt is in another language."
-    } else if ui_locale_is_en(ui_locale) {
-        "UI locale: English. Write the JSON `question` field in English, even if the excerpt is in another language."
-    } else {
-        "Language: If no UI locale was specified, match the thought excerpt language for the question."
-    }
-}
 
 fn evaluate_ui_locale_paragraph(ui_locale: Option<&str>) -> &'static str {
     if ui_locale_is_zh(ui_locale) {
@@ -269,69 +227,6 @@ fn resolve_depth_for_challenge(depth: Option<DepthMode>, query_opt: Option<&str>
     }
 }
 
-fn depth_tone_line(d: DepthMode) -> &'static str {
-    match d {
-        DepthMode::Shallow => "Keep the challenge question very short (one sentence).",
-        DepthMode::Medium => "Keep the challenge question concise (1-2 sentences).",
-        DepthMode::Deep => "You may use a slightly richer challenge question (still under 3 sentences).",
-        DepthMode::Auto => "Keep the challenge question concise (1-2 sentences).",
-    }
-}
-
-fn candidate_degraded_question(
-    reason: &str,
-    _excerpt: &str,
-    paired: Option<&str>,
-    locale: Option<&str>,
-) -> String {
-    let is_en = ui_locale_is_en(locale);
-    match reason {
-        "high_similarity" => {
-            if let Some(p) = paired {
-                if is_en {
-                    format!("Your notes contain similar content in another file ({p}). What's the unique perspective in this paragraph?")
-                } else {
-                    format!("你的笔记在另一个文件（{p}）中有类似内容。这段话的独特之处是什么？")
-                }
-            } else if is_en {
-                "Your notes contain similar paragraphs. What's the key difference between them?".to_string()
-            } else {
-                "你的笔记中有多段相似内容，它们的核心区别是什么？".to_string()
-            }
-        }
-        "semantic_isolated" => {
-            if is_en {
-                "This idea seems isolated from your other notes. What connections can you draw to other topics you've written about?".to_string()
-            } else {
-                "这个想法和你的其他笔记似乎没有关联。你能找到它与其他主题之间的联系吗？".to_string()
-            }
-        }
-        "cross_doc_recurrence" => {
-            if is_en {
-                "A similar concept appears across several of your notes. Has your understanding of it evolved over time?".to_string()
-            } else {
-                "你在多篇笔记中提到了类似的概念，你对它的理解有变化吗？".to_string()
-            }
-        }
-        _ => {
-            if is_en {
-                "What's the core insight in this paragraph, and do you still agree with it?".to_string()
-            } else {
-                "这段话的核心观点是什么？你现在还同意吗？".to_string()
-            }
-        }
-    }
-}
-
-fn normalize_template_kind(raw: Option<&str>) -> String {
-    let s = raw.unwrap_or("apply").trim().to_ascii_lowercase();
-    match s.as_str() {
-        "compare" | "comparison" => "compare".to_string(),
-        "critique" | "critical" => "critique".to_string(),
-        "transfer" | "migration" => "transfer".to_string(),
-        "apply" | "application" | _ => "apply".to_string(),
-    }
-}
 
 /// 生成挑战问句（失败时 `should_skip=true` 供通道二静默）
 #[tauri::command]
@@ -341,12 +236,32 @@ pub async fn generate_challenge_question(
     args: GenerateChallengeQuestionArgs,
 ) -> Result<GenerateChallengeQuestionResponse, String> {
     let root = crate::lock_workspace_root(&workspace)?;
+    let root_for_stats = root.clone();
+    let thought_id_for_dedup = args.thought_id.clone();
     let ai = tauri::async_runtime::spawn_blocking(move || {
         let ai = vault_config::load_ai_config_internal(&root)?;
         Ok::<_, String>(ai)
     })
     .await
     .map_err(|e| e.to_string())??;
+
+    let (recent_qs, feedback_stats) = tauri::async_runtime::spawn_blocking(move || {
+        let conn = match crate::vault_thoughts_db::open_thoughts_db(&root_for_stats) {
+            Ok(c) => c,
+            Err(_) => return (Vec::new(), None),
+        };
+        let qs = match &thought_id_for_dedup {
+            Some(tid) if !tid.is_empty() => {
+                crate::challenge_feedback::query_recent_questions(&conn, tid, 5)
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        let stats = crate::challenge_feedback::query_feedback_stats(&conn).ok();
+        (qs, stats)
+    })
+    .await
+    .unwrap_or((Vec::new(), None));
 
     let provider = match create_provider(&ai, None, http_client.inner()) {
         Ok(p) => p,
@@ -426,10 +341,17 @@ pub async fn generate_challenge_question(
         generate_ui_locale_paragraph(args.ui_locale.as_deref())
     ));
 
+    if !recent_qs.is_empty() {
+        user_block.push_str("\n\nPrevious questions asked about this content (DO NOT repeat these):");
+        for (i, q) in recent_qs.iter().enumerate() {
+            user_block.push_str(&format!("\n{}. \"{}\"", i + 1, q));
+        }
+    }
+
     let msgs = vec![
         LlmChatMessage {
             role: "system".into(),
-            content: SYSTEM_CHALLENGE_GENERATE.to_string(),
+            content: challenge_prompts::build_system_prompt(feedback_stats.as_ref()),
             ..Default::default()
         },
         LlmChatMessage {

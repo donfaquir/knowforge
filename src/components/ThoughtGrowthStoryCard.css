@@ -1,0 +1,136 @@
+.growth-story-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.growth-story-card {
+  background: var(--panel-bg, #fff);
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 10px;
+  width: 420px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+}
+
+.growth-story-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color, #eee);
+}
+
+.growth-story-card__title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.growth-story-card__close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  color: var(--text-secondary, #888);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.growth-story-card__close:hover {
+  background: var(--hover-bg, #f0f0f0);
+}
+
+.growth-story-card__loading,
+.growth-story-card__error {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary, #888);
+  font-size: 13px;
+}
+
+.growth-story-card__error {
+  color: var(--danger-color, #d32f2f);
+}
+
+.growth-story-card__body {
+  padding: 16px 18px;
+  overflow-y: auto;
+}
+
+.growth-story-card__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.growth-story-card__maturity {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.growth-story-card__stats {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+}
+
+.growth-story__timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.growth-story__timeline-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.growth-story__timeline-icon {
+  font-size: 14px;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.growth-story__timeline-date {
+  color: var(--text-secondary, #888);
+  font-size: 12px;
+  width: 40px;
+  flex-shrink: 0;
+}
+
+.growth-story__timeline-desc {
+  flex: 1;
+}
+
+.growth-story-card__footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.growth-story-card__btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  border: 1px solid var(--border-color, #ccc);
+  background: var(--btn-bg, #f5f5f5);
+  cursor: pointer;
+}
+
+.growth-story-card__btn:hover {
+  background: var(--hover-bg, #eaeaea);
+}
+
+.growth-story-card__btn--secondary {
+  background: transparent;
+}

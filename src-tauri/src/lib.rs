@@ -14,9 +14,12 @@ use tauri::{AppHandle, Emitter};
 
 mod ai_conversations;
 mod challenge_feedback;
+mod challenge_prompts;
 mod challenge_review;
 mod depth_decisions;
 mod cognitive_report;
+mod cognitive_push;
+mod growth_story;
 mod knowforge_analytics;
 mod llm;
 mod note_privacy;
@@ -271,6 +274,42 @@ async fn cleanup_expired_tool_results(workspace_root: &Path) {
     }
 }
 
+/// 检查并发送认知回顾推送通知
+async fn check_and_send_cognitive_push(root: &Path, app_handle: &tauri::AppHandle) {
+    let config = match vault_config::load_cognitive_merged(root) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let notifications = cognitive_push::check_and_build_notifications(root, &config);
+
+    if notifications.is_empty() {
+        return;
+    }
+
+    use tauri_plugin_notification::NotificationExt;
+    for n in &notifications {
+        let _ = app_handle
+            .notification()
+            .builder()
+            .title(&n.title)
+            .body(&n.body)
+            .show();
+    }
+
+    // 更新 last_sent 时间戳
+    let now_str = chrono::Local::now().to_rfc3339();
+    let patch = vault_config::VaultConfigPatch {
+        cognitive: Some(vault_config::CognitiveConfigPatch {
+            cognitive_push_last_sent: Some(Some(now_str)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    if let Err(e) = vault_config::save_patch(root, patch) {
+        eprintln!("[cognitive_push] failed to update last_sent: {e}");
+    }
+}
+
 #[tauri::command]
 async fn open_workspace(
     root: String,
@@ -376,6 +415,21 @@ async fn open_workspace(
     tokio::spawn(async move {
         cleanup_expired_tool_results(&cleanup_root).await;
     });
+
+    // 认知回顾推送：启动时检查一次，之后每 30 分钟定期检查
+    {
+        let push_root = canonical_root.clone();
+        let push_app = app_handle.clone();
+        tokio::spawn(async move {
+            check_and_send_cognitive_push(&push_root, &push_app).await;
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(30 * 60));
+            loop {
+                interval.tick().await;
+                check_and_send_cognitive_push(&push_root, &push_app).await;
+            }
+        });
+    }
 
     Ok(nodes)
 }
@@ -1533,6 +1587,21 @@ async fn search_thought_for_invite(
 }
 
 #[tauri::command]
+async fn get_thought_growth_story(
+    thought_id: String,
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<growth_story::GrowthStory, String> {
+    let root = lock_workspace_root(&state)?;
+    let tid = thought_id.trim().to_string();
+    if tid.is_empty() {
+        return Err("thought_id is empty".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || growth_story::build_growth_story(&root, &tid))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn search_workspace_text(
     args: workspace_text_search::SearchWorkspaceTextArgs,
     state: tauri::State<'_, WorkspaceState>,
@@ -1766,6 +1835,44 @@ async fn dismiss_latent_candidate(
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+async fn check_cognitive_push_now(
+    state: tauri::State<'_, WorkspaceState>,
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<cognitive_push::PushSummary>, String> {
+    let root = lock_workspace_root(&state)?;
+    let config = vault_config::load_cognitive_merged(&root)
+        .map_err(|e| format!("failed to load config: {e}"))?;
+    let notifications = cognitive_push::check_and_build_notifications(&root, &config);
+
+    use tauri_plugin_notification::NotificationExt;
+    for n in &notifications {
+        let _ = app_handle
+            .notification()
+            .builder()
+            .title(&n.title)
+            .body(&n.body)
+            .show();
+    }
+
+    // 更新 last_sent
+    if !notifications.is_empty() {
+        let now_str = chrono::Local::now().to_rfc3339();
+        let patch = vault_config::VaultConfigPatch {
+            cognitive: Some(vault_config::CognitiveConfigPatch {
+                cognitive_push_last_sent: Some(Some(now_str)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        if let Err(e) = vault_config::save_patch(&root, patch) {
+            eprintln!("[cognitive_push] failed to update last_sent: {e}");
+        }
+    }
+
+    Ok(notifications)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(WorkspaceState::default())
@@ -1786,6 +1893,7 @@ pub fn run() {
             Arc::new(tools::ToolContextFactory::new(audit_sink, privacy_filter))
         })
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             open_workspace,
             refresh_md_tree,
@@ -1833,6 +1941,8 @@ pub fn run() {
             apply_challenge_pass_to_thought,
             append_ai_thought_reference,
             cognitive_report::generate_cognitive_report,
+            check_cognitive_push_now,
+            get_thought_growth_story,
             understanding_graph::scan_understanding_graph,
             challenge_review::generate_challenge_question,
             challenge_review::evaluate_challenge_answer,

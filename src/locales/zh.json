@@ -569,6 +569,13 @@
     "challengeReviewDailyCapIndependent": "独立回顾每日上限（成功计次）",
     "challengeReviewDailyCapInline": "对话内联回顾每日上限",
     "challengeReviewDailyCapHint": "每条通道允许 1–20；保存时由工作区配置自动钳制。",
+    "cognitivePushSection": "认知回顾推送",
+    "cognitivePushEnable": "启用桌面通知推送",
+    "cognitivePushFrequency": "推送频率",
+    "cognitivePushWeekly": "每周",
+    "cognitivePushMonthly": "每月",
+    "cognitivePushBoth": "每周 + 每月",
+    "cognitivePushHint": "应用运行时自动检查并推送认知回顾通知。无复习活动时不推送周报。",
     "errChallengeReviewCaps": "回顾每日上限必须为 1–20 的整数。",
     "saving": "正在保存…",
     "save": "保存",
@@ -837,5 +844,14 @@
     "descConversation": "配置 AI 模型后，可与 AI 对话、分析笔记、获取深度洞见",
     "descChallengeReview": "配置 AI 模型后，系统将根据你的笔记自动生成挑战问题",
     "descSkill": "配置 AI 模型后，可使用和管理 Skill 扩展能力"
+  },
+  "growthStory": {
+    "title": "成长故事",
+    "loading": "加载中…",
+    "viewGrowthStory": "成长故事",
+    "exportMarkdown": "导出 Markdown",
+    "exportImage": "导出图片",
+    "days": " 天",
+    "challenges": " 次挑战"
   }
 }
