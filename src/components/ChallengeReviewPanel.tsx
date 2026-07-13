@@ -29,6 +29,12 @@ type Props = {
   depthMode: DepthMode;
 };
 
+/** Strip .md extension and extract display name from rel path */
+function displayName(relPath: string): string {
+  const name = relPath.split("/").pop() ?? relPath;
+  return name.replace(/\.md$/i, "");
+}
+
 export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
   const { t, i18n } = useTranslation();
   const { openMarkdownTab } = useAiNoteContext();
@@ -344,7 +350,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
         <div className="challenge-review-panel__queue-title">{t("challengeReview.panelBatchListTitle", { count: items.length })}</div>
         <ul className="challenge-review-panel__queue-list" role="list">
           {items.map((it, i) => (
-            <li key={it.thoughtId} className="challenge-review-panel__queue-li">
+            <li key={it.candidateId || it.thoughtId || `item-${i}`} className="challenge-review-panel__queue-li">
               <button
                 type="button"
                 className={`challenge-review-panel__queue-row${i === cursor ? " is-active" : ""}`}
@@ -359,7 +365,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
                   <span className="challenge-review-panel__queue-idx">{i + 1}</span>
                   {it.sourceType === "candidate" ? (
                     <span className="challenge-review-panel__candidate-tag">
-                      {t("challengeReview.candidateLabel", { file: it.relPath.split("/").pop() ?? it.relPath })}
+                      {t("challengeReview.candidateLabel", { file: displayName(it.relPath) })}
                     </span>
                   ) : (
                     <span className="challenge-review-panel__queue-path" title={it.relPath}>
@@ -393,7 +399,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
         <>
           <div className="challenge-review-panel__meta">
             <span>{currentItem.sourceType === "candidate"
-              ? t("challengeReview.candidateLabel", { file: currentItem.relPath.split("/").pop() ?? currentItem.relPath })
+              ? t("challengeReview.candidateLabel", { file: displayName(currentItem.relPath) })
               : currentItem.relPath}</span>
             {currentItem.sourceType !== "candidate" ? (
               <span className="challenge-review-panel__due">
@@ -404,6 +410,16 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
           {currentItem.sourceType !== "candidate" ? (
             <div className="challenge-review-panel__created">
               {t("challengeReview.createdLabel", { time: createdDisplay(currentItem.created) })}
+            </div>
+          ) : currentItem.markingReason ? (
+            <div className="challenge-review-panel__created">
+              {currentItem.markingReason === "high_similarity"
+                ? t("challengeReview.reasonHighSimilarity")
+                : currentItem.markingReason === "semantic_isolated"
+                ? t("challengeReview.reasonSemanticIsolated")
+                : currentItem.markingReason === "cross_doc_recurrence"
+                ? t("challengeReview.reasonCrossDocRecurrence")
+                : currentItem.markingReason}
             </div>
           ) : null}
           {currentItem.excerpt && !currentItem.privateOmitted ? (
@@ -416,8 +432,41 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
               disabled={busy}
               onClick={() => void startRound()}
             >
-              {t("challengeReview.startRound")}
+              {busy ? t("challengeReview.generating") : t("challengeReview.startRound")}
             </button>
+            {currentItem.sourceType === "candidate" && currentItem.candidateId ? (
+              <button
+                type="button"
+                className="challenge-review-panel__btn"
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true);
+                  invoke("dismiss_latent_candidate", { candidateId: currentItem.candidateId })
+                    .catch(() => {})
+                    .finally(() => {
+                      void reloadQueue().then((q) => {
+                        if (!q || q.items.length === 0) {
+                          setCursor(0);
+                        } else {
+                          setCursor((c) => Math.min(c, q.items.length - 1));
+                        }
+                        setBusy(false);
+                      });
+                    });
+                }}
+              >
+                {t("challengeReview.skipItem")}
+              </button>
+            ) : items.length > 1 ? (
+              <button
+                type="button"
+                className="challenge-review-panel__btn"
+                disabled={busy}
+                onClick={() => setCursor((c) => (c + 1) % items.length)}
+              >
+                {t("challengeReview.skipItem")}
+              </button>
+            ) : null}
             {openMarkdownTab ? (
               <button
                 type="button"

@@ -92,6 +92,15 @@ pub fn should_skip_chunk(text: &str) -> bool {
     if is_quote_block(trimmed) {
         return true;
     }
+    if is_table_heavy(trimmed) {
+        return true;
+    }
+    if is_frontmatter(trimmed) {
+        return true;
+    }
+    if is_heading_only(trimmed) {
+        return true;
+    }
     false
 }
 
@@ -164,6 +173,44 @@ fn is_quote_block(text: &str) -> bool {
         return false;
     }
     lines.iter().all(|line| line.trim_start().starts_with("> "))
+}
+
+/// Markdown table: lines containing `|` pipes or separator rows like `|---|`.
+/// Skip if > 50% of non-empty lines look like table rows.
+fn is_table_heavy(text: &str) -> bool {
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.len() < 2 {
+        return false;
+    }
+    let table_lines = lines
+        .iter()
+        .filter(|l| {
+            let t = l.trim();
+            // Table row: contains at least one `|` that isn't at the very start of a blockquote
+            t.contains('|')
+        })
+        .count();
+    table_lines * 100 / lines.len() > 50
+}
+
+/// YAML frontmatter block: starts with `---` and ends with `---` or `...`
+fn is_frontmatter(text: &str) -> bool {
+    let trimmed = text.trim();
+    if !trimmed.starts_with("---") {
+        return false;
+    }
+    // Check if it ends with a closing fence
+    let rest = trimmed.strip_prefix("---").unwrap_or("").trim();
+    rest.ends_with("---") || rest.ends_with("...")
+}
+
+/// Pure heading lines: every non-empty line starts with `#`
+fn is_heading_only(text: &str) -> bool {
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return false;
+    }
+    lines.iter().all(|line| line.trim_start().starts_with('#'))
 }
 
 // ---------------------------------------------------------------------------
@@ -967,5 +1014,41 @@ mod tests {
             3,
             "all chunks are orthogonal, all should be isolated"
         );
+    }
+
+    #[test]
+    fn test_skip_table_heavy() {
+        let table = "| Name | Age | City |\n|------|-----|------|\n| Alice | 30 | NYC |\n| Bob | 25 | LA |";
+        assert!(should_skip_chunk(table), "pure table should be skipped");
+    }
+
+    #[test]
+    fn test_skip_table_mixed_majority() {
+        let mixed = "Some intro text here.\n| Col A | Col B |\n|-------|-------|\n| val1 | val2 |\n| val3 | val4 |\n| val5 | val6 |";
+        assert!(should_skip_chunk(mixed), "table-heavy content (>50% table lines) should be skipped");
+    }
+
+    #[test]
+    fn test_keep_prose_with_pipe() {
+        let prose = "This is a paragraph about Unix pipes. We use | to chain commands.\nAnother line of normal prose about topics.\nA third line discussing ideas and concepts in detail.";
+        assert!(!should_skip_chunk(prose), "prose mentioning | should not be skipped");
+    }
+
+    #[test]
+    fn test_skip_frontmatter() {
+        let fm = "---\ntitle: My Note\ndate: 2026-01-01\ntags: [rust, learning]\n---";
+        assert!(should_skip_chunk(fm), "YAML frontmatter should be skipped");
+    }
+
+    #[test]
+    fn test_skip_heading_only() {
+        let headings = "# Chapter 1\n## Section A\n### Subsection";
+        assert!(should_skip_chunk(headings), "heading-only content should be skipped");
+    }
+
+    #[test]
+    fn test_keep_heading_with_prose() {
+        let mixed = "# My Thoughts\nThis is a paragraph with actual prose content that contains meaningful ideas worth challenging.";
+        assert!(!should_skip_chunk(mixed), "heading + prose should not be skipped");
     }
 }
