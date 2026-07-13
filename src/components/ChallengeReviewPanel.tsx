@@ -59,7 +59,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
 
   // --- Pre-generation pipeline ---
   const questionCacheRef = useRef<Map<string, GenerateChallengeQuestionResponse>>(new Map());
-  const prefetchingKeyRef = useRef<string | null>(null);
+  const inflightRef = useRef<Map<string, Promise<GenerateChallengeQuestionResponse>>>(new Map());
 
   const todayDayStats = useMemo(() => {
     const k = localTodayKey();
@@ -107,11 +107,12 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
       const item = items[startIdx];
       if (!item) return;
       const key = itemCacheKey(item);
-      if (questionCacheRef.current.has(key) || prefetchingKeyRef.current === key) return;
-      prefetchingKeyRef.current = key;
-      invoke<GenerateChallengeQuestionResponse>("generate_challenge_question", {
+      if (questionCacheRef.current.has(key) || inflightRef.current.has(key)) return;
+      const promise = invoke<GenerateChallengeQuestionResponse>("generate_challenge_question", {
         args: buildQuestionArgs(item),
-      })
+      });
+      inflightRef.current.set(key, promise);
+      promise
         .then((g) => {
           questionCacheRef.current.set(key, g);
           // Chain: prefetch next item (max lookahead = 2)
@@ -123,9 +124,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
           // Ignore — will fall back to on-demand generation
         })
         .finally(() => {
-          if (prefetchingKeyRef.current === key) {
-            prefetchingKeyRef.current = null;
-          }
+          inflightRef.current.delete(key);
         });
     },
     [buildQuestionArgs],
@@ -140,6 +139,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
       setIndependentCapBlocked(!freqCtrl.canStartMoreIndependentReviewsToday());
       // Start pre-generating question for the first item
       questionCacheRef.current.clear();
+      inflightRef.current.clear();
       if (q && q.items.length > 0) {
         prefetchQuestion(q.items, 0);
       }
@@ -178,31 +178,44 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
   /** 仅用于本面板 onClick，不传入 memo 子组件；用 useCallback 也无法在 answer 变化时稳定引用，故保持为普通函数 */
   const startRound = async () => {
     if (!currentItem) return;
+    const key = itemCacheKey(currentItem);
 
     // 1. Try cache — instant response
-    const key = itemCacheKey(currentItem);
     const cached = questionCacheRef.current.get(key);
     if (cached) {
       questionCacheRef.current.delete(key);
       applyQuestion(cached);
-      // Kick off prefetch for upcoming items
-      if (queue?.items) {
-        prefetchQuestion(queue.items, cursor + 1);
+      if (queue?.items) prefetchQuestion(queue.items, cursor + 1);
+      return;
+    }
+
+    // 2. Prefetch in-flight — await the same Promise (no duplicate request)
+    const inflight = inflightRef.current.get(key);
+    if (inflight) {
+      setBusy(true);
+      try {
+        const g = await inflight;
+        applyQuestion(g);
+        if (queue?.items) prefetchQuestion(queue.items, cursor + 1);
+      } catch {
+        setQuestion(t("challengeReview.fallbackQuestion"));
+        setPhase("qa");
+        setAnswer("");
+        setEvalRes(null);
+      } finally {
+        setBusy(false);
       }
       return;
     }
 
-    // 2. Cache miss — generate on demand
+    // 3. No cache, no inflight — generate on demand
     setBusy(true);
     try {
       const g = await invoke<GenerateChallengeQuestionResponse>("generate_challenge_question", {
         args: buildQuestionArgs(currentItem),
       });
       applyQuestion(g);
-      // Prefetch next item while user answers
-      if (queue?.items) {
-        prefetchQuestion(queue.items, cursor + 1);
-      }
+      if (queue?.items) prefetchQuestion(queue.items, cursor + 1);
     } finally {
       setBusy(false);
     }
@@ -531,6 +544,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
                     .catch(() => {})
                     .finally(() => {
                       questionCacheRef.current.clear();
+                      inflightRef.current.clear();
                       void reloadQueue().then((q) => {
                         if (!q || q.items.length === 0) {
                           setCursor(0);
