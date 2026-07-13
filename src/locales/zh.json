@@ -413,6 +413,7 @@
     "startRound": "开始挑战",
     "generating": "正在生成问题…",
     "skipItem": "换一个",
+    "abandon": "放弃本题",
     "submit": "提交回答",
     "continueNext": "继续下一条",
     "dueLabel": "已过期 {{days}} 天",

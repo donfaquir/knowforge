@@ -413,6 +413,7 @@
     "startRound": "Start challenge",
     "generating": "Generating question…",
     "skipItem": "Skip",
+    "abandon": "Give up",
     "submit": "Submit answer",
     "continueNext": "Continue to next",
     "dueLabel": "{{days}}d overdue",

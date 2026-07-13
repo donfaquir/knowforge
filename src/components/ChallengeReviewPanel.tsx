@@ -595,7 +595,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
             disabled={busy}
             placeholder={t("challengeReview.answerPlaceholder")}
           />
-          <div className="challenge-review-panel__actions">
+          <div className="challenge-review-panel__actions challenge-review-panel__actions--spread">
             <button
               type="button"
               className="challenge-review-panel__btn challenge-review-panel__btn--primary"
@@ -603,6 +603,19 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
               onClick={() => void submitAnswer()}
             >
               {t("challengeReview.submit")}
+            </button>
+            <button
+              type="button"
+              className="challenge-review-panel__btn"
+              disabled={busy}
+              onClick={() => {
+                setPhase("pick");
+                setQuestion("");
+                setAnswer("");
+                setEvalRes(null);
+              }}
+            >
+              {t("challengeReview.abandon")}
             </button>
           </div>
         </>
