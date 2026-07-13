@@ -236,6 +236,154 @@ fn compute_total_days(created_at: &str) -> usize {
     }
 }
 
+/// 生成 HTML 卡片格式的成长故事（用于图片导出）
+pub fn to_html_card(story: &GrowthStory) -> String {
+    let maturity_emoji = match story.current_maturity.as_str() {
+        "seedling" => "🌱",
+        "growing" => "🌿",
+        "mature" => "🌳",
+        _ => "🌱",
+    };
+    let maturity_label = match story.current_maturity.as_str() {
+        "seedling" => "萌芽",
+        "growing" => "成长",
+        "mature" => "融会贯通",
+        _ => "萌芽",
+    };
+
+    let journey_html: String = story
+        .journey
+        .iter()
+        .map(|m| {
+            let icon = match m.event_type.as_str() {
+                "created" => "💡",
+                "substantial-change" => "✏️",
+                "challenge-review-pass" => "✅",
+                "challenge-review-attempt" => "🔄",
+                "promoted" => "⬆️",
+                _ => "📌",
+            };
+            format!(
+                r#"<div class="milestone"><span class="milestone-icon">{icon}</span><span class="milestone-date">{date}</span><span class="milestone-desc">{desc}</span></div>"#,
+                icon = icon,
+                date = m.date,
+                desc = m.description
+            )
+        })
+        .collect();
+
+    format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ 
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 40px;
+  }}
+  .card {{
+    background: white;
+    border-radius: 20px;
+    padding: 40px;
+    max-width: 600px;
+    margin: 0 auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  }}
+  .header {{
+    text-align: center;
+    margin-bottom: 30px;
+  }}
+  .maturity {{
+    font-size: 48px;
+    margin-bottom: 10px;
+  }}
+  .title {{
+    font-size: 24px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 5px;
+  }}
+  .label {{
+    font-size: 14px;
+    color: #666;
+  }}
+  .timeline {{
+    margin: 30px 0;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 12px;
+  }}
+  .milestone {{
+    display: flex;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #eee;
+  }}
+  .milestone:last-child {{
+    border-bottom: none;
+  }}
+  .milestone-icon {{
+    font-size: 20px;
+    margin-right: 12px;
+  }}
+  .milestone-date {{
+    font-size: 14px;
+    color: #666;
+    width: 60px;
+    flex-shrink: 0;
+  }}
+  .milestone-desc {{
+    font-size: 14px;
+    color: #333;
+  }}
+  .stats {{
+    text-align: center;
+    font-size: 16px;
+    color: #666;
+    margin: 20px 0;
+  }}
+  .footer {{
+    text-align: center;
+    font-size: 12px;
+    color: #999;
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid #eee;
+  }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div class="maturity">{emoji}</div>
+      <div class="title">{title}</div>
+      <div class="label">{label}</div>
+    </div>
+    <div class="timeline">
+      {journey}
+    </div>
+    <div class="stats">
+      经历 {challenges} 次挑战 · 通过率 {pass_rate:.0}% · 历时 {days} 天
+    </div>
+    <div class="footer">
+      ─── KnowForge · 理解你写下的每个想法 ───
+    </div>
+  </div>
+</body>
+</html>"#,
+        emoji = maturity_emoji,
+        title = story.thought_title,
+        label = maturity_label,
+        journey = journey_html,
+        challenges = story.total_challenges,
+        pass_rate = story.pass_rate * 100.0,
+        days = story.total_days
+    )
+}
+
 /// 生成 Markdown 格式的成长故事
 pub fn to_markdown(story: &GrowthStory) -> String {
     let maturity_emoji = match story.current_maturity.as_str() {

@@ -1348,6 +1348,7 @@ function App() {
                     setLeftPanelView("files");
                     void onOpenCoachMarkdownPath(relPath);
                   }}
+                  isPathKfPrivate={isPathKfPrivate}
                 />
               </ThoughtMgmtAiConversationSessionProvider>
             </main>

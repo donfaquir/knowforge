@@ -1602,6 +1602,124 @@ async fn get_thought_growth_story(
 }
 
 #[tauri::command]
+async fn export_growth_story_as_image(
+    thought_id: String,
+    markdown: String,
+    state: tauri::State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    use tauri::Manager;
+    use tauri::Listener;
+
+    let root = lock_workspace_root(&state)?;
+    let tid = thought_id.trim().to_string();
+    if tid.is_empty() {
+        return Err("thought_id is empty".to_string());
+    }
+
+    let tid_clone = tid.clone();
+    let story = tauri::async_runtime::spawn_blocking(move || growth_story::build_growth_story(&root, &tid_clone))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    let html = growth_story::to_html_card(&story);
+
+    // Create a hidden webview to render the HTML
+    let label = format!("kf-growth-story-{}", uuid::Uuid::new_v4());
+    let event_name = format!("kf-growth-story-result-{}", label);
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+    let tx = std::sync::Mutex::new(Some(tx));
+
+    let listener_id = app.listen(&event_name, move |event: tauri::Event| {
+        if let Some(tx) = tx.lock().unwrap().take() {
+            if let Ok(data) = serde_json::from_str::<Vec<u8>>(event.payload()) {
+                let _ = tx.send(data);
+            }
+        }
+    });
+
+    // Create a data URL from the HTML
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(html.as_bytes());
+    let data_url = format!("data:text/html;base64,{}", encoded);
+
+    let url: url::Url = data_url.parse().map_err(|e| format!("invalid data URL: {e}"))?;
+
+    let extract_event_name = event_name.clone();
+    let webview = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(url))
+        .visible(false)
+        .focused(false)
+        .inner_size(680.0, 800.0)
+        .on_page_load(move |wv, payload| {
+            if let tauri::webview::PageLoadEvent::Finished = payload.event() {
+                let ev = extract_event_name.clone();
+                let wv = wv.clone();
+                tauri::async_runtime::spawn(async move {
+                    // Wait for rendering
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    // Capture the page as PNG
+                    let js = format!(
+                        r#"(async function(){{
+                            try {{
+                                // Use canvas to capture
+                                const canvas = await html2canvas(document.body, {{ scale: 2 }});
+                                const dataUrl = canvas.toDataURL('image/png');
+                                const base64 = dataUrl.split(',')[1];
+                                window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {{
+                                    event: '{ev}',
+                                    payload: JSON.stringify(Array.from(atob(base64), c => c.charCodeAt(0)))
+                                }}).catch(function() {{}});
+                            }} catch(e) {{
+                                // Fallback: send empty array
+                                window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {{
+                                    event: '{ev}',
+                                    payload: JSON.stringify([])
+                                }}).catch(function() {{}});
+                            }}
+                        }})()"#,
+                        ev = ev
+                    );
+                    let _ = wv.eval(&js);
+                });
+            }
+        })
+        .build()
+        .map_err(|e| format!("webview creation failed: {e}"))?;
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), rx).await;
+
+    app.unlisten(listener_id);
+    let _ = webview.destroy();
+
+    match result {
+        Ok(Ok(data)) if !data.is_empty() => {
+            // Show save dialog
+            use tauri_plugin_dialog::DialogExt;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            app.dialog()
+                .file()
+                .set_title("保存成长故事图片")
+                .set_file_name(&format!("growth-story-{}.png", tid))
+                .add_filter("PNG Image", &["png"])
+                .save_file(move |file_path| {
+                    let _ = tx.send(file_path);
+                });
+
+            let file_path = rx.await
+                .map_err(|e| format!("dialog channel error: {e}"))?
+                .ok_or("save dialog cancelled")?;
+
+            let path = file_path.into_path()
+                .map_err(|e| format!("convert file path failed: {e}"))?;
+            std::fs::write(&path, &data).map_err(|e| format!("write file failed: {e}"))?;
+            Ok(path.to_string_lossy().to_string())
+        }
+        _ => Err("capture failed or timed out".to_string()),
+    }
+}
+
+#[tauri::command]
 async fn search_workspace_text(
     args: workspace_text_search::SearchWorkspaceTextArgs,
     state: tauri::State<'_, WorkspaceState>,
@@ -1943,6 +2061,7 @@ pub fn run() {
             cognitive_report::generate_cognitive_report,
             check_cognitive_push_now,
             get_thought_growth_story,
+            export_growth_story_as_image,
             understanding_graph::scan_understanding_graph,
             challenge_review::generate_challenge_question,
             challenge_review::evaluate_challenge_answer,

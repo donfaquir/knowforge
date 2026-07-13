@@ -843,7 +843,9 @@
     "configure": "Configure AI Model",
     "descConversation": "Configure an AI model to chat, analyze notes, and get deep insights",
     "descChallengeReview": "Configure an AI model to automatically generate challenge questions from your notes",
-    "descSkill": "Configure an AI model to use and manage Skill extensions"
+    "descSkill": "Configure an AI model to use and manage Skill extensions",
+    "descWritingCoach": "Configure an AI model to get writing guidance and deep thinking prompts while you write",
+    "descThoughtAi": "Configure an AI model to have in-depth conversations and analysis about your thoughts"
   },
   "growthStory": {
     "title": "Growth Story",
@@ -852,6 +854,8 @@
     "exportMarkdown": "Export Markdown",
     "exportImage": "Export Image",
     "days": " days",
-    "challenges": " challenges"
+    "challenges": " challenges",
+    "confirmExport": "The exported content may include text from your notes. Confirm to share?",
+    "confirmExportTitle": "Confirm Export"
   }
 }

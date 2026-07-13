@@ -1,9 +1,12 @@
 import { useTranslation } from "react-i18next";
 import type { CognitiveReportForUi } from "../../types/motivationFeedback";
 
-type Props = { timelines: CognitiveReportForUi["timelines"] };
+type Props = {
+  timelines: CognitiveReportForUi["timelines"];
+  onExportGrowthStory?: (thoughtId: string) => void;
+};
 
-export function ThoughtTimeline({ timelines }: Props) {
+export function ThoughtTimeline({ timelines, onExportGrowthStory }: Props) {
   const { t } = useTranslation();
 
   if (timelines.length === 0) {
@@ -39,6 +42,15 @@ export function ThoughtTimeline({ timelines }: Props) {
                   </li>
                 ))}
               </ul>
+              {onExportGrowthStory && (
+                <button
+                  className="cr-timeline__export-btn"
+                  onClick={() => onExportGrowthStory(tl.thoughtId)}
+                  title={t("growthStory.viewGrowthStory", "成长故事")}
+                >
+                  {t("growthStory.viewGrowthStory", "成长故事")}
+                </button>
+              )}
             </div>
           </div>
         ))}

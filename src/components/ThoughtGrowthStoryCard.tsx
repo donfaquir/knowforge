@@ -118,8 +118,22 @@ export function ThoughtGrowthStoryCard({ thoughtId, open, onClose }: Props) {
     };
   }, [open, thoughtId]);
 
-  const handleExportMarkdown = useCallback(() => {
+  const confirmExport = useCallback(async (): Promise<boolean> => {
+    const message = t(
+      "growthStory.confirmExport",
+      "导出的内容可能包含你笔记中的部分文字，确认分享？"
+    );
+    if (isTauri()) {
+      const { ask } = await import("@tauri-apps/plugin-dialog");
+      return await ask(message, { title: t("growthStory.confirmExportTitle", "确认导出"), kind: "warning" });
+    }
+    return window.confirm(message);
+  }, [t]);
+
+  const handleExportMarkdown = useCallback(async () => {
     if (!story) return;
+    const confirmed = await confirmExport();
+    if (!confirmed) return;
     const md = generateMarkdown(story);
     const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -128,10 +142,12 @@ export function ThoughtGrowthStoryCard({ thoughtId, open, onClose }: Props) {
     a.download = `growth-story-${story.thoughtId}.md`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [story]);
+  }, [story, confirmExport]);
 
   const handleExportImage = useCallback(async () => {
     if (!story || !isTauri()) return;
+    const confirmed = await confirmExport();
+    if (!confirmed) return;
     try {
       const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
       const md = generateMarkdown(story);
@@ -142,7 +158,7 @@ export function ThoughtGrowthStoryCard({ thoughtId, open, onClose }: Props) {
     } catch (e) {
       console.error("Export image failed:", e);
     }
-  }, [story]);
+  }, [story, confirmExport]);
 
   if (!open) return null;
 

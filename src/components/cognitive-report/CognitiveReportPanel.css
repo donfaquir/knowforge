@@ -291,3 +291,19 @@
 .cr-timeline__diff {
   opacity: 0.7;
 }
+
+.cr-timeline__export-btn {
+  margin-top: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid color-mix(in srgb, var(--kf-border, #444) 50%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.cr-timeline__export-btn:hover {
+  background: color-mix(in srgb, var(--kf-text, #fff) 10%, transparent);
+}

@@ -6,6 +6,7 @@ import { StatsGrid } from "./StatsGrid";
 import { MaturityOverviewCard } from "./MaturityOverviewCard";
 import { MonthlyTrendChart } from "./MonthlyTrendChart";
 import { ThoughtTimeline } from "./ThoughtTimeline";
+import { ThoughtGrowthStoryCard } from "../ThoughtGrowthStoryCard";
 import "./CognitiveReportPanel.css";
 
 const DISABLE_KEY = "knowforge:disableCognitiveReport";
@@ -24,6 +25,7 @@ export function CognitiveReportPanel({ open, onClose }: Props) {
       return false;
     }
   });
+  const [growthStoryThoughtId, setGrowthStoryThoughtId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!isTauri()) {
@@ -66,6 +68,10 @@ export function CognitiveReportPanel({ open, onClose }: Props) {
     } catch { /* ignore */ }
   }, []);
 
+  const handleExportGrowthStory = useCallback((thoughtId: string) => {
+    setGrowthStoryThoughtId(thoughtId);
+  }, []);
+
   if (!open) return null;
 
   return (
@@ -95,7 +101,7 @@ export function CognitiveReportPanel({ open, onClose }: Props) {
               <StatsGrid data={data} />
               <MaturityOverviewCard data={data} />
               <MonthlyTrendChart snapshots={data.monthlySnapshots} />
-              <ThoughtTimeline timelines={data.timelines} />
+              <ThoughtTimeline timelines={data.timelines} onExportGrowthStory={handleExportGrowthStory} />
             </>
           ) : null}
         </div>
@@ -116,6 +122,11 @@ export function CognitiveReportPanel({ open, onClose }: Props) {
           )}
         </footer>
       </div>
+      <ThoughtGrowthStoryCard
+        thoughtId={growthStoryThoughtId ?? ""}
+        open={growthStoryThoughtId !== null}
+        onClose={() => setGrowthStoryThoughtId(null)}
+      />
     </div>
   );
 }

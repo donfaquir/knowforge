@@ -157,6 +157,8 @@ type Props = {
   onOpenNote: (relPath: string) => void;
   /** 正文相对已加载详情是否未保存，供顶栏退出等全局逻辑使用 */
   onThoughtDetailDirtyChange?: (dirty: boolean) => void;
+  /** 判断给定路径是否为 kf-private */
+  isPathKfPrivate?: (relPath: string) => boolean;
 };
 
 type DeleteThoughtResponse = {
@@ -179,6 +181,7 @@ export function ThoughtManagementPanel({
   tauriRuntime,
   onOpenNote,
   onThoughtDetailDirtyChange,
+  isPathKfPrivate,
 }: Props) {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
@@ -736,13 +739,23 @@ export function ThoughtManagementPanel({
                     <span className="thought-mgmt__detail-meta-sep" aria-hidden={true}>
                       ·
                     </span>
-                    <button
-                      className="thought-mgmt__detail-growth-story-btn"
-                      onClick={() => setGrowthStoryOpen(true)}
-                      title={t("growthStory.viewGrowthStory", "查看成长故事")}
-                    >
-                      {t("growthStory.viewGrowthStory", "成长故事")}
-                    </button>
+                    {(() => {
+                      // Check if thought is private
+                      const isPrivate = isPathKfPrivate
+                        && !detail.standalone
+                        && detail.noteRelPath
+                        && isPathKfPrivate(detail.noteRelPath);
+                      if (isPrivate) return null;
+                      return (
+                        <button
+                          className="thought-mgmt__detail-growth-story-btn"
+                          onClick={() => setGrowthStoryOpen(true)}
+                          title={t("growthStory.viewGrowthStory", "查看成长故事")}
+                        >
+                          {t("growthStory.viewGrowthStory", "成长故事")}
+                        </button>
+                      );
+                    })()}
                   </div>
                   <div className="thought-mgmt__detail-meta-row thought-mgmt__detail-meta-row--sub">
                     <span title={detail.createdAt}>

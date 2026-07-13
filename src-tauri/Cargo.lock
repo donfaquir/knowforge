@@ -2871,6 +2871,7 @@ version = "0.7.5"
 dependencies = [
  "aho-corasick",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "candle-core",
  "candle-nn",

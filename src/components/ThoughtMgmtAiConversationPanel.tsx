@@ -17,6 +17,8 @@ import { AiAssistantMarkdown } from "./AiAssistantMarkdown";
 import { AiReplyContextSources } from "./AiReplyContextSources";
 import { StreamingTimer } from "./StreamingTimer";
 import { ThoughtSavePopover } from "./ThoughtSavePopover";
+import { useAiConfigStatus } from "../hooks/useAiConfigStatus";
+import AiNotConfiguredGuide from "./AiNotConfiguredGuide";
 import type { ThoughtMgmtChatMessage } from "../hooks/useThoughtMgmtAiConversations";
 import "./AiConversationPanel.css";
 
@@ -169,6 +171,8 @@ export function ThoughtMgmtAiConversationPanel({
     setIsVaultSearching,
     setThoughtFocusContext,
   } = useThoughtMgmtAiConversationSession();
+
+  const { isConfigured: aiConfigured } = useAiConfigStatus(workspaceReady);
 
   useEffect(() => {
     setThoughtFocusContext(thoughtFocusFromDetail);
@@ -564,6 +568,20 @@ export function ThoughtMgmtAiConversationPanel({
     input.trim().length > 0 &&
     !isStreaming &&
     !isVaultSearching;
+
+  if (!aiConfigured && messages.length === 0) {
+    return (
+      <section
+        className="ai-chat thought-mgmt-ai-chat"
+        aria-label={t("thoughtManagement.thoughtAiSectionAria")}
+      >
+        <AiNotConfiguredGuide
+          featureName={t("thoughtManagement.thoughtAiSectionAria")}
+          featureDescription={t("aiGuide.descThoughtAi")}
+        />
+      </section>
+    );
+  }
 
   return (
     <section
