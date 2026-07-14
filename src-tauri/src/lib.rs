@@ -1996,6 +1996,34 @@ async fn dismiss_latent_candidate(
 }
 
 #[tauri::command]
+async fn list_discovery_candidates(
+    state: tauri::State<'_, WorkspaceState>,
+    filter: latent_paragraphs::DiscoveryFilter,
+) -> Result<latent_paragraphs::DiscoveryListResponse, String> {
+    let root = lock_workspace_root(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = semantic_index::open_embedding_db(&root)?;
+        latent_paragraphs::list_candidates_filtered(&conn, &filter, &root)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn batch_dismiss_candidates(
+    state: tauri::State<'_, WorkspaceState>,
+    candidate_ids: Vec<String>,
+) -> Result<usize, String> {
+    let root = lock_workspace_root(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = semantic_index::open_embedding_db(&root)?;
+        latent_paragraphs::batch_dismiss(&conn, &candidate_ids)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn check_cognitive_push_now(
     state: tauri::State<'_, WorkspaceState>,
     app_handle: tauri::AppHandle,
@@ -2137,6 +2165,8 @@ pub fn run() {
             skills::commands::list_available_tools,
             onboarding::seed_onboarding_content,
             list_latent_candidates,
+            list_discovery_candidates,
+            batch_dismiss_candidates,
             trigger_latent_scan,
             promote_candidate_to_thought,
             dismiss_latent_candidate
