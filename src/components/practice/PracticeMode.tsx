@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ReviewQueueItem } from "../../types/cognitiveTypes";
 import { PracticeReviewPane } from "./PracticeReviewPane";
+import { PracticeSourcePreview } from "./PracticeSourcePreview";
 import "./PracticeMode.css";
 
 export type PracticeSubTab = "review" | "discovery";
@@ -16,7 +17,7 @@ export function PracticeMode({ workspaceReady, tauriRuntime }: PracticeModeProps
   const { t } = useTranslation();
   const [subTab, setSubTab] = useState<PracticeSubTab>("review");
   const [reviewCompleted, setReviewCompleted] = useState(false);
-  const [_focusedThought, setFocusedThought] = useState<ReviewQueueItem | null>(null);
+  const [focusedThought, setFocusedThought] = useState<ReviewQueueItem | null>(null);
 
   const handleReviewCompleted = useCallback(() => {
     setReviewCompleted(true);
@@ -48,31 +49,39 @@ export function PracticeMode({ workspaceReady, tauriRuntime }: PracticeModeProps
       </header>
 
       <div className="practice-mode__body">
-        {subTab === "review" && !reviewCompleted && (
-          <PracticeReviewPane
-            workspaceReady={workspaceReady}
-            tauriRuntime={tauriRuntime}
-            onReviewCompleted={handleReviewCompleted}
-            onFocusThought={setFocusedThought}
+        <div className="practice-mode__left">
+          {subTab === "review" && !reviewCompleted && (
+            <PracticeReviewPane
+              workspaceReady={workspaceReady}
+              tauriRuntime={tauriRuntime}
+              onReviewCompleted={handleReviewCompleted}
+              onFocusThought={setFocusedThought}
+            />
+          )}
+          {subTab === "review" && reviewCompleted && (
+            <div className="practice-mode__placeholder">
+              <p>{t("practice.reviewCompleted", "Today's review completed!")}</p>
+              <button
+                type="button"
+                className="practice-mode__tab"
+                onClick={() => setSubTab("discovery")}
+              >
+                {t("practice.goToDiscovery", "Explore discoveries")}
+              </button>
+            </div>
+          )}
+          {subTab === "discovery" && (
+            <div className="practice-mode__placeholder">
+              <p>{t("practice.discoveryPlaceholder", "Discovery pane — coming soon")}</p>
+            </div>
+          )}
+        </div>
+        <div className="practice-mode__right">
+          <PracticeSourcePreview
+            relPath={focusedThought?.relPath ?? null}
+            startLine={focusedThought?.startLine ?? undefined}
           />
-        )}
-        {subTab === "review" && reviewCompleted && (
-          <div className="practice-mode__placeholder">
-            <p>{t("practice.reviewCompleted", "Today's review completed!")}</p>
-            <button
-              type="button"
-              className="practice-mode__tab"
-              onClick={() => setSubTab("discovery")}
-            >
-              {t("practice.goToDiscovery", "Explore discoveries")}
-            </button>
-          </div>
-        )}
-        {subTab === "discovery" && (
-          <div className="practice-mode__placeholder">
-            <p>{t("practice.discoveryPlaceholder", "Discovery pane — coming soon")}</p>
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );

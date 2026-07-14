@@ -43,7 +43,17 @@
 .practice-mode__body {
   flex: 1 1 0;
   min-height: 0;
-  overflow: auto;
+  display: grid;
+  grid-template-columns: minmax(320px, 2fr) minmax(280px, 3fr);
+}
+
+.practice-mode__left {
+  overflow-y: auto;
+  border-right: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.practice-mode__right {
+  overflow-y: auto;
 }
 
 .practice-mode__placeholder {
@@ -56,6 +66,9 @@
 }
 
 @media (prefers-color-scheme: dark) {
+  .practice-mode__left {
+    border-right-color: rgba(255, 255, 255, 0.08);
+  }
   .practice-mode__header {
     border-bottom-color: rgba(255, 255, 255, 0.08);
   }
