@@ -42,6 +42,7 @@ import { ThoughtSavePopover } from "./components/ThoughtSavePopover";
 import { ThoughtVaultHubModal } from "./components/ThoughtVaultHubModal";
 import { WorkspaceSearchModal } from "./components/WorkspaceSearchModal";
 import { EditorFindBar } from "./components/EditorFindBar";
+import { GraphTabShell } from "./components/GraphTabShell";
 import { ActivityBar, type LeftPanelView } from "./components/ActivityBar";
 import { OnboardingOverlay } from "./components/OnboardingOverlay";
 import { KF_PRIVATE_LOCK_ICON_DOC_BAR_PX } from "./constants/kfPrivateUi";
@@ -1332,7 +1333,19 @@ function App() {
       <div
         className={`content-area${showRightColumn && leftPanelView === "files" ? " content-area--with-right-panel" : ""}${!sidebarOpen ? " content-area--sidebar-collapsed" : ""}`}
       >
-        {leftPanelView === "thoughts" ? (
+        {leftPanelView === "graph" ? (
+          <main className="main main--full-view">
+            <GraphTabShell
+              workspaceReady={workspaceReady}
+              workspaceRoot={rootPath}
+              tauriRuntime={tauriRuntime}
+              onOpenNote={(relPath) => {
+                setLeftPanelView("files");
+                void onOpenCoachMarkdownPath(relPath);
+              }}
+            />
+          </main>
+        ) : leftPanelView === "thoughts" ? (
           thoughtManagementSessionActive ? (
             <main className="main main--full-view app-thought-management-route">
               <ThoughtMgmtAiConversationSessionProvider
