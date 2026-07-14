@@ -12,6 +12,7 @@ import type {
 } from "../types/cognitiveTypes";
 import { trackKnowforgeEvent } from "../utils/knowforgeAnalytics";
 import { AiAssistantMarkdown } from "./AiAssistantMarkdown";
+import { ChallengeFeedbackBar } from "./ChallengeFeedbackBar";
 import "./ChallengeReviewInline.css";
 
 type Props = {
@@ -60,14 +61,15 @@ export function ChallengeReviewInline({
         sloppy: ev.sloppy,
         thoughtId: thought.thoughtId,
       });
+      await invoke("apply_challenge_pass_to_thought", {
+        args: {
+          relPath: thought.relPath,
+          thoughtId: thought.thoughtId,
+          passed: ev.passed && !ev.sloppy,
+          sloppy: ev.sloppy,
+        },
+      });
       if (ev.passed && !ev.sloppy) {
-        await invoke("apply_challenge_pass_to_thought", {
-          args: {
-            relPath: thought.relPath,
-            thoughtId: thought.thoughtId,
-            passed: true,
-          },
-        });
         void trackKnowforgeEvent("review.inline_pass_applied", { thoughtId: thought.thoughtId });
       }
     } catch {
@@ -133,6 +135,11 @@ export function ChallengeReviewInline({
           <AiAssistantMarkdown
             className="challenge-review-inline__commentary"
             content={result?.commentaryMd ?? ""}
+          />
+          <ChallengeFeedbackBar
+            thoughtId={thought.thoughtId}
+            questionText={question}
+            questionTemplate={templateKind}
           />
           <button type="button" className="challenge-review-inline__btn challenge-review-inline__btn--ghost" onClick={onDismiss}>
             {t("challengeReview.close")}

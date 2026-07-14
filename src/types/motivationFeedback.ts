@@ -10,6 +10,13 @@ export type ThoughtMaturityChangedPayload = {
   startLine: number;
 };
 
+export type MonthlySnapshot = {
+  yearMonth: string;
+  seedling: number;
+  growing: number;
+  mature: number;
+};
+
 export type CognitiveReportForUi = {
   scannedFiles: number;
   totalThoughts: number;
@@ -32,4 +39,5 @@ export type CognitiveReportForUi = {
     excerpt: string;
     history: KfThoughtHistoryEntry[];
   }>;
+  monthlySnapshots: MonthlySnapshot[];
 };

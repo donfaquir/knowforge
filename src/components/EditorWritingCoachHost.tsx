@@ -10,6 +10,8 @@ import { nearestTextblockText, useWritingCoachTrigger } from "../hooks/useWritin
 import type { CrepeMarkdownEditorApi } from "./CrepeMarkdownEditor";
 import { useTranslation } from "react-i18next";
 import { WritingCoachBubble } from "./WritingCoachBubble";
+import { useAiConfigStatus } from "../hooks/useAiConfigStatus";
+import AiNotConfiguredGuide from "./AiNotConfiguredGuide";
 import { endPerfTrace, startPerfTrace } from "../utils/perfTrace";
 import "./EditorWritingCoachHost.css";
 
@@ -81,6 +83,7 @@ export const EditorWritingCoachHost = forwardRef<EditorWritingCoachHostHandle, P
   onOpenMarkdownPath,
 }, ref) {
   const { t } = useTranslation();
+  const { isConfigured: aiConfigured } = useAiConfigStatus(workspaceReady);
   const hostRef = useRef<HTMLDivElement>(null);
   const [depthMode, setDepthMode] = useState<DepthMode>("auto");
   const [writingCoachEnabled, setWritingCoachEnabled] = useState(true);
@@ -129,6 +132,7 @@ export const EditorWritingCoachHost = forwardRef<EditorWritingCoachHostHandle, P
   const gatesOk =
     workspaceReady &&
     writingCoachEnabled &&
+    aiConfigured &&
     !depthBlocksCoach &&
     !cdActive &&
     !showMarkdownSource &&
@@ -251,6 +255,7 @@ export const EditorWritingCoachHost = forwardRef<EditorWritingCoachHostHandle, P
     setPanelOpen(false);
     setCoachData(null);
     setPanelError(null);
+    setShowAiGuide(false);
     clearBubbleTimers();
   }, [activePath, clearBubbleTimers]);
 
@@ -313,7 +318,13 @@ export const EditorWritingCoachHost = forwardRef<EditorWritingCoachHostHandle, P
     analyzeAndShowPanel(paragraphRef.current);
   }, [analyzeAndShowPanel, clearBubbleTimers]);
 
+  const [showAiGuide, setShowAiGuide] = useState(false);
+
   const handleManualTrigger = useCallback(() => {
+    if (!aiConfigured) {
+      setShowAiGuide(true);
+      return;
+    }
     const view = editorApiRef.current?.getEditorView();
     if (!view || !activePath) return;
     const text = nearestTextblockText(view.state);
@@ -323,7 +334,7 @@ export const EditorWritingCoachHost = forwardRef<EditorWritingCoachHostHandle, P
     setBubbleFading(false);
     triggerLockRef.current = true;
     analyzeAndShowPanel(text);
-  }, [activePath, analyzeAndShowPanel, clearBubbleTimers, editorApiRef]);
+  }, [activePath, aiConfigured, analyzeAndShowPanel, clearBubbleTimers, editorApiRef]);
 
   useImperativeHandle(ref, () => ({
     triggerManually: handleManualTrigger,
@@ -344,10 +355,23 @@ export const EditorWritingCoachHost = forwardRef<EditorWritingCoachHostHandle, P
     return null;
   }
 
-  const showTriggerBtn = !bubbleVisible && !panelOpen && !showMarkdownSource;
+  const showTriggerBtn = !bubbleVisible && !panelOpen && !showMarkdownSource && !showAiGuide;
 
   return (
-    <div ref={hostRef} className="editor-writing-coach-host" aria-hidden={!gatesOk && !panelOpen && !showTriggerBtn}>
+    <div ref={hostRef} className="editor-writing-coach-host" aria-hidden={!gatesOk && !panelOpen && !showTriggerBtn && !showAiGuide}>
+      {showAiGuide ? (
+        <div className="writing-coach-panel" role="dialog" aria-label={t("aiGuide.title", { feature: t("aiGuide.descWritingCoach") })}>
+          <AiNotConfiguredGuide
+            featureName={t("main.writingCoachPanelTitle")}
+            featureDescription={t("aiGuide.descWritingCoach")}
+          />
+          <div className="writing-coach-panel__actions">
+            <button type="button" className="writing-coach-panel__btn" onClick={() => setShowAiGuide(false)}>
+              {t("main.writingCoachCollapse")}
+            </button>
+          </div>
+        </div>
+      ) : null}
       {showTriggerBtn ? (
         <button
           type="button"

@@ -2,7 +2,7 @@
  * 通道一：独立挑战回顾面板（队列 + 单条问答 + 写回）。
  */
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAiNoteContext } from "../contexts/AiNoteContext";
 import { getAppLocale } from "../i18n";
@@ -17,7 +17,11 @@ import type { VaultConfigForUi } from "../types/vaultAiConfig";
 import { localTodayKey, useCognitiveFrequencyControl } from "../hooks/useCognitiveFrequencyControl";
 import { trackKnowforgeEvent } from "../utils/knowforgeAnalytics";
 import { dispatchOpenAiSettings, VAULT_CONFIG_UPDATED_EVENT } from "../utils/vaultConfigBroadcast";
+import { useAiConfigStatus } from "../hooks/useAiConfigStatus";
+import AiNotConfiguredGuide from "./AiNotConfiguredGuide";
 import { AiAssistantMarkdown } from "./AiAssistantMarkdown";
+import { CandidatePromoteCard } from "./CandidatePromoteCard";
+import { ChallengeFeedbackBar } from "./ChallengeFeedbackBar";
 import "./ChallengeReviewPanel.css";
 
 type Props = {
@@ -25,9 +29,21 @@ type Props = {
   depthMode: DepthMode;
 };
 
+/** Strip .md extension and extract display name from rel path */
+function displayName(relPath: string): string {
+  const name = relPath.split("/").pop() ?? relPath;
+  return name.replace(/\.md$/i, "");
+}
+
+/** Stable cache key for a review queue item */
+function itemCacheKey(item: ReviewQueueItem): string {
+  return item.candidateId || item.thoughtId || `${item.relPath}:${item.startLine ?? 0}`;
+}
+
 export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
   const { t, i18n } = useTranslation();
   const { openMarkdownTab } = useAiNoteContext();
+  const { isConfigured: aiConfigured } = useAiConfigStatus(true);
   const freqCtrl = useCognitiveFrequencyControl();
   const [queue, setQueue] = useState<ListReviewQueueResponse | null>(null);
   const [independent, setIndependent] = useState(false);
@@ -37,8 +53,13 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
   const [phase, setPhase] = useState<"pick" | "qa" | "result">("pick");
   const [busy, setBusy] = useState(false);
   const [evalRes, setEvalRes] = useState<EvaluateChallengeAnswerResponse | null>(null);
+  const [templateKind, setTemplateKind] = useState<string | undefined>();
   /** 当日独立回顾成功次数已达 cap */
   const [independentCapBlocked, setIndependentCapBlocked] = useState(false);
+
+  // --- Pre-generation pipeline ---
+  const questionCacheRef = useRef<Map<string, GenerateChallengeQuestionResponse>>(new Map());
+  const inflightRef = useRef<Map<string, Promise<GenerateChallengeQuestionResponse>>>(new Map());
 
   const todayDayStats = useMemo(() => {
     const k = localTodayKey();
@@ -63,17 +84,69 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
     }
   }, []);
 
+  /** Build invoke args for generate_challenge_question */
+  const buildQuestionArgs = useCallback(
+    (item: ReviewQueueItem) => {
+      const isCandidate = item.sourceType === "candidate";
+      return {
+        thoughtExcerpt: item.excerpt || item.created,
+        relPath: item.relPath,
+        depthMode,
+        uiLocale: getAppLocale(),
+        ...(!isCandidate && item.thoughtId ? { thoughtId: item.thoughtId } : {}),
+        ...(isCandidate && item.markingReason ? { markingReason: item.markingReason } : {}),
+        ...(isCandidate && item.pairedExcerpt ? { pairedExcerpt: item.pairedExcerpt } : {}),
+      };
+    },
+    [depthMode],
+  );
+
+  /** Fire-and-forget: prefetch question for an item, then chain to the next */
+  const prefetchQuestion = useCallback(
+    (items: ReviewQueueItem[], startIdx: number) => {
+      const item = items[startIdx];
+      if (!item) return;
+      const key = itemCacheKey(item);
+      if (questionCacheRef.current.has(key) || inflightRef.current.has(key)) return;
+      const promise = invoke<GenerateChallengeQuestionResponse>("generate_challenge_question", {
+        args: buildQuestionArgs(item),
+      });
+      inflightRef.current.set(key, promise);
+      promise
+        .then((g) => {
+          questionCacheRef.current.set(key, g);
+          // Chain: prefetch next item (max lookahead = 2)
+          if (startIdx + 1 < items.length && questionCacheRef.current.size < 3) {
+            prefetchQuestion(items, startIdx + 1);
+          }
+        })
+        .catch(() => {
+          // Ignore — will fall back to on-demand generation
+        })
+        .finally(() => {
+          inflightRef.current.delete(key);
+        });
+    },
+    [buildQuestionArgs],
+  );
+
   const hydrateFromVault = useCallback(async () => {
     try {
       await freqCtrl.reload();
-      await reloadQueue();
+      const q = await reloadQueue();
       const cfg = await invoke<VaultConfigForUi>("get_vault_config_for_ui");
       setIndependent(cfg.cognitive.independentReviewEnabled === true);
       setIndependentCapBlocked(!freqCtrl.canStartMoreIndependentReviewsToday());
+      // Start pre-generating question for the first item
+      questionCacheRef.current.clear();
+      inflightRef.current.clear();
+      if (q && q.items.length > 0) {
+        prefetchQuestion(q.items, 0);
+      }
     } catch {
       setQueue(null);
     }
-  }, [freqCtrl.reload, freqCtrl.canStartMoreIndependentReviewsToday, reloadQueue]);
+  }, [freqCtrl.reload, freqCtrl.canStartMoreIndependentReviewsToday, reloadQueue, prefetchQuestion]);
 
   useEffect(() => {
     void hydrateFromVault();
@@ -89,27 +162,60 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
 
   const currentItem: ReviewQueueItem | undefined = queue?.items[cursor];
 
+  /** Apply a generated question response to UI state */
+  const applyQuestion = (g: GenerateChallengeQuestionResponse) => {
+    setTemplateKind(g.templateKind || undefined);
+    if (g.shouldSkip || !g.question.trim()) {
+      setQuestion(t("challengeReview.fallbackQuestion"));
+    } else {
+      setQuestion(g.question);
+    }
+    setPhase("qa");
+    setAnswer("");
+    setEvalRes(null);
+  };
+
   /** 仅用于本面板 onClick，不传入 memo 子组件；用 useCallback 也无法在 answer 变化时稳定引用，故保持为普通函数 */
   const startRound = async () => {
     if (!currentItem) return;
+    const key = itemCacheKey(currentItem);
+
+    // 1. Try cache — instant response
+    const cached = questionCacheRef.current.get(key);
+    if (cached) {
+      questionCacheRef.current.delete(key);
+      applyQuestion(cached);
+      if (queue?.items) prefetchQuestion(queue.items, cursor + 1);
+      return;
+    }
+
+    // 2. Prefetch in-flight — await the same Promise (no duplicate request)
+    const inflight = inflightRef.current.get(key);
+    if (inflight) {
+      setBusy(true);
+      try {
+        const g = await inflight;
+        applyQuestion(g);
+        if (queue?.items) prefetchQuestion(queue.items, cursor + 1);
+      } catch {
+        setQuestion(t("challengeReview.fallbackQuestion"));
+        setPhase("qa");
+        setAnswer("");
+        setEvalRes(null);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    // 3. No cache, no inflight — generate on demand
     setBusy(true);
     try {
       const g = await invoke<GenerateChallengeQuestionResponse>("generate_challenge_question", {
-        args: {
-          thoughtExcerpt: currentItem.excerpt || currentItem.created,
-          relPath: currentItem.relPath,
-          depthMode,
-          uiLocale: getAppLocale(),
-        },
+        args: buildQuestionArgs(currentItem),
       });
-      if (g.shouldSkip || !g.question.trim()) {
-        setQuestion(t("challengeReview.fallbackQuestion"));
-      } else {
-        setQuestion(g.question);
-      }
-      setPhase("qa");
-      setAnswer("");
-      setEvalRes(null);
+      applyQuestion(g);
+      if (queue?.items) prefetchQuestion(queue.items, cursor + 1);
     } finally {
       setBusy(false);
     }
@@ -130,23 +236,28 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
       });
       setEvalRes(ev);
       setPhase("result");
+      const isCandidate = currentItem.sourceType === "candidate";
       void trackKnowforgeEvent("review.panel_evaluated", {
         thoughtId: currentItem.thoughtId,
         passed: ev.passed,
         sloppy: ev.sloppy,
+        sourceType: currentItem.sourceType,
       });
-      if (ev.passed && !ev.sloppy) {
+      if (!isCandidate) {
         await invoke("apply_challenge_pass_to_thought", {
           args: {
             relPath: currentItem.relPath,
             thoughtId: currentItem.thoughtId,
-            passed: true,
+            passed: ev.passed && !ev.sloppy,
+            sloppy: ev.sloppy,
           },
         });
-        await freqCtrl.recordChallengeIndependentShown(currentItem.thoughtId);
-        await freqCtrl.reload();
-        if (!freqCtrl.canStartMoreIndependentReviewsToday()) {
-          setIndependentCapBlocked(true);
+        if (ev.passed && !ev.sloppy) {
+          await freqCtrl.recordChallengeIndependentShown(currentItem.thoughtId);
+          await freqCtrl.reload();
+          if (!freqCtrl.canStartMoreIndependentReviewsToday()) {
+            setIndependentCapBlocked(true);
+          }
         }
       }
     } catch {
@@ -178,12 +289,10 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
       setCursor(0);
       return;
     }
-    setCursor(() => {
-      if (passedLast) {
-        return 0;
-      }
-      return Math.min(prevCursor + 1, q.items.length - 1);
-    });
+    const nextCursor = passedLast ? 0 : Math.min(prevCursor + 1, q.items.length - 1);
+    setCursor(nextCursor);
+    // Prefetch for the upcoming item (it may already be cached from earlier)
+    prefetchQuestion(q.items, nextCursor);
   };
 
   const createdDisplay = useCallback(
@@ -226,7 +335,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
     </div>
   );
 
-  if (!independent) {
+  if (!independent || !aiConfigured) {
     return (
       <div className="challenge-review-panel">
         <div className="challenge-review-panel__header">
@@ -235,12 +344,11 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
             {t("challengeReview.close")}
           </button>
         </div>
-        <p className="challenge-review-panel__hint">{t("challengeReview.panelNeedsLlm")}</p>
-        <div className="challenge-review-panel__footer-actions">
-          <button type="button" className="challenge-review-panel__linkish" onClick={() => dispatchOpenAiSettings()}>
-            {t("challengeReview.openAiSettings")}
-          </button>
-        </div>
+        <AiNotConfiguredGuide
+          featureName={t("challengeReview.panelTitle")}
+          featureDescription={t("aiGuide.descChallengeReview")}
+          compact
+        />
       </div>
     );
   }
@@ -329,7 +437,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
         <div className="challenge-review-panel__queue-title">{t("challengeReview.panelBatchListTitle", { count: items.length })}</div>
         <ul className="challenge-review-panel__queue-list" role="list">
           {items.map((it, i) => (
-            <li key={it.thoughtId} className="challenge-review-panel__queue-li">
+            <li key={it.candidateId || it.thoughtId || `item-${i}`} className="challenge-review-panel__queue-li">
               <button
                 type="button"
                 className={`challenge-review-panel__queue-row${i === cursor ? " is-active" : ""}`}
@@ -342,12 +450,20 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
               >
                 <div className="challenge-review-panel__queue-row-top">
                   <span className="challenge-review-panel__queue-idx">{i + 1}</span>
-                  <span className="challenge-review-panel__queue-path" title={it.relPath}>
-                    {it.relPath}
-                  </span>
-                  <span className="challenge-review-panel__queue-due">
-                    {t("challengeReview.dueLabel", { days: it.overdueDays })}
-                  </span>
+                  {it.sourceType === "candidate" ? (
+                    <span className="challenge-review-panel__candidate-tag">
+                      {t("challengeReview.candidateLabel", { file: displayName(it.relPath) })}
+                    </span>
+                  ) : (
+                    <span className="challenge-review-panel__queue-path" title={it.relPath}>
+                      {it.relPath}
+                    </span>
+                  )}
+                  {it.sourceType !== "candidate" ? (
+                    <span className="challenge-review-panel__queue-due">
+                      {t("challengeReview.dueLabel", { days: it.overdueDays })}
+                    </span>
+                  ) : null}
                 </div>
                 {it.privateOmitted ? (
                   <div className="challenge-review-panel__queue-excerpt challenge-review-panel__queue-excerpt--muted">
@@ -369,14 +485,42 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
       {phase === "pick" ? (
         <>
           <div className="challenge-review-panel__meta">
-            <span>{currentItem.relPath}</span>
-            <span className="challenge-review-panel__due">
-              {t("challengeReview.dueLabel", { days: currentItem.overdueDays })}
-            </span>
+            <span>{currentItem.sourceType === "candidate"
+              ? t("challengeReview.candidateLabel", { file: displayName(currentItem.relPath) })
+              : currentItem.relPath}</span>
+            {currentItem.sourceType !== "candidate" ? (
+              <span className="challenge-review-panel__due">
+                {t("challengeReview.dueLabel", { days: currentItem.overdueDays })}
+              </span>
+            ) : null}
           </div>
-          <div className="challenge-review-panel__created">
-            {t("challengeReview.createdLabel", { time: createdDisplay(currentItem.created) })}
-          </div>
+          {currentItem.sourceType !== "candidate" ? (
+            <div className="challenge-review-panel__created">
+              {t("challengeReview.createdLabel", { time: createdDisplay(currentItem.created) })}
+            </div>
+          ) : currentItem.markingReason ? (
+            <>
+              <div className="challenge-review-panel__created">
+                {currentItem.markingReason === "high_similarity"
+                  ? t("challengeReview.reasonHighSimilarity")
+                  : currentItem.markingReason === "semantic_isolated"
+                  ? t("challengeReview.reasonSemanticIsolated")
+                  : currentItem.markingReason === "cross_doc_recurrence"
+                  ? t("challengeReview.reasonCrossDocRecurrence")
+                  : currentItem.markingReason}
+              </div>
+              {currentItem.pairedExcerpt ? (
+                <div className="challenge-review-panel__related-docs">
+                  {t("challengeReview.relatedDocs")}
+                  {currentItem.pairedExcerpt.split(",").map((p) => (
+                    <span key={p} className="challenge-review-panel__related-doc-tag">
+                      {displayName(p.trim())}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : null}
           {currentItem.excerpt && !currentItem.privateOmitted ? (
             <div className="challenge-review-panel__excerpt">{currentItem.excerpt}</div>
           ) : null}
@@ -387,8 +531,45 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
               disabled={busy}
               onClick={() => void startRound()}
             >
-              {t("challengeReview.startRound")}
+              {busy ? t("challengeReview.generating") : t("challengeReview.startRound")}
             </button>
+            {currentItem.sourceType === "candidate" && currentItem.candidateId ? (
+              <button
+                type="button"
+                className="challenge-review-panel__btn"
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true);
+                  invoke("dismiss_latent_candidate", { candidateId: currentItem.candidateId })
+                    .catch(() => {})
+                    .finally(() => {
+                      questionCacheRef.current.clear();
+                      inflightRef.current.clear();
+                      void reloadQueue().then((q) => {
+                        if (!q || q.items.length === 0) {
+                          setCursor(0);
+                        } else {
+                          const next = Math.min(cursor, q.items.length - 1);
+                          setCursor(next);
+                          prefetchQuestion(q.items, next);
+                        }
+                        setBusy(false);
+                      });
+                    });
+                }}
+              >
+                {t("challengeReview.skipItem")}
+              </button>
+            ) : items.length > 1 ? (
+              <button
+                type="button"
+                className="challenge-review-panel__btn"
+                disabled={busy}
+                onClick={() => setCursor((c) => (c + 1) % items.length)}
+              >
+                {t("challengeReview.skipItem")}
+              </button>
+            ) : null}
             {openMarkdownTab ? (
               <button
                 type="button"
@@ -414,7 +595,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
             disabled={busy}
             placeholder={t("challengeReview.answerPlaceholder")}
           />
-          <div className="challenge-review-panel__actions">
+          <div className="challenge-review-panel__actions challenge-review-panel__actions--spread">
             <button
               type="button"
               className="challenge-review-panel__btn challenge-review-panel__btn--primary"
@@ -423,6 +604,19 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
             >
               {t("challengeReview.submit")}
             </button>
+            <button
+              type="button"
+              className="challenge-review-panel__btn"
+              disabled={busy}
+              onClick={() => {
+                setPhase("pick");
+                setQuestion("");
+                setAnswer("");
+                setEvalRes(null);
+              }}
+            >
+              {t("challengeReview.abandon")}
+            </button>
           </div>
         </>
       ) : null}
@@ -430,7 +624,7 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
       {phase === "result" && evalRes ? (
         <div className="challenge-review-panel__result">
           {evalRes.sloppy ? <p className="challenge-review-panel__sloppy">{t("challengeReview.sloppyHint")}</p> : null}
-          {evalRes.passed ? (
+          {evalRes.passed && currentItem?.sourceType !== "candidate" ? (
             <>
               <p className="challenge-review-panel__pass">{t("challengeReview.passed")}</p>
               {!evalRes.sloppy ? (
@@ -439,14 +633,28 @@ export function ChallengeReviewPanel({ onClose, depthMode }: Props) {
             </>
           ) : null}
           <AiAssistantMarkdown content={evalRes.commentaryMd} className="challenge-review-panel__md" />
-          <div className="challenge-review-panel__actions">
-            <button type="button" className="challenge-review-panel__btn" onClick={() => void goNext().catch(() => {})}>
-              {t("challengeReview.continueNext")}
-            </button>
-            <button type="button" className="challenge-review-panel__linkish" onClick={onClose}>
-              {t("challengeReview.endReview")}
-            </button>
-          </div>
+          {currentItem?.sourceType === "candidate" && currentItem.candidateId ? (
+            <CandidatePromoteCard
+              candidateId={currentItem.candidateId}
+              onDone={() => void goNext().catch(() => {})}
+            />
+          ) : (
+            <>
+              <ChallengeFeedbackBar
+                thoughtId={currentItem?.thoughtId}
+                questionText={question}
+                questionTemplate={templateKind}
+              />
+              <div className="challenge-review-panel__actions">
+                <button type="button" className="challenge-review-panel__btn" onClick={() => void goNext().catch(() => {})}>
+                  {t("challengeReview.continueNext")}
+                </button>
+                <button type="button" className="challenge-review-panel__linkish" onClick={onClose}>
+                  {t("challengeReview.endReview")}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       ) : null}
     </div>

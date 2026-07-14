@@ -897,6 +897,20 @@
   word-break: break-word;
 }
 
+.thought-mgmt__detail-growth-story-btn {
+  background: none;
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  color: inherit;
+}
+
+.thought-mgmt__detail-growth-story-btn:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.06));
+}
+
 .thought-mgmt__actions {
   display: flex;
   flex-wrap: wrap;

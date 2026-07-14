@@ -1,0 +1,48 @@
+.ai-guide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--text-muted, #888);
+}
+
+.ai-guide__icon {
+  opacity: 0.45;
+  margin-bottom: 4px;
+}
+
+.ai-guide__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-normal, #333);
+}
+
+.ai-guide__desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 300px;
+}
+
+.ai-guide__btn {
+  margin-top: 6px;
+}
+
+/* compact variant */
+.ai-guide--compact {
+  padding: 16px 12px;
+  gap: 6px;
+}
+
+.ai-guide--compact .ai-guide__icon {
+  width: 24px;
+  height: 24px;
+}
+
+.ai-guide--compact .ai-guide__title {
+  font-size: 13px;
+}

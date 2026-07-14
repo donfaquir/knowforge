@@ -16,6 +16,8 @@ import {
   reloadCustomSkills,
   updateCustomSkill,
 } from "../utils/skillInvoke";
+import { useAiConfigStatus } from "../hooks/useAiConfigStatus";
+import AiNotConfiguredGuide from "./AiNotConfiguredGuide";
 import SkillEditorModal from "./SkillEditorModal";
 import "./SkillManagementPanel.css";
 
@@ -161,6 +163,7 @@ export function SkillManagementPanel(props: SkillManagementPanelProps) {
     embedded = false,
   } = props;
   const { t } = useTranslation();
+  const { isConfigured: aiConfigured } = useAiConfigStatus(workspaceReady);
 
   const disposedRef = useRef(false);
   useEffect(() => {
@@ -601,6 +604,13 @@ export function SkillManagementPanel(props: SkillManagementPanelProps) {
 
             {mode === "idle" ? (
               <div className="skill-mgmt__placeholder">
+                {!aiConfigured && (
+                  <AiNotConfiguredGuide
+                    featureName={t("skillMgmt.title")}
+                    featureDescription={t("aiGuide.descSkill")}
+                    compact
+                  />
+                )}
                 <h3 className="skill-mgmt__placeholder-title">
                   {t("skillMgmt.placeholderTitle")}
                 </h3>

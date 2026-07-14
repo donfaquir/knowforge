@@ -408,6 +408,15 @@ pub struct CognitiveConfig {
     /// 忽略气泡后的冷却分钟数（默认 15）
     #[serde(default = "default_writing_coach_cooldown_minutes")]
     pub writing_coach_cooldown_minutes: u32,
+    /// 认知回顾推送总开关（默认关）
+    #[serde(default)]
+    pub cognitive_push_enabled: bool,
+    /// 推送频率："weekly" | "monthly" | "both"（默认 both）
+    #[serde(default = "default_cognitive_push_frequency")]
+    pub cognitive_push_frequency: String,
+    /// 上次推送时间（ISO 8601），用于调度判定
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cognitive_push_last_sent: Option<String>,
 }
 
 fn default_challenge_review_cap_independent() -> u32 {
@@ -450,6 +459,10 @@ fn default_writing_coach_cooldown_minutes() -> u32 {
     15
 }
 
+fn default_cognitive_push_frequency() -> String {
+    "both".to_string()
+}
+
 impl Default for CognitiveConfig {
     fn default() -> Self {
         Self {
@@ -471,6 +484,9 @@ impl Default for CognitiveConfig {
             writing_coach_term_min_chars: default_writing_coach_term_min_chars(),
             writing_coach_bubble_seconds: default_writing_coach_bubble_seconds(),
             writing_coach_cooldown_minutes: default_writing_coach_cooldown_minutes(),
+            cognitive_push_enabled: false,
+            cognitive_push_frequency: default_cognitive_push_frequency(),
+            cognitive_push_last_sent: None,
         }
     }
 }
@@ -553,6 +569,9 @@ struct CognitiveDiskPartial {
     writing_coach_term_min_chars: Option<u32>,
     writing_coach_bubble_seconds: Option<u32>,
     writing_coach_cooldown_minutes: Option<u32>,
+    cognitive_push_enabled: Option<bool>,
+    cognitive_push_frequency: Option<String>,
+    cognitive_push_last_sent: Option<String>,
 }
 
 // --- 网络搜索配置 ---
@@ -713,6 +732,9 @@ pub struct CognitiveConfigPatch {
     pub writing_coach_term_min_chars: Option<u32>,
     pub writing_coach_bubble_seconds: Option<u32>,
     pub writing_coach_cooldown_minutes: Option<u32>,
+    pub cognitive_push_enabled: Option<bool>,
+    pub cognitive_push_frequency: Option<String>,
+    pub cognitive_push_last_sent: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -768,6 +790,10 @@ pub struct CognitiveConfigForUi {
     pub writing_coach_term_min_chars: u32,
     pub writing_coach_bubble_seconds: u32,
     pub writing_coach_cooldown_minutes: u32,
+    pub cognitive_push_enabled: bool,
+    pub cognitive_push_frequency: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognitive_push_last_sent: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1153,6 +1179,15 @@ fn merge_cognitive_from_disk_partial(
     if let Some(v) = partial.writing_coach_cooldown_minutes {
         cfg.writing_coach_cooldown_minutes = v;
     }
+    if let Some(v) = partial.cognitive_push_enabled {
+        cfg.cognitive_push_enabled = v;
+    }
+    if let Some(v) = partial.cognitive_push_frequency {
+        cfg.cognitive_push_frequency = v;
+    }
+    if partial.cognitive_push_last_sent.is_some() {
+        cfg.cognitive_push_last_sent = partial.cognitive_push_last_sent;
+    }
     normalize_cognitive(&mut cfg);
     cfg
 }
@@ -1191,6 +1226,9 @@ fn to_cognitive_for_ui(cfg: CognitiveConfig) -> CognitiveConfigForUi {
         writing_coach_term_min_chars: cfg.writing_coach_term_min_chars,
         writing_coach_bubble_seconds: cfg.writing_coach_bubble_seconds,
         writing_coach_cooldown_minutes: cfg.writing_coach_cooldown_minutes,
+        cognitive_push_enabled: cfg.cognitive_push_enabled,
+        cognitive_push_frequency: cfg.cognitive_push_frequency.clone(),
+        cognitive_push_last_sent: cfg.cognitive_push_last_sent.clone(),
     }
 }
 
@@ -1253,6 +1291,15 @@ fn apply_cognitive_patch(cfg: &mut CognitiveConfig, patch: CognitiveConfigPatch)
     }
     if let Some(v) = patch.writing_coach_cooldown_minutes {
         cfg.writing_coach_cooldown_minutes = v;
+    }
+    if let Some(v) = patch.cognitive_push_enabled {
+        cfg.cognitive_push_enabled = v;
+    }
+    if let Some(v) = patch.cognitive_push_frequency {
+        cfg.cognitive_push_frequency = v;
+    }
+    if let Some(s) = patch.cognitive_push_last_sent {
+        cfg.cognitive_push_last_sent = s;
     }
 }
 

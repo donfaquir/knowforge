@@ -555,6 +555,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
                 conversationQuery: query,
                 depthMode: dm,
                 uiLocale: getAppLocale(),
+                thoughtId: pick.thoughtId,
               },
             });
             if (inviteSearchEpochRef.current !== epoch || disposed) return;

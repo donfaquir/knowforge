@@ -83,6 +83,10 @@ pub struct VaultThoughtEntry {
     pub challenge_pass_count: u32,
     pub temporary: bool,
     pub private_omitted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub srs_easiness_factor: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub srs_interval_days: Option<f64>,
 }
 
 fn clip_thought_body_preview(body: &str, max_chars: usize) -> String {
@@ -234,27 +238,16 @@ pub fn enumerate_vault_thought_entries_blocking(
     let mut scanned = 0usize;
     let mut stopped_early = false;
 
-    for (
-        rel,
-        thought_id,
-        body,
-        mat_str,
-        temporary,
-        created_at,
-        _updated_at,
-        cpc,
-        last_reviewed_at,
-    ) in rows
-    {
+    for row in rows {
         if started.elapsed().as_millis() as u64 > REVIEW_QUEUE_DEADLINE_MS {
             stopped_early = true;
             break;
         }
         scanned += 1;
-        if temporary || thought_id.is_empty() {
+        if row.temporary || row.thought_id.is_empty() {
             continue;
         }
-        let Ok(joined) = join_under_root(canonical_root, &rel) else {
+        let Ok(joined) = join_under_root(canonical_root, &row.rel_path) else {
             continue;
         };
         if !joined.exists() {
@@ -262,19 +255,21 @@ pub fn enumerate_vault_thought_entries_blocking(
         }
         let is_private = note_privacy::peek_kf_private_from_md_file(&joined);
         out.push(VaultThoughtEntry {
-            rel_path: rel,
-            thought_id,
+            rel_path: row.rel_path,
+            thought_id: row.thought_id,
             excerpt: if is_private {
                 String::new()
             } else {
-                clip_thought_body_preview(&body, 240)
+                clip_thought_body_preview(&row.body, 240)
             },
-            maturity: thought_parser::thought_maturity_from_storage(&mat_str),
-            created: created_at,
-            last_reviewed_at,
-            challenge_pass_count: cpc.max(0) as u32,
-            temporary,
+            maturity: thought_parser::thought_maturity_from_storage(&row.maturity),
+            created: row.created_at,
+            last_reviewed_at: row.last_reviewed_at,
+            challenge_pass_count: row.challenge_pass_count.max(0) as u32,
+            temporary: row.temporary,
             private_omitted: is_private,
+            srs_easiness_factor: row.srs_easiness_factor,
+            srs_interval_days: row.srs_interval_days,
         });
     }
 

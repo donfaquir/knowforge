@@ -60,6 +60,12 @@ export type CognitiveConfigForUi = {
   writingCoachBubbleSeconds: number;
   /** 忽略气泡后的冷却分钟数（默认 15） */
   writingCoachCooldownMinutes: number;
+  /** 认知回顾推送总开关（默认关） */
+  cognitivePushEnabled: boolean;
+  /** 推送频率："weekly" | "monthly" | "both"（默认 both） */
+  cognitivePushFrequency: string;
+  /** 上次推送时间（ISO 8601） */
+  cognitivePushLastSent?: string;
 };
 
 // --- 认知配置保存载荷（对齐 CognitiveConfigPatch） ---
@@ -88,6 +94,9 @@ export type CognitiveConfigSavePatch = {
   writingCoachTermMinChars?: number;
   writingCoachBubbleSeconds?: number;
   writingCoachCooldownMinutes?: number;
+  cognitivePushEnabled?: boolean;
+  cognitivePushFrequency?: string;
+  cognitivePushLastSent?: string | null;
 };
 
 // --- 理解区块（解析结果） ---
@@ -233,6 +242,9 @@ export type GenerateChallengeQuestionArgs = {
   depthMode?: DepthMode;
   /** 与 Knowforge 设置一致：`en` | `zh`，驱动模型输出自然语言 */
   uiLocale?: "en" | "zh";
+  markingReason?: string;
+  pairedExcerpt?: string;
+  thoughtId?: string;
 };
 
 /** `evaluate_challenge_answer` 请求 */
@@ -260,6 +272,29 @@ export type EvaluateChallengeAnswerResponse = {
   templateKind?: string;
 };
 
+/** `get_feedback_stats` 响应 */
+export type FeedbackTemplateStats = {
+  template: string;
+  total: number;
+  helpful: number;
+  notHelpful: number;
+  helpfulRate: number;
+};
+
+export type FeedbackIssueCount = {
+  reason: string;
+  count: number;
+};
+
+export type FeedbackStats = {
+  totalRatings: number;
+  helpfulCount: number;
+  notHelpfulCount: number;
+  helpfulRate: number;
+  byTemplate: FeedbackTemplateStats[];
+  commonIssues: FeedbackIssueCount[];
+};
+
 /** `count_vault_thoughts_for_review` 响应 */
 export type CountVaultThoughtsForReviewResponse = {
   totalThoughts: number;
@@ -278,6 +313,11 @@ export type ReviewQueueItem = {
   nextDueAt: string;
   overdueDays: number;
   privateOmitted: boolean;
+  sourceType: "thought" | "candidate";
+  candidateId?: string;
+  markingReason?: string;
+  pairedExcerpt?: string;
+  startLine?: number;
 };
 
 export type ListReviewQueueResponse = {
@@ -285,4 +325,25 @@ export type ListReviewQueueResponse = {
   totalThoughts: number;
   totalDue: number;
   meta: SearchThoughtMetaForUi;
+};
+
+// --- 成长故事导出 ---
+
+export type JourneyMilestone = {
+  date: string;
+  eventType: string;
+  description: string;
+};
+
+export type GrowthStory = {
+  thoughtId: string;
+  thoughtTitle: string;
+  contentPreview: string;
+  sourceFile: string;
+  createdAt: string;
+  currentMaturity: string;
+  journey: JourneyMilestone[];
+  totalChallenges: number;
+  totalDays: number;
+  passRate: number;
 };

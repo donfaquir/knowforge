@@ -1,7 +1,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import packageMeta from "../../package.json";
 import i18n, { setAppLocale } from "../i18n";
@@ -10,7 +10,8 @@ import { dispatchVaultConfigUpdated } from "../utils/vaultConfigBroadcast";
 import { SemanticIndexStatus } from "./SemanticIndexStatus";
 import "./AiLlmSettingsModal.css";
 
-const SkillManagementPanel = lazy(() => import("./SkillManagementPanel"));
+// Frozen: Skill management panel hidden from UI (code preserved)
+// const SkillManagementPanel = lazy(() => import("./SkillManagementPanel"));
 
 /** 与 Tauri 可拖拽窗口配合：排除交互区（非桌面端传空对象） */
 export type TauriDragRegionExcludeProps =
@@ -25,7 +26,7 @@ export type AiLlmSettingsModalProps = {
   dragExcludeProps: TauriDragRegionExcludeProps;
 };
 
-type SettingsSection = "general" | "ai" | "skills";
+type SettingsSection = "general" | "ai";
 
 /** 左侧「通用」分区：滑块调谐图标 */
 function IconGeneralSettings() {
@@ -98,24 +99,6 @@ function IconAiLlmSection() {
   );
 }
 
-/** 左侧「技能」分区：扳手/工具图标 */
-function IconSkillsSection() {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden={true}
-    >
-      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-    </svg>
-  );
-}
 
 // --- Provider form state ---
 
@@ -157,6 +140,8 @@ type FormState = {
   independentReviewEnabled: boolean;
   challengeReviewDailyCapIndependent: string;
   challengeReviewDailyCapInline: string;
+  cognitivePushEnabled: boolean;
+  cognitivePushFrequency: string;
   semanticEnabled: boolean;
   semanticAutoIndex: boolean;
   semanticSearchWeight: string;
@@ -265,6 +250,8 @@ function defaultForm(): FormState {
     independentReviewEnabled: false,
     challengeReviewDailyCapIndependent: "3",
     challengeReviewDailyCapInline: "2",
+    cognitivePushEnabled: false,
+    cognitivePushFrequency: "both",
     semanticEnabled: true,
     semanticAutoIndex: true,
     semanticSearchWeight: "0.6",
@@ -377,6 +364,8 @@ function vaultConfigToForm(cfg: VaultConfigForUi): FormState {
     independentReviewEnabled: cognitive.independentReviewEnabled === true,
     challengeReviewDailyCapIndependent: String(cognitive.challengeReviewDailyCapIndependent ?? 3),
     challengeReviewDailyCapInline: String(cognitive.challengeReviewDailyCapInline ?? 2),
+    cognitivePushEnabled: cognitive.cognitivePushEnabled === true,
+    cognitivePushFrequency: cognitive.cognitivePushFrequency ?? "both",
     semanticEnabled: semantic.enabled !== false,
     semanticAutoIndex: semantic.autoIndexOnSave !== false,
     semanticSearchWeight: String(semantic.searchWeight ?? 0.6),
@@ -761,7 +750,7 @@ export function AiLlmSettingsModal({
       organizationId: p.organizationId.trim() || null,
       lastUsedModel: p.defaultModel.trim() || null,
       isRemote: p.isRemote,
-      ...(p.apiKeyChanged && p.apiKey.trim() ? { apiKey: p.apiKey.trim() } : {}),
+      ...(p.apiKeyChanged ? { apiKey: p.apiKey.trim() } : {}),
     }));
 
     const patch: VaultConfigSavePatch = {
@@ -796,6 +785,8 @@ export function AiLlmSettingsModal({
         independentReviewEnabled: form.independentReviewEnabled,
         challengeReviewDailyCapIndependent: capInd,
         challengeReviewDailyCapInline: capInline,
+        cognitivePushEnabled: form.cognitivePushEnabled,
+        cognitivePushFrequency: form.cognitivePushFrequency,
       },
       semantic: {
         enabled: form.semanticEnabled,
@@ -921,17 +912,7 @@ export function AiLlmSettingsModal({
               </span>
               <span className="settings-modal__tool-label">{t("settings.aiLlm")}</span>
             </button>
-            <button
-              type="button"
-              className={`settings-modal__tool${activeSection === "skills" ? " settings-modal__tool--active" : ""}`}
-              aria-pressed={activeSection === "skills"}
-              onClick={() => setActiveSection("skills")}
-            >
-              <span className="settings-modal__tool-icon" aria-hidden={true}>
-                <IconSkillsSection />
-              </span>
-              <span className="settings-modal__tool-label">{t("settings.skills")}</span>
-            </button>
+            {/* Frozen: skills nav button hidden */}
           </nav>
 
           {/* 外层固定高度由 .app-modal--settings 控制；此处唯一滚动区适配 General/AI */}
@@ -1636,6 +1617,36 @@ export function AiLlmSettingsModal({
               <p className="ai-settings__hint">{t("settings.challengeReviewDailyCapHint")}</p>
             </fieldset>
 
+            <fieldset className="ai-settings__fieldset" disabled={!tauriRuntime || !workspaceReady}>
+              <legend className="ai-settings__legend">{t("settings.cognitivePushSection")}</legend>
+              <label className="ai-settings__check">
+                <input
+                  type="checkbox"
+                  checked={form.cognitivePushEnabled}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, cognitivePushEnabled: e.target.checked }))
+                  }
+                />
+                {t("settings.cognitivePushEnable")}
+              </label>
+              <label className="ai-settings__label" htmlFor="ai-cog-push-freq">
+                {t("settings.cognitivePushFrequency")}
+              </label>
+              <select
+                id="ai-cog-push-freq"
+                className="app-modal__field"
+                value={form.cognitivePushFrequency}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, cognitivePushFrequency: e.target.value }))
+                }
+              >
+                <option value="weekly">{t("settings.cognitivePushWeekly")}</option>
+                <option value="monthly">{t("settings.cognitivePushMonthly")}</option>
+                <option value="both">{t("settings.cognitivePushBoth")}</option>
+              </select>
+              <p className="ai-settings__hint">{t("settings.cognitivePushHint")}</p>
+            </fieldset>
+
               </div>
             </details>
 
@@ -1654,18 +1665,7 @@ export function AiLlmSettingsModal({
                       </button>
                     </div>
                   </div>
-                ) : (
-                  <Suspense fallback={<p className="ai-settings__loading">{t("settings.loading")}</p>}>
-                    <SkillManagementPanel
-                      open={true}
-                      onClose={() => {}}
-                      embedded={true}
-                      workspaceReady={workspaceReady}
-                      tauriRuntime={tauriRuntime}
-                      dragExcludeProps={dragExcludeProps}
-                    />
-                  </Suspense>
-                )}
+                ) : null}
               </div>
             </div>
           </div>

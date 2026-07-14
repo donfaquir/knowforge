@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import sampleData from "../../resources/onboarding/sample_challenges.json";
+import OnboardingDiscoveryCard from "./OnboardingDiscoveryCard";
 import "./OnboardingOverlay.css";
 
 type Step = 1 | 2 | 3 | 4;
@@ -9,12 +10,13 @@ type Step = 1 | 2 | 3 | 4;
 type Props = {
   open: boolean;
   onClose: () => void;
+  onStartChallenge: () => void;
   tauriRuntime: boolean;
 };
 
 const TOTAL_STEPS = 4;
 
-export function OnboardingOverlay({ open, onClose, tauriRuntime }: Props) {
+export function OnboardingOverlay({ open, onClose, onStartChallenge, tauriRuntime }: Props) {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith("zh");
   const [step, setStep] = useState<Step>(1);
@@ -293,39 +295,11 @@ export function OnboardingOverlay({ open, onClose, tauriRuntime }: Props) {
             <h2 className="onboarding__title">{t("onboarding.step4Title")}</h2>
             <p className="onboarding__desc">{t("onboarding.step4Desc")}</p>
 
-            <div className="onboarding__tips">
-              <div className="onboarding__tip-card">
-                <div className="onboarding__tip-icon">📌</div>
-                <div className="onboarding__tip-text">
-                  <strong>{t("onboarding.step4Tip1Title")}</strong>
-                  <span>{t("onboarding.step4Tip1Desc")}</span>
-                </div>
-              </div>
-              <div className="onboarding__tip-card">
-                <div className="onboarding__tip-icon">📖</div>
-                <div className="onboarding__tip-text">
-                  <strong>{t("onboarding.step4Tip2Title")}</strong>
-                  <span>{t("onboarding.step4Tip2Desc")}</span>
-                </div>
-              </div>
-              <div className="onboarding__tip-card">
-                <div className="onboarding__tip-icon">⌨️</div>
-                <div className="onboarding__tip-text">
-                  <strong>{t("onboarding.step4Tip3Title")}</strong>
-                  <span>{t("onboarding.step4Tip3Desc")}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="onboarding__actions">
-              <button
-                type="button"
-                className="onboarding__btn onboarding__btn--primary"
-                onClick={finish}
-              >
-                {t("onboarding.step4Done")}
-              </button>
-            </div>
+            <OnboardingDiscoveryCard
+              tauriRuntime={tauriRuntime}
+              onStartChallenge={onStartChallenge}
+              onFinish={finish}
+            />
           </div>
         )}
       </div>

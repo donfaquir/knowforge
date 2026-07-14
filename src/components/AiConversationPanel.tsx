@@ -2,6 +2,8 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useAiConversationSession } from "../contexts/AiConversationSessionContext";
+import { useAiConfigStatus } from "../hooks/useAiConfigStatus";
+import AiNotConfiguredGuide from "./AiNotConfiguredGuide";
 import type { ThoughtFocusContext } from "../types/aiConversation";
 import { useAiNoteContext } from "../contexts/AiNoteContext";
 import type { ChatMessage } from "../hooks/useWorkspaceAiConversations";
@@ -155,6 +157,7 @@ export function AiConversationPanel() {
     createConversation,
     thoughtFocusContext,
   } = useAiConversationSession();
+  const { isConfigured: aiConfigured } = useAiConfigStatus(workspaceReady);
 
   /** 与 stream 事件监听同步，避免闭包读到陈旧的「本会话够了」 */
   const enoughForThisChatRef = useRef(enoughForThisChat);
@@ -1405,9 +1408,16 @@ export function AiConversationPanel() {
         {...dragProps}
       >
         {messages.length === 0 ? (
-          <p className="ai-chat__empty" {...dragProps}>
-            {t("aiPanel.empty")}
-          </p>
+          aiConfigured ? (
+            <p className="ai-chat__empty" {...dragProps}>
+              {t("aiPanel.empty")}
+            </p>
+          ) : (
+            <AiNotConfiguredGuide
+              featureName={t("aiPanel.section")}
+              featureDescription={t("aiGuide.descConversation")}
+            />
+          )
         ) : (
           messages.map((m) => (
             <MessageBubble
