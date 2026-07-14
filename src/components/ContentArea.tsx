@@ -10,6 +10,7 @@ import { EditorThoughtsPanel } from "./EditorThoughtsPanel";
 import { EditorView } from "./EditorView";
 import type { EditorWritingCoachHostHandle } from "./EditorWritingCoachHost";
 import { GraphTabShell } from "./GraphTabShell";
+import { PracticeMode } from "./practice/PracticeMode";
 import { LinkRecommendationPanel } from "./LinkRecommendationPanel";
 import { OutlineBulkToolbar } from "./OutlineBulkToolbar";
 import { OutlinePanel } from "./OutlinePanel";
@@ -159,6 +160,14 @@ export function ContentArea(props: ContentAreaProps) {
             </ThoughtMgmtAiConversationSessionProvider>
           </main>
         ) : null
+      ) : leftPanelView === "practice" ? (
+        <main className="main main--full-view">
+          <PracticeMode
+            workspaceReady={workspaceReady}
+            tauriRuntime={tauriRuntime}
+            workspaceRoot={rootPath}
+          />
+        </main>
       ) : (
         <EditorView
           docState={docState}

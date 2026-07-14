@@ -828,6 +828,7 @@ function App() {
           onViewChange={(v) => void changeView(v)}
           onOpenCognitiveReport={() => setCognitiveReportOpen(true)}
           onOpenSettings={() => setAiSettingsOpen(true)}
+          reviewDueCount={reviewDueTabCount}
         />
         <aside className="sidebar">
           <nav className="sidebar__nav" aria-label={t("toolbar.files")}>
