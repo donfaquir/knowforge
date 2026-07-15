@@ -270,6 +270,7 @@ function App() {
   useEffect(() => {
     const onOpenAiSettings = () => setAiSettingsOpen(true);
     const onGoToPractice = () => setLeftPanelView("practice");
+    const onGoToFiles = () => setLeftPanelView("files");
     const onOpenNoteInEditor = (e: Event) => {
       const relPath = (e as CustomEvent<{ relPath: string }>).detail?.relPath;
       if (relPath) {
@@ -279,10 +280,12 @@ function App() {
     };
     window.addEventListener(OPEN_AI_SETTINGS_EVENT, onOpenAiSettings);
     window.addEventListener("knowforge:goToPractice", onGoToPractice);
+    window.addEventListener("knowforge:goToFiles", onGoToFiles);
     window.addEventListener("knowforge:openNoteInEditor", onOpenNoteInEditor);
     return () => {
       window.removeEventListener(OPEN_AI_SETTINGS_EVENT, onOpenAiSettings);
       window.removeEventListener("knowforge:goToPractice", onGoToPractice);
+      window.removeEventListener("knowforge:goToFiles", onGoToFiles);
       window.removeEventListener("knowforge:openNoteInEditor", onOpenNoteInEditor);
     };
   }, []);

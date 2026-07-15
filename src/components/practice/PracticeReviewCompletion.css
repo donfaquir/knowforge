@@ -1,0 +1,140 @@
+/* PracticeReviewCompletion — post-review transition screen */
+
+.review-completion {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 32px 24px;
+  text-align: center;
+  gap: 24px;
+}
+
+/* --- Hero --- */
+
+.review-completion__hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.review-completion__check {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+  font-size: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.review-completion__title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--fg-default, #1a1a1a);
+}
+
+/* --- Daily picks --- */
+
+.review-completion__picks {
+  max-width: 360px;
+  width: 100%;
+}
+
+.review-completion__picks-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-dim, #888);
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.review-completion__pick-card {
+  padding: 10px 14px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  text-align: left;
+}
+
+.review-completion__pick-excerpt {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--fg-dim, #666);
+  line-height: 1.5;
+}
+
+/* --- Actions --- */
+
+.review-completion__actions {
+  display: flex;
+  gap: 10px;
+}
+
+.review-completion__btn {
+  padding: 8px 18px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: background 0.12s, color 0.12s;
+}
+
+.review-completion__btn--primary {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+
+.review-completion__btn--primary:hover {
+  background: var(--accent-hover, #2563eb);
+}
+
+.review-completion__btn--secondary {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--fg-default, #333);
+}
+
+.review-completion__btn--secondary:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+/* --- Dark mode --- */
+
+@media (prefers-color-scheme: dark) {
+  .review-completion__check {
+    background: rgba(34, 197, 94, 0.15);
+    color: #4ade80;
+  }
+
+  .review-completion__title {
+    color: var(--fg-default, #eee);
+  }
+
+  .review-completion__pick-card {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .review-completion__pick-excerpt {
+    color: var(--fg-dim, #999);
+  }
+
+  .review-completion__btn--primary {
+    background: var(--accent, #60a5fa);
+  }
+
+  .review-completion__btn--secondary {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--fg-default, #ddd);
+  }
+
+  .review-completion__btn--secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+}

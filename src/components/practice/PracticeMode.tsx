@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { ReviewQueueItem } from "../../types/cognitiveTypes";
 import { DiscoveryDetailView } from "./DiscoveryDetailView";
 import { DiscoveryPane, type CandidateForUi } from "./DiscoveryPane";
+import { PracticeReviewCompletion } from "./PracticeReviewCompletion";
 import { PracticeReviewPane } from "./PracticeReviewPane";
 import { PracticeSourcePreview } from "./PracticeSourcePreview";
 import "./PracticeMode.css";
@@ -58,10 +59,14 @@ export function PracticeMode({ workspaceReady, tauriRuntime }: PracticeModeProps
 
   /** "View in source" — switch to files mode and open the note */
   const handleViewInSource = useCallback((relPath: string, _startLine: number) => {
-    // Dispatch event to navigate back to files mode (App.tsx listens)
     window.dispatchEvent(
       new CustomEvent("knowforge:openNoteInEditor", { detail: { relPath } }),
     );
+  }, []);
+
+  /** Exit Practice Mode — go back to files */
+  const handleExitPractice = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("knowforge:goToFiles"));
   }, []);
 
   return (
@@ -100,16 +105,10 @@ export function PracticeMode({ workspaceReady, tauriRuntime }: PracticeModeProps
             />
           )}
           {subTab === "review" && reviewCompleted && (
-            <div className="practice-mode__placeholder">
-              <p>{t("practice.reviewCompleted", "Today's review completed!")}</p>
-              <button
-                type="button"
-                className="practice-mode__tab"
-                onClick={() => setSubTab("discovery")}
-              >
-                {t("practice.goToDiscovery", "Explore discoveries")}
-              </button>
-            </div>
+            <PracticeReviewCompletion
+              onGoToDiscovery={() => setSubTab("discovery")}
+              onExitPractice={handleExitPractice}
+            />
           )}
           {subTab === "discovery" && (
             <DiscoveryPane

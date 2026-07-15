@@ -2038,6 +2038,19 @@ async fn batch_promote_candidates(
 }
 
 #[tauri::command]
+async fn list_discovery_daily_picks(
+    state: tauri::State<'_, WorkspaceState>,
+) -> Result<Vec<latent_paragraphs::CandidateForUi>, String> {
+    let root = lock_workspace_root(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = semantic_index::open_embedding_db(&root)?;
+        latent_paragraphs::list_daily_picks(&conn, &root)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn check_cognitive_push_now(
     state: tauri::State<'_, WorkspaceState>,
     app_handle: tauri::AppHandle,
@@ -2182,6 +2195,7 @@ pub fn run() {
             list_discovery_candidates,
             batch_dismiss_candidates,
             batch_promote_candidates,
+            list_discovery_daily_picks,
             trigger_latent_scan,
             promote_candidate_to_thought,
             dismiss_latent_candidate

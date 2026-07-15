@@ -1102,6 +1102,51 @@ pub fn batch_promote(
     Ok(created_ids)
 }
 
+/// Return 1-2 "daily picks" from the candidate pool for the review completion screen.
+/// Strategy: rotate across marking reasons (round-robin by day-of-year), pick freshest within.
+pub fn list_daily_picks(
+    conn: &Connection,
+    workspace_root: &Path,
+) -> Result<Vec<CandidateForUi>, String> {
+    // Use day-of-year to rotate which reason goes first
+    use chrono::Datelike;
+    let day_of_year = chrono::Utc::now().ordinal() as usize;
+    let reasons = ["high_similarity", "cross_doc_recurrence", "semantic_isolated"];
+    let primary_reason = reasons[day_of_year % reasons.len()];
+
+    // Try to get 1 from primary reason, 1 from any other
+    let mut picks = Vec::with_capacity(2);
+
+    let primary_filter = DiscoveryFilter {
+        marking_reason: Some(primary_reason.to_string()),
+        sort_by: Some("freshness".to_string()),
+        offset: 0,
+        limit: 1,
+    };
+    if let Ok(resp) = list_candidates_filtered(conn, &primary_filter, workspace_root) {
+        picks.extend(resp.items);
+    }
+
+    // Get 1 more from any category (different from what we already picked)
+    let exclude_id = picks.first().map(|p| p.id.clone());
+    let all_filter = DiscoveryFilter {
+        marking_reason: None,
+        sort_by: Some("similarity".to_string()),
+        offset: 0,
+        limit: 3,
+    };
+    if let Ok(resp) = list_candidates_filtered(conn, &all_filter, workspace_root) {
+        for item in resp.items {
+            if Some(&item.id) != exclude_id.as_ref() {
+                picks.push(item);
+                break;
+            }
+        }
+    }
+
+    Ok(picks)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
