@@ -270,11 +270,20 @@ function App() {
   useEffect(() => {
     const onOpenAiSettings = () => setAiSettingsOpen(true);
     const onGoToPractice = () => setLeftPanelView("practice");
+    const onOpenNoteInEditor = (e: Event) => {
+      const relPath = (e as CustomEvent<{ relPath: string }>).detail?.relPath;
+      if (relPath) {
+        setLeftPanelView("files");
+        void openOrFocusRef.current(relPath);
+      }
+    };
     window.addEventListener(OPEN_AI_SETTINGS_EVENT, onOpenAiSettings);
     window.addEventListener("knowforge:goToPractice", onGoToPractice);
+    window.addEventListener("knowforge:openNoteInEditor", onOpenNoteInEditor);
     return () => {
       window.removeEventListener(OPEN_AI_SETTINGS_EVENT, onOpenAiSettings);
       window.removeEventListener("knowforge:goToPractice", onGoToPractice);
+      window.removeEventListener("knowforge:openNoteInEditor", onOpenNoteInEditor);
     };
   }, []);
 

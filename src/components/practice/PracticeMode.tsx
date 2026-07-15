@@ -1,6 +1,8 @@
-import { useCallback, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ReviewQueueItem } from "../../types/cognitiveTypes";
+import { DiscoveryDetailView } from "./DiscoveryDetailView";
 import { DiscoveryPane, type CandidateForUi } from "./DiscoveryPane";
 import { PracticeReviewPane } from "./PracticeReviewPane";
 import { PracticeSourcePreview } from "./PracticeSourcePreview";
@@ -20,6 +22,9 @@ export function PracticeMode({ workspaceReady, tauriRuntime }: PracticeModeProps
   const [reviewCompleted, setReviewCompleted] = useState(false);
   const [focusedThought, setFocusedThought] = useState<ReviewQueueItem | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<CandidateForUi | null>(null);
+  const [discoveryRefreshKey, setDiscoveryRefreshKey] = useState(0);
+  const selectedCandidateRef = useRef(selectedCandidate);
+  selectedCandidateRef.current = selectedCandidate;
 
   const handleReviewCompleted = useCallback(() => {
     setReviewCompleted(true);
@@ -27,6 +32,36 @@ export function PracticeMode({ workspaceReady, tauriRuntime }: PracticeModeProps
 
   const handleSelectCandidate = useCallback((candidate: CandidateForUi | null) => {
     setSelectedCandidate(candidate);
+  }, []);
+
+  /** Promote from detail view — calls backend and refreshes list */
+  const handleDetailPromote = useCallback(async (candidateId: string) => {
+    try {
+      await invoke<string>("promote_candidate_to_thought", { candidateId });
+      setSelectedCandidate(null);
+      setDiscoveryRefreshKey((k) => k + 1);
+    } catch (err) {
+      console.error("promote_candidate_to_thought failed:", err);
+    }
+  }, []);
+
+  /** Dismiss from detail view — calls backend and refreshes list */
+  const handleDetailDismiss = useCallback(async (candidateId: string) => {
+    try {
+      await invoke<void>("dismiss_latent_candidate", { candidateId });
+      setSelectedCandidate(null);
+      setDiscoveryRefreshKey((k) => k + 1);
+    } catch (err) {
+      console.error("dismiss_latent_candidate failed:", err);
+    }
+  }, []);
+
+  /** "View in source" — switch to files mode and open the note */
+  const handleViewInSource = useCallback((relPath: string, _startLine: number) => {
+    // Dispatch event to navigate back to files mode (App.tsx listens)
+    window.dispatchEvent(
+      new CustomEvent("knowforge:openNoteInEditor", { detail: { relPath } }),
+    );
   }, []);
 
   return (
@@ -81,27 +116,24 @@ export function PracticeMode({ workspaceReady, tauriRuntime }: PracticeModeProps
               workspaceReady={workspaceReady}
               tauriRuntime={tauriRuntime}
               onSelectCandidate={handleSelectCandidate}
+              refreshKey={discoveryRefreshKey}
             />
           )}
         </div>
         <div className="practice-mode__right">
-          <PracticeSourcePreview
-            relPath={
-              subTab === "review"
-                ? (focusedThought?.relPath ?? null)
-                : (selectedCandidate?.relPath ?? null)
-            }
-            startLine={
-              subTab === "review"
-                ? (focusedThought?.startLine ?? undefined)
-                : (selectedCandidate?.startLine ?? undefined)
-            }
-            endLine={
-              subTab === "discovery"
-                ? (selectedCandidate?.endLine ?? undefined)
-                : undefined
-            }
-          />
+          {subTab === "review" ? (
+            <PracticeSourcePreview
+              relPath={focusedThought?.relPath ?? null}
+              startLine={focusedThought?.startLine ?? undefined}
+            />
+          ) : (
+            <DiscoveryDetailView
+              candidate={selectedCandidate}
+              onPromote={(id) => void handleDetailPromote(id)}
+              onDismiss={(id) => void handleDetailDismiss(id)}
+              onViewInSource={handleViewInSource}
+            />
+          )}
         </div>
       </div>
     </div>

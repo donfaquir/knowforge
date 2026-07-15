@@ -44,6 +44,8 @@ export interface DiscoveryPaneProps {
   workspaceReady: boolean;
   tauriRuntime: boolean;
   onSelectCandidate: (candidate: CandidateForUi | null) => void;
+  /** Increment to force a data refetch (e.g. after promote/dismiss from detail view) */
+  refreshKey?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -60,6 +62,7 @@ export function DiscoveryPane({
   workspaceReady,
   tauriRuntime,
   onSelectCandidate,
+  refreshKey = 0,
 }: DiscoveryPaneProps) {
   const { t } = useTranslation();
 
@@ -100,7 +103,7 @@ export function DiscoveryPane({
 
   useEffect(() => {
     void fetchData();
-  }, [fetchData]);
+  }, [fetchData, refreshKey]);
 
   // Reset offset when filter/sort changes
   useEffect(() => {
