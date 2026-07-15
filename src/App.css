@@ -596,7 +596,7 @@ body {
 
 /* macOS Overlay：交通灯浮在 WebView 上方左侧，固定留白避免重叠 */
 .layout--platform-mac .app-top-toolbar__start {
-  padding-left: 74px;
+  padding-left: 82px;
   gap: calc(8px * var(--tool-strip-scale));
 }
 
