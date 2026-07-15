@@ -5,12 +5,9 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ChatMessage, ToolCallDisplayInfo } from "./useWorkspaceAiConversations";
 import type { ReplyContextSources } from "../types/replyContextSources";
 import type { ApprovalRequest } from "../types/toolTypes";
-import type { AutoResolvedDepth, DepthMode, ThoughtRetrievalResult, CountVaultThoughtsForReviewResponse, GenerateChallengeQuestionResponse } from "../types/cognitiveTypes";
-import type { VaultConfigForUi } from "../types/vaultAiConfig";
-import { isChallengeInlineLlmReady } from "../utils/isChallengeReviewLlmReady";
+import type { AutoResolvedDepth, DepthMode, ThoughtRetrievalResult, CountVaultThoughtsForReviewResponse, ListReviewQueueResponse } from "../types/cognitiveTypes";
 import { stripMarkedPassiveHighlightWithCount } from "../utils/passiveHighlightLifecycle";
 import { trackKnowforgeEvent } from "../utils/knowforgeAnalytics";
-import { getAppLocale } from "../i18n";
 import type { TFunction } from "i18next";
 import type { CognitiveFrequencyControl } from "./useCognitiveFrequencyControl";
 
@@ -98,13 +95,11 @@ type MemoryProposalBatch = {
 
 type InviteData = { thought: ThoughtRetrievalResult | null; question: string };
 
-type ChallengeInlineData = {
-  thought: ThoughtRetrievalResult;
-  question: string;
-  templateKind: string;
+export type ReviewReminderData = {
+  thoughtId: string;
+  thoughtExcerpt: string;
+  overdueDays: number;
 };
-
-type VaultCfgForSend = VaultConfigForUi;
 
 // ---------------------------------------------------------------------------
 // Hook deps & return types
@@ -119,7 +114,7 @@ export type AgentEventDeps = {
   setVaultSearchSummary: (v: string | null) => void;
 
   setInviteData: (v: InviteData | null) => void;
-  setChallengeInlineData: (v: ChallengeInlineData | null) => void;
+  setReviewReminderData: (v: ReviewReminderData | null) => void;
   setMemoryProposals: (v: MemoryProposalBatch | null) => void;
   setProposalDecisions: (v: Record<string, boolean>) => void;
   setActiveApproval: React.Dispatch<React.SetStateAction<ApprovalRequest | null>>;
@@ -168,7 +163,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
     setInput,
     setVaultSearchSummary,
     setInviteData,
-    setChallengeInlineData,
+    setReviewReminderData,
     setMemoryProposals,
     setProposalDecisions,
     setActiveApproval,
@@ -449,7 +444,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
 
         const epoch = ++inviteSearchEpochRef.current;
         setInviteData(null);
-        setChallengeInlineData(null);
+        setReviewReminderData(null);
         const query = lastSentQueryRef.current.trim();
         if (!query || enoughForThisChatRef.current) return;
         const dm = depthModeForInviteRef.current;
@@ -512,15 +507,7 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
               return;
             }
 
-            let cfg: VaultCfgForSend;
-            try {
-              cfg = await invoke<VaultCfgForSend>("get_vault_config_for_ui");
-            } catch {
-              return;
-            }
-            if (inviteSearchEpochRef.current !== epoch || disposed) return;
-            if (!isChallengeInlineLlmReady(cfg as VaultConfigForUi)) return;
-
+            // --- Lightweight review reminder (no LLM call) ---
             const countResp = await invoke<CountVaultThoughtsForReviewResponse>(
               "count_vault_thoughts_for_review",
             );
@@ -536,52 +523,23 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
               return;
             }
 
-            const respMany = await invoke<SearchResp>("search_thought_for_invite", {
-              args: {
-                query,
-                excludeRelPaths: thoughtInviteExcludeRef.current,
-                maxResults: 3,
-              },
-            });
+            // Fetch review queue and pick the first due thought
+            const queueResp = await invoke<ListReviewQueueResponse>("list_review_queue");
             if (inviteSearchEpochRef.current !== epoch || disposed) return;
-            const pick =
-              respMany.thoughts?.find((x) => x.excerpt && !x.privateOmitted) ?? respMany.thought;
-            if (!pick?.excerpt || pick.privateOmitted) return;
+            const dueItem = queueResp.items.find(
+              (i) => i.sourceType === "thought" && !i.privateOmitted && i.excerpt,
+            );
+            if (!dueItem) return;
 
-            const gen = await invoke<GenerateChallengeQuestionResponse>("generate_challenge_question", {
-              args: {
-                thoughtExcerpt: pick.excerpt,
-                relPath: pick.relPath,
-                conversationQuery: query,
-                depthMode: dm,
-                uiLocale: getAppLocale(),
-                thoughtId: pick.thoughtId,
-              },
+            void freqCtrl.recordChallengeInlineShown(dueItem.thoughtId);
+            void trackKnowforgeEvent("review.reminder_shown", {
+              thoughtId: dueItem.thoughtId,
             });
-            if (inviteSearchEpochRef.current !== epoch || disposed) return;
-            if (gen.shouldSkip || !gen.question.trim()) return;
-
-            void freqCtrl.recordChallengeInlineShown(pick.thoughtId);
-            void trackKnowforgeEvent("review.inline_shown", {
-              thoughtId: pick.thoughtId,
-              templateKind: gen.templateKind,
+            setReviewReminderData({
+              thoughtId: dueItem.thoughtId,
+              thoughtExcerpt: dueItem.excerpt,
+              overdueDays: dueItem.overdueDays,
             });
-            setChallengeInlineData({
-              thought: pick,
-              question: gen.question,
-              templateKind: gen.templateKind,
-            });
-            attachCitationToLastAssistant(pick);
-            if (!pick.privateOmitted && pick.thoughtId && isTauri()) {
-              void invoke("append_ai_thought_reference", {
-                args: {
-                  relPath: pick.relPath,
-                  thoughtId: pick.thoughtId,
-                  context: query.slice(0, 2000),
-                  relevance: "ai-challenge-inline",
-                },
-              }).catch(() => {});
-            }
           } catch {
             // timeout or other failure: silently skip
           }

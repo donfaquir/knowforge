@@ -269,8 +269,13 @@ function App() {
 
   useEffect(() => {
     const onOpenAiSettings = () => setAiSettingsOpen(true);
+    const onGoToPractice = () => setLeftPanelView("practice");
     window.addEventListener(OPEN_AI_SETTINGS_EVENT, onOpenAiSettings);
-    return () => window.removeEventListener(OPEN_AI_SETTINGS_EVENT, onOpenAiSettings);
+    window.addEventListener("knowforge:goToPractice", onGoToPractice);
+    return () => {
+      window.removeEventListener(OPEN_AI_SETTINGS_EVENT, onOpenAiSettings);
+      window.removeEventListener("knowforge:goToPractice", onGoToPractice);
+    };
   }, []);
 
   // 工作区就绪后从 vault config 读取持久化的 depthMode
