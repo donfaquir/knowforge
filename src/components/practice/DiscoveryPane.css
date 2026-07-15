@@ -1,0 +1,584 @@
+/* DiscoveryPane — Discovery sub-tab for Practice Mode */
+
+.discovery-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* --- Filter Bar --- */
+
+.discovery-filter-bar {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.discovery-filter-bar__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.discovery-filter-bar__tab {
+  padding: 4px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: transparent;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-dim, #666);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.discovery-filter-bar__tab:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--fg-default, #333);
+}
+
+.discovery-filter-bar__tab--active {
+  background: var(--accent-subtle, rgba(59, 130, 246, 0.1));
+  border-color: var(--accent, #3b82f6);
+  color: var(--accent, #3b82f6);
+}
+
+.discovery-filter-bar__count {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.discovery-filter-bar__sort {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-dim, #666);
+}
+
+.discovery-filter-bar__sort-label {
+  white-space: nowrap;
+}
+
+.discovery-filter-bar__sort-select {
+  padding: 2px 6px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* --- List area --- */
+
+.discovery-pane__list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+/* --- Empty states --- */
+
+.discovery-pane__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 120px;
+  color: var(--fg-dim, #999);
+  font-size: 13px;
+  text-align: center;
+  padding: 16px;
+  gap: 8px;
+}
+
+.discovery-pane__empty--error {
+  color: var(--error, #dc2626);
+}
+
+.discovery-pane__error-detail {
+  font-size: 11px;
+  opacity: 0.7;
+  word-break: break-all;
+  max-width: 280px;
+}
+
+.discovery-pane__spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--accent, #3b82f6);
+  border-radius: 50%;
+  animation: discovery-spin 0.6s linear infinite;
+}
+
+@keyframes discovery-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* --- Candidate Card --- */
+
+.discovery-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.discovery-card:hover {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+/* Confirmed cards get a subtle left accent line */
+.discovery-card--confirmed {
+  border-left: 3px solid #16a34a;
+}
+
+/* Downgraded cards are slightly muted */
+.discovery-card--downgraded {
+  opacity: 0.65;
+}
+
+.discovery-card--downgraded:hover {
+  opacity: 0.85;
+}
+
+.discovery-card--selected {
+  background: var(--accent-subtle, rgba(59, 130, 246, 0.06));
+  border-color: var(--accent, #3b82f6);
+  box-shadow: 0 0 0 1px var(--accent, #3b82f6);
+}
+
+.discovery-card__excerpt {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-default, #1a1a1a);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.discovery-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--fg-dim, #888);
+  margin-bottom: 6px;
+}
+
+.discovery-card__reason {
+  flex-shrink: 0;
+}
+
+.discovery-card__file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- LLM Confirmation Badge & Reason (Spec 11) --- */
+
+.discovery-card__llm-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  padding: 1px 5px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.discovery-card__llm-badge--confirmed {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.1);
+}
+
+.discovery-card__llm-badge--downgraded {
+  color: #a3a3a3;
+  background: rgba(163, 163, 163, 0.1);
+}
+
+.discovery-card__llm-badge--pending {
+  color: #a3a3a3;
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+.discovery-card__llm-reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 6px;
+  padding: 5px 8px;
+  background: rgba(139, 92, 246, 0.04);
+  border-radius: 4px;
+  border-left: 2px solid rgba(139, 92, 246, 0.3);
+}
+
+.discovery-card__llm-reason-icon {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.discovery-card__llm-reason-text {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg-default, #444);
+  word-break: break-word;
+}
+
+/* --- AI filter tab accent --- */
+
+.discovery-filter-bar__tab--ai {
+  border-color: rgba(22, 163, 74, 0.3);
+  color: #16a34a;
+}
+
+.discovery-filter-bar__tab--ai:hover {
+  background: rgba(22, 163, 74, 0.06);
+  color: #16a34a;
+}
+
+.discovery-filter-bar__tab--ai.discovery-filter-bar__tab--active {
+  background: rgba(22, 163, 74, 0.1);
+  border-color: #16a34a;
+  color: #16a34a;
+}
+
+/* --- Card actions --- */
+
+.discovery-card__actions {
+  display: flex;
+  gap: 6px;
+}
+
+.discovery-card__btn {
+  padding: 3px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.discovery-card__btn--promote {
+  color: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+}
+
+.discovery-card__btn--promote:hover {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+
+.discovery-card__btn--dismiss {
+  color: var(--fg-dim, #888);
+}
+
+.discovery-card__btn--dismiss:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--fg-default, #333);
+}
+
+/* --- Pagination --- */
+
+.discovery-pane__pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 0;
+  font-size: 12px;
+  color: var(--fg-dim, #666);
+}
+
+.discovery-pane__page-btn {
+  padding: 4px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--fg-default, #333);
+  transition: background 0.12s;
+}
+
+.discovery-pane__page-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.discovery-pane__page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.discovery-pane__page-info {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Dark mode --- */
+
+@media (prefers-color-scheme: dark) {
+  .discovery-filter-bar {
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .discovery-filter-bar__tab {
+    border-color: rgba(255, 255, 255, 0.12);
+    color: var(--fg-dim, #999);
+  }
+
+  .discovery-filter-bar__tab:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--fg-default, #ddd);
+  }
+
+  .discovery-filter-bar__tab--active {
+    background: rgba(96, 165, 250, 0.12);
+    border-color: var(--accent, #60a5fa);
+    color: var(--accent, #60a5fa);
+  }
+
+  .discovery-filter-bar__sort-select {
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .discovery-card {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .discovery-card:hover {
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .discovery-card--confirmed {
+    border-left-color: #4ade80;
+  }
+
+  .discovery-card--selected {
+    background: rgba(96, 165, 250, 0.08);
+    border-color: var(--accent, #60a5fa);
+    box-shadow: 0 0 0 1px var(--accent, #60a5fa);
+  }
+
+  .discovery-card__excerpt {
+    color: var(--fg-default, #eee);
+  }
+
+  .discovery-card__btn {
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .discovery-card__btn--promote {
+    color: var(--accent, #60a5fa);
+    border-color: var(--accent, #60a5fa);
+  }
+
+  .discovery-card__btn--promote:hover {
+    background: var(--accent, #60a5fa);
+    color: #fff;
+  }
+
+  .discovery-card__btn--dismiss {
+    color: var(--fg-dim, #999);
+  }
+
+  .discovery-card__btn--dismiss:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--fg-default, #ddd);
+  }
+
+  .discovery-pane__page-btn {
+    border-color: rgba(255, 255, 255, 0.12);
+    color: var(--fg-default, #ddd);
+  }
+
+  .discovery-pane__page-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .discovery-pane__spinner {
+    border-color: rgba(255, 255, 255, 0.1);
+    border-top-color: var(--accent, #60a5fa);
+  }
+
+  .discovery-pane__batch {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .discovery-pane__batch--active {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .discovery-pane__batch-btn--dismiss {
+    color: var(--fg-dim, #999);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .discovery-pane__batch-btn--promote {
+    color: var(--accent, #60a5fa);
+    border-color: var(--accent, #60a5fa);
+  }
+
+  .discovery-card--checked {
+    background: rgba(96, 165, 250, 0.08);
+    border-color: var(--accent, #60a5fa);
+  }
+
+  /* --- LLM badge & reason dark mode --- */
+
+  .discovery-card__llm-badge--confirmed {
+    color: #4ade80;
+    background: rgba(74, 222, 128, 0.12);
+  }
+
+  .discovery-card__llm-badge--downgraded {
+    color: #737373;
+    background: rgba(115, 115, 115, 0.12);
+  }
+
+  .discovery-card__llm-reason {
+    background: rgba(139, 92, 246, 0.08);
+    border-left-color: rgba(139, 92, 246, 0.4);
+  }
+
+  .discovery-card__llm-reason-text {
+    color: var(--fg-default, #ddd);
+  }
+
+  .discovery-filter-bar__tab--ai {
+    border-color: rgba(74, 222, 128, 0.3);
+    color: #4ade80;
+  }
+
+  .discovery-filter-bar__tab--ai:hover {
+    background: rgba(74, 222, 128, 0.08);
+    color: #4ade80;
+  }
+
+  .discovery-filter-bar__tab--ai.discovery-filter-bar__tab--active {
+    background: rgba(74, 222, 128, 0.12);
+    border-color: #4ade80;
+    color: #4ade80;
+  }
+}
+
+/* --- Batch operations bar --- */
+
+.discovery-pane__batch {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+}
+
+.discovery-pane__batch--active {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.discovery-pane__batch-select-all {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--fg-dim, #666);
+  font-size: 12px;
+}
+
+.discovery-pane__batch-select-all input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.discovery-pane__batch-count {
+  color: var(--fg-default, #333);
+  font-weight: 500;
+}
+
+.discovery-pane__batch-btn {
+  padding: 3px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  transition: background 0.12s, color 0.12s;
+}
+
+.discovery-pane__batch-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.discovery-pane__batch-btn--dismiss {
+  color: var(--fg-dim, #888);
+}
+
+.discovery-pane__batch-btn--dismiss:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.discovery-pane__batch-btn--promote {
+  color: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+}
+
+.discovery-pane__batch-btn--promote:hover:not(:disabled) {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+
+.discovery-pane__batch-btn--clear {
+  color: var(--fg-dim, #888);
+  border-color: transparent;
+}
+
+.discovery-pane__batch-btn--clear:hover:not(:disabled) {
+  color: var(--fg-default, #333);
+}
+
+/* --- Checkbox in card --- */
+
+.discovery-card__checkbox {
+  flex-shrink: 0;
+  margin: 0;
+  cursor: pointer;
+  width: 14px;
+  height: 14px;
+}
+
+.discovery-card__body {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.discovery-card--checked {
+  background: rgba(59, 130, 246, 0.05);
+  border-color: var(--accent, #3b82f6);
+}

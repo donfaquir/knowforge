@@ -28,7 +28,7 @@ import { parseSlashCommand } from "../utils/parseSlashCommand";
 import { MessageBubble, IconSaveThought } from "./MessageBubble";
 import { useCognitiveFrequencyControl } from "../hooks/useCognitiveFrequencyControl";
 import { DepthSlider } from "./DepthSlider";
-import { ChallengeReviewInline } from "./ChallengeReviewInline";
+import { InlineReviewReminder } from "./InlineReviewReminder";
 import { InviteAfterAnswer } from "./InviteAfterAnswer";
 import { ThoughtSavePopover } from "./ThoughtSavePopover";
 import { stripMarkedPassiveHighlightWithCount } from "../utils/passiveHighlightLifecycle";
@@ -75,10 +75,10 @@ type VaultCfgForSend = {
 
 type InviteData = { thought: ThoughtRetrievalResult | null; question: string };
 
-type ChallengeInlineData = {
-  thought: ThoughtRetrievalResult;
-  question: string;
-  templateKind: string;
+type ReviewReminderData = {
+  thoughtId: string;
+  thoughtExcerpt: string;
+  overdueDays: number;
 };
 
 /** 纸飞机发送图标 */
@@ -328,7 +328,7 @@ export function AiConversationPanel() {
 
   /** invite-after-answer 状态 */
   const [inviteData, setInviteData] = useState<InviteData | null>(null);
-  const [challengeInlineData, setChallengeInlineData] = useState<ChallengeInlineData | null>(null);
+  const [reviewReminderData, setReviewReminderData] = useState<ReviewReminderData | null>(null);
   const [memoryProposals, setMemoryProposals] = useState<MemoryProposalBatch | null>(null);
   const [proposalDecisions, setProposalDecisions] = useState<Record<string, boolean>>({});
   const inviteSearchEpochRef = useRef(0);
@@ -399,7 +399,7 @@ export function AiConversationPanel() {
     setSavePopoverUserMsgId(null);
     setVaultSearchSummary(null);
     setInviteData(null);
-    setChallengeInlineData(null);
+    setReviewReminderData(null);
     setEnoughForThisChat(false);
     setAutoResolved(null);
     setSavePopoverMsgId(null);
@@ -511,7 +511,7 @@ export function AiConversationPanel() {
       setInput,
       setVaultSearchSummary,
       setInviteData,
-      setChallengeInlineData,
+      setReviewReminderData,
       setMemoryProposals,
       setProposalDecisions,
       setActiveApproval,
@@ -881,7 +881,7 @@ export function AiConversationPanel() {
 
     lastSentQueryRef.current = trimmed;
     setInviteData(null);
-    setChallengeInlineData(null);
+    setReviewReminderData(null);
 
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
@@ -1334,8 +1334,13 @@ export function AiConversationPanel() {
     !isStreaming &&
     !isVaultSearching;
 
-  const handleChallengeInlineDismiss = useCallback(() => {
-    setChallengeInlineData(null);
+  const handleReviewReminderDismiss = useCallback(() => {
+    setReviewReminderData(null);
+  }, []);
+
+  const handleReviewReminderGoToPractice = useCallback(() => {
+    setReviewReminderData(null);
+    window.dispatchEvent(new CustomEvent("knowforge:goToPractice"));
   }, []);
 
   /** 获取当前笔记路径（用于 ThoughtSavePopover 默认值） */
@@ -1480,7 +1485,7 @@ export function AiConversationPanel() {
         ) : null}
 
         {!isStreaming &&
-          !challengeInlineData &&
+          !reviewReminderData &&
           inviteData &&
           freqCtrl.shouldShowInvite(depthMode, enoughForThisChat, turnIndex, autoResolved) && (
           <InviteAfterAnswer
@@ -1494,13 +1499,12 @@ export function AiConversationPanel() {
           />
         )}
 
-        {!isStreaming && challengeInlineData && !inviteData ? (
-          <ChallengeReviewInline
-            depthMode={depthMode}
-            thought={challengeInlineData.thought}
-            question={challengeInlineData.question}
-            templateKind={challengeInlineData.templateKind}
-            onDismiss={handleChallengeInlineDismiss}
+        {!isStreaming && reviewReminderData && !inviteData ? (
+          <InlineReviewReminder
+            thoughtExcerpt={reviewReminderData.thoughtExcerpt}
+            overdueDays={reviewReminderData.overdueDays}
+            onGoToPractice={handleReviewReminderGoToPractice}
+            onDismiss={handleReviewReminderDismiss}
           />
         ) : null}
 

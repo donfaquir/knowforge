@@ -1,13 +1,14 @@
 import type React from "react";
 import { useTranslation } from "react-i18next";
 
-export type LeftPanelView = "files" | "graph" | "thoughts";
+export type LeftPanelView = "files" | "graph" | "thoughts" | "practice";
 
 type Props = {
   activeView: LeftPanelView;
   onViewChange: (view: LeftPanelView) => void;
   onOpenCognitiveReport: () => void;
   onOpenSettings: () => void;
+  reviewDueCount?: number;
 };
 
 function FilesIcon() {
@@ -72,6 +73,26 @@ function ThoughtsIcon() {
   );
 }
 
+function PracticeIcon() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 2a7 7 0 0 0-7 7c0 2.5 1.5 4.5 3 5.5V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.5c1.5-1 3-3 3-5.5a7 7 0 0 0-7-7Z" />
+      <path d="M10 21h4" />
+      <path d="M9 14h6" />
+    </svg>
+  );
+}
+
 function ReportIcon() {
   return (
     <svg
@@ -117,12 +138,14 @@ const VIEW_ICONS: Record<LeftPanelView, () => React.JSX.Element> = {
   files: FilesIcon,
   graph: GraphIcon,
   thoughts: ThoughtsIcon,
+  practice: PracticeIcon,
 };
 
 const VIEW_I18N_KEYS: Record<LeftPanelView, string> = {
   files: "activityBar.files",
   graph: "activityBar.graph",
   thoughts: "activityBar.thoughts",
+  practice: "activityBar.practice",
 };
 
 export function ActivityBar({
@@ -130,6 +153,7 @@ export function ActivityBar({
   onViewChange,
   onOpenCognitiveReport,
   onOpenSettings,
+  reviewDueCount,
 }: Props) {
   const { t } = useTranslation();
 
@@ -139,6 +163,9 @@ export function ActivityBar({
         {(Object.keys(VIEW_ICONS) as LeftPanelView[]).map((view) => {
           const Icon = VIEW_ICONS[view];
           const active = activeView === view;
+          const badge = view === "practice" && reviewDueCount != null && reviewDueCount > 0
+            ? reviewDueCount
+            : null;
           return (
             <button
               key={view}
@@ -150,6 +177,9 @@ export function ActivityBar({
               onClick={() => onViewChange(view)}
             >
               <Icon />
+              {badge != null && (
+                <span className="activity-bar__badge" aria-label={`${badge}`}>{badge > 99 ? "99+" : badge}</span>
+              )}
             </button>
           );
         })}

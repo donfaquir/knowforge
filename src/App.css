@@ -259,6 +259,23 @@ body {
   border-radius: 1px;
 }
 
+.activity-bar__badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+  color: #fff;
+  background: #e53935;
+  border-radius: 7px;
+  pointer-events: none;
+}
+
 @media (prefers-color-scheme: dark) {
   .activity-bar {
     border-right-color: rgba(255, 255, 255, 0.08);
@@ -579,7 +596,7 @@ body {
 
 /* macOS Overlay：交通灯浮在 WebView 上方左侧，固定留白避免重叠 */
 .layout--platform-mac .app-top-toolbar__start {
-  padding-left: 74px;
+  padding-left: 82px;
   gap: calc(8px * var(--tool-strip-scale));
 }
 

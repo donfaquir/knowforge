@@ -2,13 +2,12 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import GithubSlugger from "github-slugger";
+
 import {
   lazy,
   Suspense,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -16,36 +15,27 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { AiNoteContextProvider } from "./contexts/AiNoteContext";
-import { AiConversationSessionProvider } from "./contexts/AiConversationSessionContext";
-import { ThoughtMgmtAiConversationSessionProvider } from "./contexts/ThoughtMgmtAiConversationSessionContext";
 import type { DepthMode } from "./types/cognitiveTypes";
-import { AiConversationPanel } from "./components/AiConversationPanel";
-import { AiConversationToolbar } from "./components/AiConversationToolbar";
-const CrepeMarkdownEditor = lazy(() => import("./components/CrepeMarkdownEditor"));
 const AiLlmSettingsModal = lazy(() => import("./components/AiLlmSettingsModal"));
-import { EditorTabBar, MARKDOWN_TAB_PANEL_ID, editorTabDomId } from "./components/EditorTabBar";
+
 import { FileTree, collectKfPrivateRelPaths } from "./components/FileTree";
-import { KfPrivateLockIcon } from "./components/KfPrivateLockIcon";
-import { OutlineBulkToolbar } from "./components/OutlineBulkToolbar";
-import { OutlinePanel } from "./components/OutlinePanel";
 import type { CrepeMarkdownEditorApi } from "./components/CrepeMarkdownEditor";
 import { CognitiveReportPanel } from "./components/cognitive-report/CognitiveReportPanel";
 import { CommandPalette } from "./components/CommandPalette";
-import { EditorThoughtsPanel } from "./components/EditorThoughtsPanel";
-import { EditorWritingCoachHost, type EditorWritingCoachHostHandle } from "./components/EditorWritingCoachHost";
-import { RightPanelReviewTab } from "./components/RightPanelReviewTab";
-import { LinkRecommendationPanel } from "./components/LinkRecommendationPanel";
-import { RightPanelShell, type RightPanelTab } from "./components/RightPanelShell";
+import { AppTopToolbar } from "./components/AppTopToolbar";
+import { ContentArea } from "./components/ContentArea";
+import { type EditorWritingCoachHostHandle } from "./components/EditorWritingCoachHost";
+import { type RightPanelTab } from "./components/RightPanelShell";
 import { ThoughtMaturityToastHost } from "./components/ThoughtMaturityToastHost";
-import { ThoughtManagementPanel } from "./components/ThoughtManagementPanel";
 import { ThoughtSavePopover } from "./components/ThoughtSavePopover";
 import { ThoughtVaultHubModal } from "./components/ThoughtVaultHubModal";
 import { WorkspaceSearchModal } from "./components/WorkspaceSearchModal";
-import { EditorFindBar } from "./components/EditorFindBar";
-import { GraphTabShell } from "./components/GraphTabShell";
 import { ActivityBar, type LeftPanelView } from "./components/ActivityBar";
 import { OnboardingOverlay } from "./components/OnboardingOverlay";
-import { KF_PRIVATE_LOCK_ICON_DOC_BAR_PX } from "./constants/kfPrivateUi";
+
+import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
+import { useHeadingNavigation } from "./hooks/useHeadingNavigation";
+import { useWindowLifecycle } from "./hooks/useWindowLifecycle";
 import { useKfPrivateForPath } from "./hooks/useKfPrivateForPath";
 import { useOpenDocs } from "./hooks/useOpenDocs";
 import { useOutline } from "./hooks/useOutline";
@@ -67,41 +57,7 @@ import "./App.css";
 /** 与会话恢复配套：须与 knowforge:lastWorkspace 指向同一工作区根路径 */
 const LAST_SESSION_KEY = "knowforge:lastSession";
 
-/** Wikilink `#` 标题定位：等 ProseMirror 挂载的最长等待（毫秒）；弱设备/大文档下避免无限 rAF */
-const WIKI_HEADING_NAV_RETRY_BUDGET_MS = 2500;
 
-const PM_HEADING_SELECTOR =
-  ".ProseMirror h1, .ProseMirror h2, .ProseMirror h3, .ProseMirror h4, .ProseMirror h5, .ProseMirror h6";
-
-/** 在 Milkdown 滚动容器内按 GitHub slug 查找标题 DOM（与 extractOutline / navigateToHeading 一致） */
-function findProseMirrorHeadingBySlug(
-  scrollEl: HTMLElement | null,
-  slug: string,
-): HTMLElement | null {
-  if (!scrollEl) {
-    return null;
-  }
-  const slugger = new GithubSlugger();
-  const headings = scrollEl.querySelectorAll(PM_HEADING_SELECTOR);
-  for (const heading of headings) {
-    if (!(heading instanceof HTMLElement)) {
-      continue;
-    }
-    const text = heading.textContent?.trim() ?? "";
-    if (slugger.slug(text) === slug) {
-      return heading;
-    }
-  }
-  return null;
-}
-
-function scrollMilkdownHeadingIntoView(scrollEl: HTMLElement, headingEl: HTMLElement) {
-  const pad = 12;
-  const cRect = scrollEl.getBoundingClientRect();
-  const eRect = headingEl.getBoundingClientRect();
-  const top = scrollEl.scrollTop + (eRect.top - cRect.top) - pad;
-  scrollEl.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
-}
 
 /** 与 src-tauri 中 rel_path_components_ok 规则一致，禁止空段、.、.. */
 function isValidStoredRelPath(relPath: string): boolean {
@@ -203,8 +159,7 @@ function App() {
   const anyDragging = leftResizable.isDragging || rightResizable.isDragging;
 
   const editorScrollRef = useRef<HTMLDivElement>(null);
-  /** 递增代数：新一次 wikilink 标题定位或卸载时作废仍在排队的 rAF */
-  const wikiHeadingNavRetryGenerationRef = useRef(0);
+
   const rawSourceTextareaRef = useRef<HTMLTextAreaElement>(null);
   const crepeEditorApiRef = useRef<CrepeMarkdownEditorApi | null>(null);
   const writingCoachRef = useRef<EditorWritingCoachHostHandle>(null);
@@ -213,8 +168,7 @@ function App() {
   const docState = useOpenDocs(workspaceReady);
   const activePathSwitchTraceRef = useRef<PerfTrace | null>(null);
   const markdownBodyCacheRef = useRef<Map<string, string>>(new Map());
-  const flushDirtyBeforeExitRef = useRef(docState.flushDirtyDocumentsBeforeExit);
-  flushDirtyBeforeExitRef.current = docState.flushDirtyDocumentsBeforeExit;
+
   const openOrFocusRef = useRef(docState.openOrFocusTab);
   openOrFocusRef.current = docState.openOrFocusTab;
 
@@ -281,38 +235,9 @@ function App() {
     workspaceRoot: rootPath,
   });
 
-  /**
-   * 离开「回顾」标签后本会话内不再显示角标（换工作区重置）。
-   * 必须在渲染阶段同步置位：若仅用 useEffect 在 tab 已非 review 后才 setState，
-   * 会多出一帧 dismissed 仍为 false，角标会按 totalDue 闪一下。
-   */
-  const reviewBadgeAfterVisitSuppressedRef = useRef(false);
-  const lastRootPathForReviewBadgeRef = useRef(rootPath);
-  if (lastRootPathForReviewBadgeRef.current !== rootPath) {
-    reviewBadgeAfterVisitSuppressedRef.current = false;
-    lastRootPathForReviewBadgeRef.current = rootPath;
-  }
-
-  const prevRightPanelTabForBadgeRef = useRef<RightPanelTab>(rightPanelTab);
-  if (prevRightPanelTabForBadgeRef.current === "review" && rightPanelTab !== "review") {
-    reviewBadgeAfterVisitSuppressedRef.current = true;
-  }
-
-  useLayoutEffect(() => {
-    prevRightPanelTabForBadgeRef.current = rightPanelTab;
-  }, [rightPanelTab]);
-
-  const reviewTabBadgeCount = useMemo(() => {
-    if (reviewBadgeAfterVisitSuppressedRef.current || rightPanelTab === "review" || reviewDueTabCount <= 0) {
-      return null;
-    }
-    return reviewDueTabCount;
-  }, [reviewDueTabCount, rightPanelTab, rootPath]);
-
-  const requestOpenChallengeReview = useCallback(() => {
-    setLeftPanelView("files");
-    setRightPanelOpen(true);
-    setRightPanelTab("review");
+  /** Navigate to Practice Mode (used by keyboard shortcut and onboarding) */
+  const requestOpenPracticeMode = useCallback(() => {
+    setLeftPanelView("practice");
   }, []);
 
   useEffect(() => {
@@ -337,15 +262,32 @@ function App() {
     docState,
     activePath: docState.activePath,
     tauriRuntime,
-    onStartChallengeReview: requestOpenChallengeReview,
+    onStartChallengeReview: requestOpenPracticeMode,
   });
 
   resetWorkspaceFileCommandsRef.current = resetWorkspaceFileCommands;
 
   useEffect(() => {
     const onOpenAiSettings = () => setAiSettingsOpen(true);
+    const onGoToPractice = () => setLeftPanelView("practice");
+    const onGoToFiles = () => setLeftPanelView("files");
+    const onOpenNoteInEditor = (e: Event) => {
+      const relPath = (e as CustomEvent<{ relPath: string }>).detail?.relPath;
+      if (relPath) {
+        setLeftPanelView("files");
+        void openOrFocusRef.current(relPath);
+      }
+    };
     window.addEventListener(OPEN_AI_SETTINGS_EVENT, onOpenAiSettings);
-    return () => window.removeEventListener(OPEN_AI_SETTINGS_EVENT, onOpenAiSettings);
+    window.addEventListener("knowforge:goToPractice", onGoToPractice);
+    window.addEventListener("knowforge:goToFiles", onGoToFiles);
+    window.addEventListener("knowforge:openNoteInEditor", onOpenNoteInEditor);
+    return () => {
+      window.removeEventListener(OPEN_AI_SETTINGS_EVENT, onOpenAiSettings);
+      window.removeEventListener("knowforge:goToPractice", onGoToPractice);
+      window.removeEventListener("knowforge:goToFiles", onGoToFiles);
+      window.removeEventListener("knowforge:openNoteInEditor", onOpenNoteInEditor);
+    };
   }, []);
 
   // 工作区就绪后从 vault config 读取持久化的 depthMode
@@ -465,16 +407,7 @@ function App() {
     void invoke("sync_open_markdown_watchers", { relPaths: docState.tabPaths }).catch(() => {});
   }, [workspaceReady, docState.tabPaths]);
 
-  /** 浏览器预览：关闭页面前提示未保存 */
-  useEffect(() => {
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (docState.hasAnyDirtyTab()) {
-        e.preventDefault();
-      }
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [docState.hasAnyDirtyTab]);
+
 
   useEffect(() => {
     /** 切换活动文档或标签时默认回到 Markdown 预览 */
@@ -656,80 +589,15 @@ function App() {
   const editorUsable =
     !!docState.activePath && !loadingDoc && !loadError && !!current;
 
-  const workspaceReadyForShortcutRef = useRef(workspaceReady);
-  const editorUsableForShortcutRef = useRef(editorUsable);
-  workspaceReadyForShortcutRef.current = workspaceReady;
-  editorUsableForShortcutRef.current = editorUsable;
-
-  /**
-   * 全局快捷键：单一 window keydown，避免多段 useEffect 在依赖抖动或 StrictMode 下重复注册；
-   * ⌘F 条件用 ref 读最新 workspace/editor 状态，监听本身空依赖只挂载一次。
-   */
-  useEffect(() => {
-    const inEditableField = (t: EventTarget | null) =>
-      t instanceof HTMLElement && t.closest("input, textarea, select, [contenteditable='true']");
-
-    const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      if (!mod) {
-        return;
-      }
-
-      // ⌘L / Ctrl+L：打开侧栏并切到 AI（输入框内不触发）
-      if (!e.shiftKey && (e.key === "l" || e.key === "L")) {
-        if (inEditableField(e.target)) {
-          return;
-        }
-        e.preventDefault();
-        setRightPanelOpen(true);
-        setRightPanelTab("ai");
-        return;
-      }
-
-      // ⌘⇧P / Ctrl+Shift+P：命令面板（输入框内不触发）
-      if (e.shiftKey && (e.key === "p" || e.key === "P")) {
-        if (inEditableField(e.target)) {
-          return;
-        }
-        e.preventDefault();
-        setCognitiveReportOpen(false);
-        setCommandPaletteOpen((o) => !o);
-        return;
-      }
-
-      // ⌘⇧W / Ctrl+Shift+W：手动触发写作教练（编辑器内也需响应）
-      if (e.shiftKey && (e.key === "w" || e.key === "W")) {
-        if (!editorUsableForShortcutRef.current) {
-          return;
-        }
-        e.preventDefault();
-        writingCoachRef.current?.triggerManually();
-        return;
-      }
-
-      // ⌘F / Ctrl+F：篇内查找（焦点在正文或原文区时）
-      if (!e.shiftKey && (e.key === "f" || e.key === "F")) {
-        const el = e.target;
-        if (!(el instanceof HTMLElement)) {
-          return;
-        }
-        if (el.closest("[data-editor-find-input]")) {
-          return;
-        }
-        if (!workspaceReadyForShortcutRef.current || !editorUsableForShortcutRef.current) {
-          return;
-        }
-        const inDoc = el.closest("[data-milkdown-root], .main__raw-doc-source, .editor-scroll__body");
-        if (!inDoc) {
-          return;
-        }
-        e.preventDefault();
-        setEditorFindOpen(true);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  useGlobalShortcuts(
+    {
+      openAiPanel: () => { setRightPanelOpen(true); setRightPanelTab("ai"); },
+      toggleCommandPalette: () => { setCognitiveReportOpen(false); setCommandPaletteOpen((o) => !o); },
+      triggerWritingCoach: () => { writingCoachRef.current?.triggerManually(); },
+      openEditorFind: () => { setEditorFindOpen(true); },
+    },
+    { workspaceReady, editorUsable },
+  );
 
   const saveDisabled =
     !workspaceReady || !editorUsable || !docState.dirty || docState.saving;
@@ -773,47 +641,7 @@ function App() {
     refreshTree,
   ]);
 
-  const navigateToHeading = useCallback((slug: string) => {
-    requestAnimationFrame(() => {
-      const outer = editorScrollRef.current;
-      const scrollEl = outer?.querySelector("[data-milkdown-root]") as HTMLElement | null;
-      const el = findProseMirrorHeadingBySlug(scrollEl, slug);
-      if (!(el instanceof HTMLElement) || !scrollEl) {
-        return;
-      }
-      scrollMilkdownHeadingIntoView(scrollEl, el);
-    });
-  }, []);
-
-  /** 换文注入后再定位标题（wikilink 带 # 片段） */
-  const navigateToHeadingWithRetry = useCallback((slug: string) => {
-    const myGen = (wikiHeadingNavRetryGenerationRef.current += 1);
-    const t0 = performance.now();
-
-    const step = () => {
-      if (wikiHeadingNavRetryGenerationRef.current !== myGen) {
-        return;
-      }
-      if (performance.now() - t0 > WIKI_HEADING_NAV_RETRY_BUDGET_MS) {
-        return;
-      }
-      const outer = editorScrollRef.current;
-      const scrollEl = outer?.querySelector("[data-milkdown-root]") as HTMLElement | null;
-      const el = findProseMirrorHeadingBySlug(scrollEl, slug);
-      if (el && scrollEl) {
-        scrollMilkdownHeadingIntoView(scrollEl, el);
-        return;
-      }
-      requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      wikiHeadingNavRetryGenerationRef.current += 1;
-    };
-  }, []);
+  const { navigateToHeading, navigateToHeadingWithRetry } = useHeadingNavigation(editorScrollRef);
 
   const onOpenCoachMarkdownPath = useCallback(
     async (relPath: string, meta?: { headingFragment?: string | null }) => {
@@ -832,6 +660,25 @@ function App() {
     [docState.openOrFocusTab, getCachedMarkdownBodyForEditor, navigateToHeadingWithRetry],
   );
 
+  const handleToolbarTabSelect = useCallback((p: string) => {
+    if (p === docState.activePath && leftPanelView === "files") {
+      return;
+    }
+    void changeView("files").then((ok) => {
+      if (!ok) return;
+      logPerfMark("markdown.tab_switch.select", {
+        from: docState.activePath,
+        to: p,
+      });
+      activePathSwitchTraceRef.current = startPerfTrace("markdown.tab_switch.to_next_frame", {
+        from: docState.activePath,
+        to: p,
+      });
+      docState.setSaveError(null);
+      docState.setActivePath(p);
+    });
+  }, [docState.activePath, leftPanelView, changeView, docState.setSaveError, docState.setActivePath]);
+
   const openCognitiveReportFromPalette = useCallback(() => {
     setCommandPaletteOpen(false);
     setCognitiveReportOpen(true);
@@ -846,56 +693,12 @@ function App() {
     [tauriRuntime],
   );
 
-  /** 关闭窗口前刷盘；磁盘冲突或未写入失败时拦截或二次确认 */
-  useEffect(() => {
-    if (!tauriRuntime || !appWindow) {
-      return;
-    }
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    void appWindow
-      .onCloseRequested(async (event) => {
-        event.preventDefault();
-        try {
-          const { conflictDirtyPaths, saveFailed } = await flushDirtyBeforeExitRef.current();
-          if (saveFailed) {
-            return;
-          }
-          if (conflictDirtyPaths.length > 0) {
-            const ok = await ask(
-              t("dialogs.closeWindowDiskConflict", { count: conflictDirtyPaths.length }),
-              {
-                title: t("dialogs.close"),
-                kind: "warning",
-              },
-            );
-            if (!ok) {
-              return;
-            }
-          }
-          await appWindow.destroy();
-        } catch (e) {
-          // 已 preventDefault：异常时必须尽力 destroy，否则窗口永远无法关闭
-          console.error(e);
-          try {
-            await appWindow.destroy();
-          } catch (e2) {
-            console.error(e2);
-          }
-        }
-      })
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-          return;
-        }
-        unlisten = fn;
-      });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [appWindow, tauriRuntime, t]);
+  useWindowLifecycle({
+    tauriRuntime,
+    appWindow,
+    flushDirtyBeforeExit: docState.flushDirtyDocumentsBeforeExit,
+    hasAnyDirtyTab: docState.hasAnyDirtyTab,
+  });
 
   const isMacPlatform = /Mac/i.test(navigator.userAgent);
   const isWindowsPlatform = /Windows/i.test(navigator.userAgent);
@@ -935,98 +738,7 @@ function App() {
     [appWindow],
   );
 
-  const renderWindowControls = (placement: "leading" | "trailing") => {
-    if (!tauriRuntime) {
-      return null;
-    }
 
-    const renderMacControls = isMacPlatform && placement === "leading";
-    const renderDesktopControls = !isMacPlatform && placement === "trailing";
-    if (!renderMacControls && !renderDesktopControls) {
-      return null;
-    }
-
-    /* macOS：系统交通灯在标题栏内（tauri.macos.conf.json：Transparent + decorations） */
-    if (renderMacControls) {
-      return null;
-    }
-
-    return (
-      <div
-        className="app-top-toolbar__window-controls app-top-toolbar__window-controls--desktop"
-        {...tauriDragExcludeProps}
-        aria-label={t("toolbar.windowControls")}
-      >
-        <button
-          type="button"
-          className="app-top-toolbar__window-control"
-          onClick={() => void appWindow?.minimize()}
-          aria-label={t("toolbar.minimize")}
-          title={t("toolbar.minimize")}
-        >
-          <svg
-            className="app-top-toolbar__window-control-icon"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden={true}
-          >
-            <path d="M5 12h14" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          className="app-top-toolbar__window-control"
-          onClick={() => void appWindow?.toggleMaximize()}
-          aria-label={t("toolbar.maximize")}
-          title={t("toolbar.maximize")}
-        >
-          <svg
-            className="app-top-toolbar__window-control-icon"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden={true}
-          >
-            <rect x="5" y="5" width="14" height="14" rx="1.5" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          className="app-top-toolbar__window-control app-top-toolbar__window-control--close"
-          onClick={() => void appWindow?.close()}
-          aria-label={t("toolbar.close")}
-          title={t("toolbar.close")}
-        >
-          <svg
-            className="app-top-toolbar__window-control-icon"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden={true}
-          >
-            <path d="M6 6l12 12" />
-            <path d="M18 6L6 18" />
-          </svg>
-        </button>
-      </div>
-    );
-  };
 
   return (
     <AiNoteContextProvider
@@ -1063,179 +775,36 @@ function App() {
           />
         </>
       ) : null}
-      <div
-        className="app-top-toolbar__banner"
-        onMouseDown={handleTitlebarMouseDown}
-        onDoubleClick={handleTitlebarDoubleClick}
-      >
-        <div className="app-top-toolbar__start" role="toolbar" aria-label={t("toolbar.files")}>
-          {renderWindowControls("leading")}
-          <button
-            type="button"
-            className={`app-top-toolbar__sidebar-toggle${sidebarOpen ? " is-active" : ""}`}
-            {...tauriDragExcludeProps}
-            onClick={() => setSidebarOpen((o) => !o)}
-            aria-pressed={sidebarOpen}
-            aria-label={sidebarOpen ? t("toolbar.hideTree") : t("toolbar.showTree")}
-            title={sidebarOpen ? t("toolbar.hideTree") : t("toolbar.showTree")}
-          >
-            <svg
-              className="app-top-toolbar__sidebar-toggle__icon"
-              width="19"
-              height="19"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden={true}
-            >
-              <rect x="3" y="3" width="18" height="18" rx="2.5" />
-              <path d="M9 5.5v13" />
-            </svg>
-          </button>
-          {tauriRuntime && workspaceReady ? (
-            <button
-              type="button"
-              className="app-top-toolbar__thought-hub"
-              {...tauriDragExcludeProps}
-              onClick={() => setWorkspaceSearchOpen(true)}
-              aria-label={t("toolbar.workspaceSearch")}
-              title={t("toolbar.workspaceSearchTitle")}
-            >
-              <svg
-                className="app-top-toolbar__thought-hub-icon"
-                width="19"
-                height="19"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden={true}
-                focusable="false"
-              >
-                <circle cx="11" cy="11" r="8" />
-                <path d="m21 21-4.35-4.35" />
-              </svg>
-            </button>
-          ) : null}
-        </div>
-        <div className="app-top-toolbar__editor">
-          <div className="app-top-toolbar__tabs">
-            <EditorTabBar
-              tabs={docState.tabPaths}
-              activePath={docState.activePath}
-              isDirty={docState.isDirty}
-              hasDiskStaleConflict={docState.hasDiskStaleConflict}
-              tauriDragExclude={tauriRuntime}
-              isKfPrivate={isPathKfPrivate}
-              onRenameTab={onRenameTabFromBar}
-              onSelect={(p) => {
-                if (p === docState.activePath && leftPanelView === "files") {
-                  return;
-                }
-                void changeView("files").then((ok) => {
-                  if (!ok) return;
-                  logPerfMark("markdown.tab_switch.select", {
-                    from: docState.activePath,
-                    to: p,
-                  });
-                  activePathSwitchTraceRef.current = startPerfTrace("markdown.tab_switch.to_next_frame", {
-                    from: docState.activePath,
-                    to: p,
-                  });
-                  docState.setSaveError(null);
-                  docState.setActivePath(p);
-                });
-              }}
-              onClose={(p) => void docState.closeTab(p)}
-              onCloseAll={() => void docState.closeAllTabs()}
-            />
-          </div>
-          <div className="app-top-toolbar__end">
-            {tauriRuntime && workspaceReady && editorUsable && docState.saveFeedback !== "idle" ? (
-              <span className="app-top-toolbar__save-status" aria-live="polite">
-                {docState.saveFeedback === "pending_auto"
-                  ? t("toolbar.autoSavePending")
-                  : docState.saveFeedback === "saving"
-                    ? t("toolbar.saving")
-                    : docState.saveFeedback === "saved"
-                      ? t("toolbar.saved")
-                      : null}
-              </span>
-            ) : null}
-            <button
-              type="button"
-              className="app-top-toolbar__save"
-              {...tauriDragExcludeProps}
-              disabled={saveDisabled}
-              aria-busy={docState.saving || docState.saveFeedback === "saving"}
-              aria-label={
-                docState.saving || docState.saveFeedback === "saving"
-                  ? t("toolbar.saving")
-                  : t("toolbar.save")
-              }
-              title={
-                docState.saving || docState.saveFeedback === "saving"
-                  ? t("toolbar.saving")
-                  : isMacPlatform
-                    ? t("toolbar.saveMac")
-                    : t("toolbar.saveWin")
-              }
-              onClick={() => void docState.handleSave()}
-            >
-              <svg
-                className="app-top-toolbar__save-icon"
-                width="19"
-                height="19"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden={true}
-              >
-                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-                <polyline points="17 21 17 13 7 13 7 21" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={`main__right-panel-toggle${rightPanelOpen ? " is-active" : ""}`}
-              {...tauriDragExcludeProps}
-              onClick={() => setRightPanelOpen((o) => !o)}
-              disabled={!workspaceReady}
-              aria-pressed={rightPanelOpen}
-              aria-label={rightPanelOpen ? t("toolbar.hideSidePanel") : t("toolbar.showSidePanel")}
-              title={
-                rightPanelOpen ? t("toolbar.hideSidePanelTitle") : t("toolbar.showSidePanelTitle")
-              }
-            >
-              <svg
-                className="main__right-panel-toggle__icon"
-                width="19"
-                height="19"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden={true}
-                focusable="false"
-              >
-                <rect x="3" y="3" width="18" height="18" rx="2.5" />
-                <path d="M15 5.5v13" />
-              </svg>
-            </button>
-            {renderWindowControls("trailing")}
-          </div>
-        </div>
-      </div>
+      <AppTopToolbar
+        tabPaths={docState.tabPaths}
+        activePath={docState.activePath}
+        isDirty={docState.isDirty}
+        hasDiskStaleConflict={docState.hasDiskStaleConflict}
+        isKfPrivate={isPathKfPrivate}
+        onSelectTab={handleToolbarTabSelect}
+        onCloseTab={(p) => void docState.closeTab(p)}
+        onCloseAllTabs={() => void docState.closeAllTabs()}
+        onRenameTab={onRenameTabFromBar}
+        tauriDragExclude={tauriRuntime}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((o) => !o)}
+        rightPanelOpen={rightPanelOpen}
+        onToggleRightPanel={() => setRightPanelOpen((o) => !o)}
+        workspaceReady={workspaceReady}
+        editorUsable={editorUsable}
+        saveDisabled={saveDisabled}
+        saving={docState.saving}
+        saveFeedback={docState.saveFeedback}
+        onSave={() => void docState.handleSave()}
+        onOpenWorkspaceSearch={() => setWorkspaceSearchOpen(true)}
+        tauriRuntime={tauriRuntime}
+        isMacPlatform={isMacPlatform}
+        tauriDragExcludeProps={tauriDragExcludeProps}
+        tauriWindowDragProps={tauriWindowDragProps}
+        onTitlebarMouseDown={handleTitlebarMouseDown}
+        onTitlebarDoubleClick={handleTitlebarDoubleClick}
+        appWindow={appWindow}
+      />
       <div
         id="app-file-directory-pane"
         className="app-sidebar-column"
@@ -1246,6 +815,7 @@ function App() {
           onViewChange={(v) => void changeView(v)}
           onOpenCognitiveReport={() => setCognitiveReportOpen(true)}
           onOpenSettings={() => setAiSettingsOpen(true)}
+          reviewDueCount={reviewDueTabCount}
         />
         <aside className="sidebar">
           <nav className="sidebar__nav" aria-label={t("toolbar.files")}>
@@ -1330,384 +900,47 @@ function App() {
           />
         )}
       </div>
-      <div
-        className={`content-area${showRightColumn && leftPanelView === "files" ? " content-area--with-right-panel" : ""}${!sidebarOpen ? " content-area--sidebar-collapsed" : ""}`}
-      >
-        {leftPanelView === "graph" ? (
-          <main className="main main--full-view">
-            <GraphTabShell
-              workspaceReady={workspaceReady}
-              workspaceRoot={rootPath}
-              tauriRuntime={tauriRuntime}
-              onOpenNote={(relPath) => {
-                setLeftPanelView("files");
-                void onOpenCoachMarkdownPath(relPath);
-              }}
-            />
-          </main>
-        ) : leftPanelView === "thoughts" ? (
-          thoughtManagementSessionActive ? (
-            <main className="main main--full-view app-thought-management-route">
-              <ThoughtMgmtAiConversationSessionProvider
-                workspaceReady={workspaceReady}
-                workspaceRoot={rootPath}
-                tauriRuntime={tauriRuntime}
-              >
-                <ThoughtManagementPanel
-                  workspaceReady={workspaceReady}
-                  tauriRuntime={tauriRuntime}
-                  onThoughtDetailDirtyChange={setThoughtMgmtBodyDirty}
-                  onOpenNote={(relPath) => {
-                    setLeftPanelView("files");
-                    void onOpenCoachMarkdownPath(relPath);
-                  }}
-                  isPathKfPrivate={isPathKfPrivate}
-                />
-              </ThoughtMgmtAiConversationSessionProvider>
-            </main>
-          ) : null
-        ) : (
-        <main className="main">
-          {docState.activePath != null &&
-            docState.hasDiskStaleConflict(docState.activePath) &&
-            editorUsable && (
-              <div className="main__disk-notice" role="alert">
-                <span className="main__disk-notice__text">{t("diskNotice.text")}</span>
-                <div className="main__disk-notice__actions">
-                  <button
-                    type="button"
-                    className="main__disk-notice__btn main__disk-notice__btn--primary"
-                    onClick={() => {
-                      const p = docState.activePath;
-                      if (p) {
-                        void docState.reloadFromDisk(p);
-                      }
-                    }}
-                  >
-                    {t("diskNotice.reload")}
-                  </button>
-                  <button
-                    type="button"
-                    className="main__disk-notice__btn"
-                    onClick={() => {
-                      const p = docState.activePath;
-                      if (p) {
-                        docState.dismissDiskStaleForPath(p);
-                      }
-                    }}
-                  >
-                    {t("diskNotice.dismiss")}
-                  </button>
-                </div>
-              </div>
-            )}
-          {docState.saveError ? (
-            <div className="main__save-error" role="alert">
-              <span className="main__save-error__text">{docState.saveError}</span>
-              <button
-                type="button"
-                className="main__save-error__dismiss"
-                onClick={() => docState.setSaveError(null)}
-                aria-label={t("main.dismiss")}
-              >
-                {t("main.dismiss")}
-              </button>
-            </div>
-          ) : null}
-          <div className="main__content">
-            {docState.activePath ? (
-              <div
-                id={MARKDOWN_TAB_PANEL_ID}
-                role="tabpanel"
-                aria-labelledby={editorTabDomId(docState.activePath)}
-                className="main__tab-panel"
-              >
-                {loadingDoc && <p className="main__placeholder">{t("main.loading")}</p>}
-                {!loadingDoc && loadError && (
-                  <p className="main__placeholder">{t("main.loadError", { details: loadError })}</p>
-                )}
-                {!loadingDoc && !loadError && current && (
-                  <>
-                    <div
-                      className="main__doc-bar"
-                      aria-live="polite"
-                      aria-atomic="true"
-                      {...tauriWindowDragProps}
-                    >
-                      <button
-                        type="button"
-                        className="file-tree__new-md main__doc-bar__privacy-icon-btn"
-                        aria-pressed={isPathKfPrivate(docState.activePath)}
-                        title={
-                          isPathKfPrivate(docState.activePath)
-                            ? t("kfPrivate.tooltipDocPrivate")
-                            : t("kfPrivate.tooltipDocPublic")
-                        }
-                        aria-label={
-                          isPathKfPrivate(docState.activePath)
-                            ? t("kfPrivate.ariaRemovePrivate")
-                            : t("kfPrivate.ariaMarkPrivate")
-                        }
-                        onClick={handleKfPrivateBarToggle}
-                        {...tauriDragExcludeProps}
-                      >
-                        {isPathKfPrivate(docState.activePath) ? (
-                          <KfPrivateLockIcon
-                            className="file-tree__new-md-icon"
-                            size={KF_PRIVATE_LOCK_ICON_DOC_BAR_PX}
-                          />
-                        ) : (
-                          <svg
-                            className="file-tree__new-md-icon"
-                            width={KF_PRIVATE_LOCK_ICON_DOC_BAR_PX}
-                            height={KF_PRIVATE_LOCK_ICON_DOC_BAR_PX}
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            aria-hidden={true}
-                          >
-                            <circle cx="12" cy="12" r="10" />
-                            <line x1="2" y1="12" x2="22" y2="12" />
-                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-                          </svg>
-                        )}
-                      </button>
-                      <span className="main__doc-bar__path" dir="ltr" title={docState.activePath}>
-                        {docState.activePath}
-                      </span>
-                      <div className="main__doc-bar__end">
-                        <button
-                          type="button"
-                          className="file-tree__new-md main__doc-bar__source-toggle"
-                          onClick={toggleMarkdownSourceView}
-                          aria-pressed={showMarkdownSource}
-                          aria-label={
-                            showMarkdownSource ? t("main.backToPreviewTitle") : t("main.viewRawSourceTitle")
-                          }
-                          title={
-                            showMarkdownSource ? t("main.backToPreviewTitle") : t("main.viewRawSourceTitle")
-                          }
-                          {...tauriDragExcludeProps}
-                        >
-                          {showMarkdownSource ? (
-                            <svg
-                              className="file-tree__new-md-icon"
-                              width={KF_PRIVATE_LOCK_ICON_DOC_BAR_PX}
-                              height={KF_PRIVATE_LOCK_ICON_DOC_BAR_PX}
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              aria-hidden={true}
-                            >
-                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                              <circle cx="12" cy="12" r="3" />
-                            </svg>
-                          ) : (
-                            <svg
-                              className="file-tree__new-md-icon"
-                              width={KF_PRIVATE_LOCK_ICON_DOC_BAR_PX}
-                              height={KF_PRIVATE_LOCK_ICON_DOC_BAR_PX}
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              aria-hidden={true}
-                            >
-                              <polyline points="16 18 22 12 16 6" />
-                              <polyline points="8 6 2 12 8 18" />
-                            </svg>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                    <div
-                      className="editor-scroll"
-                      ref={editorScrollRef}
-                      aria-label={t("main.markdownEditor", { path: docState.activePath })}
-                    >
-                      <div
-                        className={`editor-scroll__body${showMarkdownSource ? " editor-scroll__body--raw" : ""}`}
-                      >
-                        <div className="editor-scroll__crepe-wrap">
-                          <Suspense
-                            fallback={
-                              <div
-                                className="editor-scroll__crepe-suspense-fallback"
-                                aria-busy={true}
-                              >
-                                {t("settings.loading")}
-                              </div>
-                            }
-                          >
-                            <CrepeMarkdownEditor
-                              docKey={docState.activePath}
-                              initialMarkdown={activeMarkdownBodyForEditor ?? ""}
-                              contentSyncKey={current.contentInjectEpoch}
-                              onMarkdownChange={docState.handleMarkdownChange}
-                              wikiSuggestFiles={wikiSuggestFiles}
-                              onOpenInternalMarkdownLink={onOpenCoachMarkdownPath}
-                              onEditorReady={(api) => {
-                                crepeEditorApiRef.current = api;
-                              }}
-                              onEditorDispose={() => {
-                                crepeEditorApiRef.current = null;
-                              }}
-                              onSaveAsThought={setEditorSaveThoughtText}
-                            />
-                          </Suspense>
-                        </div>
-                        {showMarkdownSource ? (
-                          <textarea
-                            ref={rawSourceTextareaRef}
-                            className="main__raw-doc-source"
-                            value={current.content}
-                            onChange={(e) =>
-                              docState.handleMarkdownChange(docState.activePath!, e.target.value, {
-                                fullDocument: true,
-                              })
-                            }
-                            spellCheck={false}
-                            autoCapitalize="off"
-                            autoCorrect="off"
-                            aria-label={t("main.rawSourceAria")}
-                            {...tauriDragExcludeProps}
-                          />
-                        ) : null}
-                        <EditorWritingCoachHost
-                          ref={writingCoachRef}
-                          editorApiRef={crepeEditorApiRef}
-                          activePath={docState.activePath}
-                          workspaceReady={workspaceReady}
-                          showMarkdownSource={showMarkdownSource}
-                          onOpenMarkdownPath={onOpenCoachMarkdownPath}
-                        />
-                        <EditorFindBar
-                          open={editorFindOpen}
-                          onClose={() => setEditorFindOpen(false)}
-                          previewMode={!showMarkdownSource}
-                          rawFullMarkdown={current.content}
-                          rawTextareaRef={rawSourceTextareaRef}
-                          crepeApiRef={crepeEditorApiRef}
-                          docKey={docState.activePath}
-                          workspaceSearchJumpSeed={editorFindWorkspaceSeed}
-                          onWorkspaceSearchJumpSeedConsumed={clearEditorFindWorkspaceSeed}
-                        />
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-            ) : null}
-            {!docState.activePath && docState.tabPaths.length === 0 && rootPath && (
-              <p className="main__placeholder">{t("main.selectFile")}</p>
-            )}
-            {!docState.activePath && docState.tabPaths.length === 0 && !rootPath && (
-              <p className="main__placeholder">{t("main.openFolderFirst")}</p>
-            )}
-          </div>
-        </main>
-        )}
-        {showRightColumn && leftPanelView === "files" && (
-          <div
-            className={`panel-resizer panel-resizer--right${rightResizable.isDragging ? " panel-resizer--active" : ""}`}
-            onMouseDown={rightResizable.handleMouseDown}
-            role="separator"
-            aria-label={t("toolbar.resizeRight")}
-          />
-        )}
-        {showRightColumn && leftPanelView === "files" && (
-          <AiConversationSessionProvider
-            workspaceReady={workspaceReady}
-            workspaceRoot={rootPath}
-            tauriRuntime={tauriRuntime}
-            initialDepthMode={initialDepthMode}
-          >
-            <RightPanelShell
-              tab={rightPanelTab}
-              onViewChange={setRightPanelTab}
-              onAfterSelectAiTab={() => setSidebarOpen(false)}
-              outlineTabEnabled={editorReady}
-              linkRecTabEnabled={docState.activePath != null}
-              tauriDragExclude={tauriRuntime}
-              outlineToolbarEnd={
-                rightPanelTab === "outline" && editorReady ? (
-                  <OutlineBulkToolbar
-                    outlineHasBranches={outlineFold.outlineHasBranches}
-                    allOutlineBranchesExpanded={outlineFold.allOutlineBranchesExpanded}
-                    onToggleBulk={outlineFold.toggleAllOutlineBranchesBulk}
-                  />
-                ) : rightPanelTab === "ai" ? (
-                  <AiConversationToolbar />
-                ) : null
-              }
-              outlinePanel={
-                <>
-                  <EditorThoughtsPanel
-                    activeRelPath={docState.activePath}
-                    outlinePanelActive={rightPanelOpen && rightPanelTab === "outline"}
-                    savedMarkdownSnapshot={
-                      docState.activePath &&
-                      current &&
-                      !current.loading &&
-                      !current.loadError
-                        ? current.savedContent
-                        : undefined
-                    }
-                    editorContentInjectEpoch={
-                      docState.activePath
-                        ? (current?.contentInjectEpoch ?? 0)
-                        : 0
-                    }
-                    workspaceReady={workspaceReady}
-                    tauriRuntime={tauriRuntime}
-                    onOpenNote={(relPath) => {
-                      void onOpenCoachMarkdownPath(relPath);
-                    }}
-                  />
-                  <OutlinePanel
-                    fold={outlineFold}
-                    onNavigate={navigateToHeading}
-                    characterCount={outlineState.characterCount}
-                    tauriDragRegion={tauriRuntime}
-                  />
-                </>
-              }
-              aiPanel={<AiConversationPanel />}
-              linkRecPanel={
-                <LinkRecommendationPanel
-                  workspaceRoot={rootPath}
-                  activeRelPath={docState.activePath}
-                  panelActive={rightPanelOpen && rightPanelTab === "linkRec"}
-                  savedMarkdownSnapshot={
-                    docState.activePath &&
-                    current &&
-                    !current.loading &&
-                    !current.loadError
-                      ? current.savedContent
-                      : undefined
-                  }
-                  editorContentInjectEpoch={
-                    docState.activePath ? (current?.contentInjectEpoch ?? 0) : 0
-                  }
-                  workspaceReady={workspaceReady}
-                  tauriRuntime={tauriRuntime}
-                  crepeApiRef={crepeEditorApiRef}
-                />
-              }
-              reviewPanel={<RightPanelReviewTab onClose={() => setRightPanelTab("ai")} />}
-              reviewTabBadgeCount={reviewTabBadgeCount}
-            />
-          </AiConversationSessionProvider>
-        )}
-      </div>
+      <ContentArea
+        leftPanelView={leftPanelView}
+        sidebarOpen={sidebarOpen}
+        workspaceReady={workspaceReady}
+        tauriRuntime={tauriRuntime}
+        rootPath={rootPath}
+        docState={docState}
+        editorReady={editorReady}
+        showMarkdownSource={showMarkdownSource}
+        activeMarkdownBodyForEditor={activeMarkdownBodyForEditor}
+        editorScrollRef={editorScrollRef}
+        crepeEditorApiRef={crepeEditorApiRef}
+        rawSourceTextareaRef={rawSourceTextareaRef}
+        writingCoachRef={writingCoachRef}
+        wikiSuggestFiles={wikiSuggestFiles}
+        isPathKfPrivate={isPathKfPrivate}
+        onOpenCoachMarkdownPath={onOpenCoachMarkdownPath}
+        onToggleMarkdownSource={toggleMarkdownSourceView}
+        onKfPrivateBarToggle={handleKfPrivateBarToggle}
+        onSaveAsThought={setEditorSaveThoughtText}
+        editorFindOpen={editorFindOpen}
+        editorFindWorkspaceSeed={editorFindWorkspaceSeed}
+        onEditorFindClose={() => setEditorFindOpen(false)}
+        onEditorFindSeedConsumed={clearEditorFindWorkspaceSeed}
+        showRightColumn={showRightColumn}
+        rightPanelOpen={rightPanelOpen}
+        rightPanelTab={rightPanelTab}
+        onRightPanelTabChange={setRightPanelTab}
+        onAfterSelectAiTab={() => setSidebarOpen(false)}
+        rightResizableIsDragging={rightResizable.isDragging}
+        rightResizableHandleMouseDown={rightResizable.handleMouseDown}
+        initialDepthMode={initialDepthMode}
+        outlineState={outlineState}
+        outlineFold={outlineFold}
+        navigateToHeading={navigateToHeading}
+        thoughtManagementSessionActive={thoughtManagementSessionActive}
+        onThoughtMgmtDirtyChange={setThoughtMgmtBodyDirty}
+        onSetLeftPanelView={setLeftPanelView}
+        tauriDragExcludeProps={tauriDragExcludeProps}
+        tauriWindowDragProps={tauriWindowDragProps}
+      />
       {aiSettingsOpen ? (
         <Suspense fallback={null}>
           <AiLlmSettingsModal
@@ -1777,7 +1010,7 @@ function App() {
         onStartChallenge={() => {
           setOnboardingOpen(false);
           localStorage.setItem("knowforge:onboardingCompleted", "true");
-          requestOpenChallengeReview();
+          requestOpenPracticeMode();
         }}
         tauriRuntime={tauriRuntime}
       />

@@ -842,6 +842,7 @@
     "graph": "理解图谱",
     "linkRec": "链接推荐",
     "thoughts": "全部想法",
+    "practice": "练习",
     "report": "认知成长报告",
     "settings": "设置"
   },
@@ -864,5 +865,73 @@
     "challenges": " 次挑战",
     "confirmExport": "导出的内容可能包含你笔记中的部分文字，确认分享？",
     "confirmExportTitle": "确认导出"
+  },
+  "practice": {
+    "tabReview": "回顾",
+    "tabDiscovery": "发现",
+    "reviewStats": "今日 {{done}}/{{cap}} · {{due}} 个想法待回顾",
+    "sourcePreviewEmpty": "选择一个想法以查看源笔记",
+    "sourcePreviewLoading": "加载中…",
+    "sourcePreviewError": "无法加载源笔记",
+    "completion": {
+      "title": "今日回顾已完成",
+      "picksLabel": "顺便看看？",
+      "exit": "回到笔记",
+      "goDiscovery": "探索发现"
+    }
+  },
+  "discovery": {
+    "loading": "正在分析笔记…",
+    "error": "加载候选段落失败",
+    "emptyFilter": "该类型暂无候选段落",
+    "emptyAll": "你已检视完所有发现！",
+    "prevPage": "上一页",
+    "nextPage": "下一页",
+    "promote": "晋升",
+    "dismiss": "忽略",
+    "cluster": "聚类",
+    "isolated": "孤立",
+    "filterAll": "全部",
+    "filterSimilarity": "重复",
+    "filterCluster": "聚类",
+    "filterIsolated": "孤立",
+    "sortLabel": "排序：",
+    "sortFreshness": "新鲜度",
+    "sortSimilarity": "相似度",
+    "sortAge": "遗忘时间",
+    "batch": {
+      "selectAll": "全选",
+      "selected": "已选 {{count}} 条",
+      "dismiss": "批量忽略",
+      "promote": "批量晋升",
+      "clear": "取消选择"
+    },
+    "detail": {
+      "emptyState": "选择一个候选以查看详情",
+      "loading": "加载中…",
+      "similarityTitle": "相似段落",
+      "similarityScore": "相似度：{{score}}",
+      "pairedDoc": "配对文档",
+      "pairedUnavailable": "配对内容暂不可用",
+      "promoteOne": "追踪为想法",
+      "clusterTitle": "反复出现的主题",
+      "clusterInfo": "跨文档重复出现",
+      "sourceFile": "来源",
+      "alsoFoundIn": "也出现在",
+      "clusterHint": "这个想法在多篇笔记中反复出现。将其晋升为想法，可以持续追踪和深化。",
+      "createThought": "创建想法",
+      "contextUnavailable": "无法加载上下文",
+      "isolatedTitle": "孤立段落",
+      "isolatedInfo": "从未被其他笔记关联",
+      "startTracking": "开始追踪",
+      "viewInSource": "在原文中查看 ↗"
+    }
+  },
+  "reviewReminder": {
+    "overdueDays": "逾期 {{count}} 天",
+    "dueToday": "今日到期",
+    "label": "有一个相关想法可以回顾：",
+    "goToPractice": "去练习 →",
+    "dismiss": "不了"
   }
 }

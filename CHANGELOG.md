@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.6] - 2026-07-15
+
+### Added
+- Practice Mode: new activity bar entry with routing, DiscoveryPane, PracticeSourcePreview (dual-pane), and PracticeReviewPane
+- Review completion transition with daily picks in Practice Mode
+- Discovery batch operations: multi-select, batch dismiss/promote
+- Discovery detail views by candidate type
+- Backend commands: `list_discovery_candidates` and `batch_dismiss_candidates`
+- Latent paragraphs: embedding-based paragraph candidate engine
+- Challenge review: support latent paragraph candidates in review queue
+- Challenge: question quality feedback loop
+- Review: show related documents for latent paragraph candidates
+- Review: abandon button in QA phase to return to pick
+- Review push notifications and thought growth story export
+- AI degraded guidance and export enhancements (spec-1c, spec-3b)
+- AI guide: show setup guidance when LLM is not configured
+- Onboarding: replace step 4 tips with dynamic discovery card
+- SM-2 algorithm upgrade for challenge scheduling
+- i18n: en/zh translations for practice, discovery, reviewReminder
+
+### Changed
+- Right panel: remove review tab, redirect to Practice Mode
+- App.tsx refactored: extract ContentArea, EditorView, AppTopToolbar and hooks
+- Cognitive report panel split into card-based subcomponents
+- Review: replace inline challenge Q&A with lightweight reminder
+- Graph, topic-network and skills modules frozen (chore)
+
+### Fixed
+- Agent loop: prevent watchdog timeout during long async operations
+- Latent: trigger scan on workspace open when candidates table is empty
+- Latent: add filter versioning to invalidate stale candidates
+- Review: deduplicate prefetch and on-demand question generation
+- Review: pre-generate challenge questions to eliminate wait time
+- Graph/topic-network entry restored in ActivityBar
+- Suppress compiler warnings (unused imports, variables, dead code)
+
 ## [0.7.5] - 2026-07-08
 
 ### Added

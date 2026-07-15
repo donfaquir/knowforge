@@ -1,0 +1,321 @@
+/* DiscoveryDetailView — Right-column detail views for discovery candidates */
+
+.discovery-detail {
+  padding: 16px 20px;
+  height: 100%;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.discovery-detail--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-dim, #999);
+}
+
+/* --- Header --- */
+
+.discovery-detail__header {
+  margin-bottom: 16px;
+}
+
+.discovery-detail__title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  color: var(--fg-default, #1a1a1a);
+}
+
+.discovery-detail__badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.discovery-detail__badge--similarity {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+.discovery-detail__badge--cluster {
+  background: rgba(168, 85, 247, 0.1);
+  color: #7c3aed;
+}
+
+.discovery-detail__badge--isolated {
+  background: rgba(234, 179, 8, 0.1);
+  color: #a16207;
+}
+
+/* --- Compare layout (similarity) --- */
+
+.discovery-detail__compare {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.discovery-detail__compare-col {
+  min-width: 0;
+}
+
+.discovery-detail__compare-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-dim, #666);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.discovery-detail__compare-content {
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.015);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-y: auto;
+  max-height: 300px;
+}
+
+.discovery-detail__compare-content p {
+  margin: 0 0 8px;
+}
+
+.discovery-detail__compare-content p:last-child {
+  margin-bottom: 0;
+}
+
+.discovery-detail__compare-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.discovery-detail__compare-vs {
+  font-size: 18px;
+  color: var(--fg-dim, #999);
+  font-weight: 300;
+}
+
+/* --- Section blocks --- */
+
+.discovery-detail__section {
+  margin-bottom: 14px;
+}
+
+.discovery-detail__section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-dim, #666);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.discovery-detail__file-name {
+  text-transform: none;
+  font-weight: 500;
+  color: var(--fg-default, #333);
+}
+
+.discovery-detail__line-hint {
+  font-weight: 400;
+  opacity: 0.6;
+  text-transform: none;
+}
+
+.discovery-detail__excerpt-block {
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.015);
+  line-height: 1.6;
+}
+
+.discovery-detail__excerpt-block p {
+  margin: 0 0 8px;
+}
+
+.discovery-detail__excerpt-block p:last-child {
+  margin-bottom: 0;
+}
+
+/* --- Context block (isolated) --- */
+
+.discovery-detail__context-block {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.discovery-detail__context-dim {
+  padding: 8px 12px;
+  opacity: 0.5;
+  font-size: 12px;
+}
+
+.discovery-detail__context-dim p {
+  margin: 0 0 4px;
+}
+
+.discovery-detail__context-highlight {
+  padding: 10px 12px;
+  background: rgba(255, 213, 79, 0.12);
+  border-left: 3px solid #ffd54f;
+}
+
+.discovery-detail__context-highlight p {
+  margin: 0 0 6px;
+}
+
+.discovery-detail__context-highlight p:last-child {
+  margin-bottom: 0;
+}
+
+/* --- Hint text --- */
+
+.discovery-detail__hint {
+  font-size: 12px;
+  color: var(--fg-dim, #888);
+  margin: 12px 0 16px;
+  font-style: italic;
+}
+
+/* --- Actions --- */
+
+.discovery-detail__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.discovery-detail__btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: background 0.12s, color 0.12s;
+}
+
+.discovery-detail__btn--primary {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+
+.discovery-detail__btn--primary:hover {
+  background: var(--accent-hover, #2563eb);
+}
+
+.discovery-detail__btn--secondary {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--fg-default, #333);
+}
+
+.discovery-detail__btn--secondary:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.discovery-detail__btn--ghost {
+  background: transparent;
+  color: var(--fg-dim, #888);
+}
+
+.discovery-detail__btn--ghost:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--fg-default, #333);
+}
+
+/* --- Loading / empty --- */
+
+.discovery-detail__loading {
+  color: var(--fg-dim, #999);
+  font-style: italic;
+}
+
+.discovery-detail__empty-text {
+  color: var(--fg-dim, #999);
+  font-style: italic;
+}
+
+/* --- Dark mode --- */
+
+@media (prefers-color-scheme: dark) {
+  .discovery-detail__title {
+    color: var(--fg-default, #eee);
+  }
+
+  .discovery-detail__badge--similarity {
+    background: rgba(239, 68, 68, 0.15);
+    color: #fca5a5;
+  }
+
+  .discovery-detail__badge--cluster {
+    background: rgba(168, 85, 247, 0.15);
+    color: #c4b5fd;
+  }
+
+  .discovery-detail__badge--isolated {
+    background: rgba(234, 179, 8, 0.15);
+    color: #fcd34d;
+  }
+
+  .discovery-detail__compare-content,
+  .discovery-detail__excerpt-block {
+    border-color: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .discovery-detail__context-block {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .discovery-detail__context-highlight {
+    background: rgba(255, 213, 79, 0.08);
+    border-left-color: rgba(255, 213, 79, 0.6);
+  }
+
+  .discovery-detail__file-name {
+    color: var(--fg-default, #ddd);
+  }
+
+  .discovery-detail__actions {
+    border-top-color: rgba(255, 255, 255, 0.06);
+  }
+
+  .discovery-detail__btn--primary {
+    background: var(--accent, #60a5fa);
+  }
+
+  .discovery-detail__btn--primary:hover {
+    background: var(--accent-hover, #93c5fd);
+  }
+
+  .discovery-detail__btn--secondary {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--fg-default, #ddd);
+  }
+
+  .discovery-detail__btn--secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .discovery-detail__btn--ghost {
+    color: var(--fg-dim, #999);
+  }
+
+  .discovery-detail__btn--ghost:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--fg-default, #ddd);
+  }
+}

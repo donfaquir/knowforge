@@ -1,0 +1,120 @@
+/* InlineReviewReminder — lightweight post-conversation review prompt */
+
+.inline-review-reminder {
+  margin: 12px 0 4px;
+}
+
+.inline-review-reminder__divider {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.08);
+  margin-bottom: 10px;
+}
+
+.inline-review-reminder__body {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 213, 79, 0.06);
+}
+
+.inline-review-reminder__icon {
+  flex-shrink: 0;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.inline-review-reminder__text {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.inline-review-reminder__label {
+  display: block;
+  color: var(--fg-default, #333);
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.inline-review-reminder__excerpt {
+  display: block;
+  color: var(--fg-dim, #666);
+  font-style: italic;
+}
+
+.inline-review-reminder__actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.inline-review-reminder__btn {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: background 0.12s, color 0.12s;
+}
+
+.inline-review-reminder__btn--primary {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+
+.inline-review-reminder__btn--primary:hover {
+  background: var(--accent-hover, #2563eb);
+}
+
+.inline-review-reminder__btn--ghost {
+  background: transparent;
+  color: var(--fg-dim, #888);
+}
+
+.inline-review-reminder__btn--ghost:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--fg-default, #333);
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .inline-review-reminder__divider {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .inline-review-reminder__body {
+    border-color: rgba(255, 255, 255, 0.1);
+    background: rgba(255, 213, 79, 0.04);
+  }
+
+  .inline-review-reminder__label {
+    color: var(--fg-default, #eee);
+  }
+
+  .inline-review-reminder__excerpt {
+    color: var(--fg-dim, #999);
+  }
+
+  .inline-review-reminder__btn--primary {
+    background: var(--accent, #60a5fa);
+  }
+
+  .inline-review-reminder__btn--primary:hover {
+    background: var(--accent-hover, #93c5fd);
+  }
+
+  .inline-review-reminder__btn--ghost {
+    color: var(--fg-dim, #999);
+  }
+
+  .inline-review-reminder__btn--ghost:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--fg-default, #ddd);
+  }
+}

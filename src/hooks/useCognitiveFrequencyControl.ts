@@ -120,7 +120,7 @@ export function useCognitiveFrequencyControl(): CognitiveFrequencyControl {
   const [snoozeUntil, setSnoozeUntil] = useState<string | undefined>(undefined);
   const [independentReviewEnabled, setIndependentReviewEnabledState] = useState(false);
   const [challengeReviewDailyCapIndependent, setChallengeReviewDailyCapIndependent] = useState(3);
-  const [challengeReviewDailyCapInline, setChallengeReviewDailyCapInline] = useState(2);
+  const [challengeReviewDailyCapInline, setChallengeReviewDailyCapInline] = useState(3);
   const [challengeReviewInlineDates, setChallengeReviewInlineDates] =
     useState<ChallengeReviewInlineDatesForUi>({ byDay: {} });
 

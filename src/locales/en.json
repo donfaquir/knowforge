@@ -842,6 +842,7 @@
     "graph": "Understanding graph",
     "linkRec": "Link recommendations",
     "thoughts": "All thoughts",
+    "practice": "Practice",
     "report": "Cognitive growth report",
     "settings": "Settings"
   },
@@ -864,5 +865,73 @@
     "challenges": " challenges",
     "confirmExport": "The exported content may include text from your notes. Confirm to share?",
     "confirmExportTitle": "Confirm Export"
+  },
+  "practice": {
+    "tabReview": "Review",
+    "tabDiscovery": "Discovery",
+    "reviewStats": "Today {{done}}/{{cap}} · {{due}} thoughts due",
+    "sourcePreviewEmpty": "Select a thought to view its source note",
+    "sourcePreviewLoading": "Loading…",
+    "sourcePreviewError": "Failed to load source note",
+    "completion": {
+      "title": "Today's review completed",
+      "picksLabel": "Worth a look?",
+      "exit": "Back to notes",
+      "goDiscovery": "Explore discoveries"
+    }
+  },
+  "discovery": {
+    "loading": "Analyzing notes…",
+    "error": "Failed to load candidates",
+    "emptyFilter": "No candidates of this type",
+    "emptyAll": "All discoveries reviewed!",
+    "prevPage": "Prev",
+    "nextPage": "Next",
+    "promote": "Promote",
+    "dismiss": "Dismiss",
+    "cluster": "cluster",
+    "isolated": "isolated",
+    "filterAll": "All",
+    "filterSimilarity": "Similar",
+    "filterCluster": "Cluster",
+    "filterIsolated": "Isolated",
+    "sortLabel": "Sort:",
+    "sortFreshness": "Freshness",
+    "sortSimilarity": "Similarity",
+    "sortAge": "Age",
+    "batch": {
+      "selectAll": "Select all",
+      "selected": "{{count}} selected",
+      "dismiss": "Batch dismiss",
+      "promote": "Batch promote",
+      "clear": "Clear"
+    },
+    "detail": {
+      "emptyState": "Select a candidate to view details",
+      "loading": "Loading…",
+      "similarityTitle": "Similar Passages",
+      "similarityScore": "Similarity: {{score}}",
+      "pairedDoc": "Paired document",
+      "pairedUnavailable": "Paired content unavailable",
+      "promoteOne": "Track as thought",
+      "clusterTitle": "Recurring Theme",
+      "clusterInfo": "Cross-document recurrence",
+      "sourceFile": "Source",
+      "alsoFoundIn": "Also found in",
+      "clusterHint": "This idea recurs across multiple notes. Promoting it as a thought lets you track and deepen it.",
+      "createThought": "Create thought",
+      "contextUnavailable": "Context unavailable",
+      "isolatedTitle": "Isolated Paragraph",
+      "isolatedInfo": "Never linked to other notes",
+      "startTracking": "Start tracking",
+      "viewInSource": "View in source ↗"
+    }
+  },
+  "reviewReminder": {
+    "overdueDays": "{{count}} days overdue",
+    "dueToday": "due today",
+    "label": "A related thought is ready for review:",
+    "goToPractice": "Practice →",
+    "dismiss": "Not now"
   }
 }

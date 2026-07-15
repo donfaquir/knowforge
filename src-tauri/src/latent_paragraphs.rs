@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -28,6 +28,44 @@ pub struct CandidateForUi {
     pub paired_rel_path: Option<String>,
     pub start_line: i32,
     pub end_line: i32,
+    // LLM confirmation (Spec 11)
+    pub llm_confirmed: Option<String>,
+    pub llm_reason: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Discovery filter/response types (for list_candidates_filtered)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveryFilter {
+    /// "high_similarity" | "cross_doc_recurrence" | "semantic_isolated" | None (all)
+    pub marking_reason: Option<String>,
+    /// "freshness" | "similarity" | "age"
+    pub sort_by: Option<String>,
+    /// "confirmed" | "downgraded" | "unconfirmed" | None (all visible)
+    pub llm_status: Option<String>,
+    pub offset: usize,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveryListResponse {
+    pub items: Vec<CandidateForUi>,
+    pub total: usize,
+    pub by_reason: DiscoveryReasonCounts,
+    /// Count of LLM-confirmed candidates (for filter badge)
+    pub confirmed_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveryReasonCounts {
+    pub high_similarity: usize,
+    pub cross_doc_recurrence: usize,
+    pub semantic_isolated: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +114,31 @@ pub fn init_candidates_schema(conn: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|e| format!("init thought_candidates schema: {e}"))?;
+
+    // Migration: add LLM confirmation columns (Spec 11)
+    migrate_add_llm_confirm_columns(conn)?;
+
+    Ok(())
+}
+
+/// Add llm_confirmed, llm_reason, llm_confirmed_at columns if they do not exist.
+fn migrate_add_llm_confirm_columns(conn: &Connection) -> Result<(), String> {
+    // Check if column already exists by querying table_info
+    let has_col: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('thought_candidates') WHERE name = 'llm_confirmed'")
+        .and_then(|mut s| s.exists([]))
+        .unwrap_or(false);
+    if has_col {
+        return Ok(());
+    }
+    conn.execute_batch(
+        r#"
+        ALTER TABLE thought_candidates ADD COLUMN llm_confirmed TEXT;
+        ALTER TABLE thought_candidates ADD COLUMN llm_reason TEXT;
+        ALTER TABLE thought_candidates ADD COLUMN llm_confirmed_at TEXT;
+        "#,
+    )
+    .map_err(|e| format!("migrate llm_confirm columns: {e}"))?;
     Ok(())
 }
 
@@ -738,10 +801,243 @@ pub fn list_candidates(
             paired_rel_path: paired,
             start_line,
             end_line,
+            llm_confirmed: None,
+            llm_reason: None,
         });
     }
 
     Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// Filtered listing for Discovery pane
+// ---------------------------------------------------------------------------
+
+fn count_by_reason(conn: &Connection) -> Result<DiscoveryReasonCounts, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT marking_reason, COUNT(*) FROM thought_candidates
+             WHERE dismissed_at IS NULL AND promoted_thought_id IS NULL
+               AND (llm_confirmed IS NULL OR llm_confirmed != 'rejected')
+             GROUP BY marking_reason",
+        )
+        .map_err(|e| format!("prepare count_by_reason: {e}"))?;
+
+    let mut counts = DiscoveryReasonCounts {
+        high_similarity: 0,
+        cross_doc_recurrence: 0,
+        semantic_isolated: 0,
+    };
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?)))
+        .map_err(|e| format!("count_by_reason query: {e}"))?;
+
+    for row in rows {
+        let (reason, cnt) = row.map_err(|e| format!("count_by_reason row: {e}"))?;
+        match reason.as_str() {
+            "high_similarity" => counts.high_similarity = cnt,
+            "cross_doc_recurrence" => counts.cross_doc_recurrence = cnt,
+            "semantic_isolated" => counts.semantic_isolated = cnt,
+            _ => {}
+        }
+    }
+    Ok(counts)
+}
+
+/// List candidates with filtering, sorting, and pagination for the Discovery pane.
+/// `workspace_root` is used for freshness sort (stat file mtime).
+pub fn list_candidates_filtered(
+    conn: &Connection,
+    filter: &DiscoveryFilter,
+    workspace_root: &Path,
+) -> Result<DiscoveryListResponse, String> {
+    let by_reason = count_by_reason(conn)?;
+
+    // Build WHERE clause
+    let mut where_clauses = vec![
+        "tc.dismissed_at IS NULL".to_string(),
+        "tc.promoted_thought_id IS NULL".to_string(),
+        // Spec 11: exclude LLM-rejected candidates by default
+        "(tc.llm_confirmed IS NULL OR tc.llm_confirmed != 'rejected')".to_string(),
+    ];
+    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    if let Some(ref reason) = filter.marking_reason {
+        where_clauses.push(format!("tc.marking_reason = ?{}", params_vec.len() + 1));
+        params_vec.push(Box::new(reason.clone()));
+    }
+
+    // Spec 11: filter by LLM confirmation status
+    if let Some(ref llm_status) = filter.llm_status {
+        match llm_status.as_str() {
+            "confirmed" => {
+                where_clauses.push("tc.llm_confirmed = 'confirmed'".to_string());
+            }
+            "downgraded" => {
+                where_clauses.push("tc.llm_confirmed = 'downgraded'".to_string());
+            }
+            "unconfirmed" => {
+                where_clauses.push("tc.llm_confirmed IS NULL".to_string());
+            }
+            _ => {} // unknown value, no additional filter
+        }
+    }
+
+    let where_sql = where_clauses.join(" AND ");
+
+    // Count total matching
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM thought_candidates tc WHERE {where_sql}"
+    );
+    let total: usize = {
+        let mut stmt = conn.prepare(&count_sql).map_err(|e| format!("prepare count: {e}"))?;
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        stmt.query_row(params_refs.as_slice(), |r| r.get(0))
+            .map_err(|e| format!("count query: {e}"))?
+    };
+
+    // Build ORDER BY — Spec 11: confirmed first, then unconfirmed, then downgraded
+    let order_sql = match filter.sort_by.as_deref() {
+        Some("similarity") => "CASE WHEN tc.llm_confirmed = 'confirmed' THEN 0 WHEN tc.llm_confirmed IS NULL THEN 1 ELSE 2 END ASC, tc.similarity_score DESC",
+        Some("age") => "CASE WHEN tc.llm_confirmed = 'confirmed' THEN 0 WHEN tc.llm_confirmed IS NULL THEN 1 ELSE 2 END ASC, tc.created_at ASC",
+        _ => "CASE WHEN tc.llm_confirmed = 'confirmed' THEN 0 WHEN tc.llm_confirmed IS NULL THEN 1 ELSE 2 END ASC, tc.similarity_score DESC",
+    };
+
+    // Query with LIMIT/OFFSET
+    let query_sql = format!(
+        "SELECT tc.id, tc.rel_path, tc.paragraph_start_line, tc.paragraph_end_line,
+                tc.marking_reason, tc.similarity_score, tc.paired_rel_path, tc.chunk_id,
+                tc.llm_confirmed, tc.llm_reason
+         FROM thought_candidates tc
+         WHERE {where_sql}
+         ORDER BY {order_sql}
+         LIMIT ?{} OFFSET ?{}",
+        params_vec.len() + 1,
+        params_vec.len() + 2,
+    );
+    params_vec.push(Box::new(filter.limit as i64));
+    params_vec.push(Box::new(filter.offset as i64));
+
+    let mut stmt = conn.prepare(&query_sql).map_err(|e| format!("prepare filtered list: {e}"))?;
+    let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+
+    let rows = stmt
+        .query_map(params_refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i32>(2)?,
+                row.get::<_, i32>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<f64>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+            ))
+        })
+        .map_err(|e| format!("query filtered candidates: {e}"))?;
+
+    let mut items = Vec::new();
+    for row in rows {
+        let (id, rel_path, start_line, end_line, reason, score, paired, chunk_id, llm_confirmed, llm_reason) =
+            row.map_err(|e| format!("read filtered candidate row: {e}"))?;
+
+        let chunk_text: String = conn
+            .query_row(
+                "SELECT chunk_text FROM doc_chunks WHERE chunk_id = ?1",
+                params![chunk_id],
+                |r| r.get(0),
+            )
+            .unwrap_or_default();
+
+        items.push(CandidateForUi {
+            id,
+            rel_path,
+            excerpt: excerpt(&chunk_text),
+            marking_reason: reason,
+            similarity_score: score,
+            paired_rel_path: paired,
+            start_line,
+            end_line,
+            llm_confirmed,
+            llm_reason,
+        });
+    }
+
+    // For freshness sort: re-sort by file mtime (Phase 1 simple approach)
+    // Preserve LLM confirmation priority: confirmed first, then by mtime
+    if filter.sort_by.as_deref() == Some("freshness") || filter.sort_by.is_none() {
+        sort_by_freshness(&mut items, workspace_root);
+        // Stable partition: confirmed first, then unconfirmed, then downgraded
+        items.sort_by_key(|item| match item.llm_confirmed.as_deref() {
+            Some("confirmed") => 0,
+            None => 1,
+            Some("downgraded") => 2,
+            _ => 3,
+        });
+    }
+
+    // Count confirmed candidates (for filter badge in UI)
+    let confirmed_count: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM thought_candidates
+             WHERE dismissed_at IS NULL AND promoted_thought_id IS NULL
+               AND llm_confirmed = 'confirmed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    Ok(DiscoveryListResponse {
+        items,
+        total,
+        by_reason,
+        confirmed_count,
+    })
+}
+
+/// Sort items by file modification time (most recent first).
+/// Files that cannot be stat'd sort to the end.
+fn sort_by_freshness(items: &mut Vec<CandidateForUi>, workspace_root: &Path) {
+    let mut mtime_cache: HashMap<String, Option<std::time::SystemTime>> = HashMap::new();
+    let get_mtime = |path: &str, cache: &mut HashMap<String, Option<std::time::SystemTime>>| -> Option<std::time::SystemTime> {
+        if let Some(cached) = cache.get(path) {
+            return *cached;
+        }
+        let full = workspace_root.join(path);
+        let mt = std::fs::metadata(&full).ok().and_then(|m| m.modified().ok());
+        cache.insert(path.to_string(), mt);
+        mt
+    };
+
+    items.sort_by(|a, b| {
+        let ma = get_mtime(&a.rel_path, &mut mtime_cache);
+        let mb = get_mtime(&b.rel_path, &mut mtime_cache);
+        mb.cmp(&ma) // descending: most recent first
+    });
+}
+
+/// Batch dismiss multiple candidates at once.
+pub fn batch_dismiss(conn: &Connection, ids: &[String]) -> Result<usize, String> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "UPDATE thought_candidates SET dismissed_at = ?1 WHERE id IN ({placeholders}) AND dismissed_at IS NULL"
+    );
+    let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(ids.len() + 1);
+    param_values.push(Box::new(now));
+    for id in ids {
+        param_values.push(Box::new(id.clone()));
+    }
+    let params_refs: Vec<&dyn rusqlite::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+    let affected = conn
+        .execute(&sql, params_refs.as_slice())
+        .map_err(|e| format!("batch dismiss: {e}"))?;
+    Ok(affected)
 }
 
 pub fn dismiss_candidate(conn: &Connection, id: &str) -> Result<(), String> {
@@ -795,6 +1091,8 @@ pub fn get_candidate_chunk_text(
         paired_rel_path: paired,
         start_line,
         end_line,
+        llm_confirmed: None,
+        llm_reason: None,
     };
     Ok((chunk_text, candidate))
 }
@@ -841,6 +1139,94 @@ pub fn promote_candidate(
         .map_err(|e| format!("update promoted_thought_id: {e}"))?;
 
     Ok(resp.thought_id)
+}
+
+/// Batch promote multiple candidates to thoughts.
+/// Groups by file and processes within each file in reverse line order
+/// to avoid line-number offset issues from earlier insertions.
+/// Returns the list of newly created thought IDs.
+pub fn batch_promote(
+    embed_conn: &Connection,
+    canonical_root: &std::path::Path,
+    candidate_ids: &[String],
+) -> Result<Vec<String>, String> {
+    if candidate_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    if candidate_ids.len() > 50 {
+        return Err("batch promote limit is 50 candidates".to_string());
+    }
+
+    // Gather candidate metadata to group and sort by file + start_line DESC
+    let mut candidates: Vec<(String, String, i32)> = Vec::with_capacity(candidate_ids.len());
+    for id in candidate_ids {
+        let (_, info) = get_candidate_chunk_text(embed_conn, id)?;
+        candidates.push((id.clone(), info.rel_path, info.start_line));
+    }
+
+    // Sort by (rel_path ASC, start_line DESC) — within same file, process bottom-first
+    candidates.sort_by(|a, b| {
+        a.1.cmp(&b.1).then(b.2.cmp(&a.2))
+    });
+
+    let mut created_ids = Vec::with_capacity(candidate_ids.len());
+    for (cid, _, _) in &candidates {
+        match promote_candidate(embed_conn, canonical_root, cid) {
+            Ok(thought_id) => created_ids.push(thought_id),
+            Err(e) => {
+                // Log but continue — partial success is acceptable
+                eprintln!("batch_promote: skipping candidate {cid}: {e}");
+            }
+        }
+    }
+    Ok(created_ids)
+}
+
+/// Return 1-2 "daily picks" from the candidate pool for the review completion screen.
+/// Strategy: rotate across marking reasons (round-robin by day-of-year), pick freshest within.
+pub fn list_daily_picks(
+    conn: &Connection,
+    workspace_root: &Path,
+) -> Result<Vec<CandidateForUi>, String> {
+    // Use day-of-year to rotate which reason goes first
+    use chrono::Datelike;
+    let day_of_year = chrono::Utc::now().ordinal() as usize;
+    let reasons = ["high_similarity", "cross_doc_recurrence", "semantic_isolated"];
+    let primary_reason = reasons[day_of_year % reasons.len()];
+
+    // Try to get 1 from primary reason, 1 from any other
+    let mut picks = Vec::with_capacity(2);
+
+    let primary_filter = DiscoveryFilter {
+        marking_reason: Some(primary_reason.to_string()),
+        sort_by: Some("freshness".to_string()),
+        llm_status: Some("confirmed".to_string()),
+        offset: 0,
+        limit: 1,
+    };
+    if let Ok(resp) = list_candidates_filtered(conn, &primary_filter, workspace_root) {
+        picks.extend(resp.items);
+    }
+
+    // Get 1 more from any category (different from what we already picked)
+    let exclude_id = picks.first().map(|p| p.id.clone());
+    let all_filter = DiscoveryFilter {
+        marking_reason: None,
+        sort_by: Some("similarity".to_string()),
+        llm_status: None,
+        offset: 0,
+        limit: 3,
+    };
+    if let Ok(resp) = list_candidates_filtered(conn, &all_filter, workspace_root) {
+        for item in resp.items {
+            if Some(&item.id) != exclude_id.as_ref() {
+                picks.push(item);
+                break;
+            }
+        }
+    }
+
+    Ok(picks)
 }
 
 // ---------------------------------------------------------------------------
