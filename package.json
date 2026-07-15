@@ -27,6 +27,7 @@
     "@milkdown/utils": "^7.20.0",
     "@tauri-apps/api": "~2.11.0",
     "@tauri-apps/plugin-dialog": "~2.7.0",
+    "@tauri-apps/plugin-opener": "~2.5.0",
     "d3-force": "^3.0.0",
     "github-slugger": "^2.0.0",
     "i18next": "^26.0.4",
