@@ -1061,6 +1061,47 @@ pub fn promote_candidate(
     Ok(resp.thought_id)
 }
 
+/// Batch promote multiple candidates to thoughts.
+/// Groups by file and processes within each file in reverse line order
+/// to avoid line-number offset issues from earlier insertions.
+/// Returns the list of newly created thought IDs.
+pub fn batch_promote(
+    embed_conn: &Connection,
+    canonical_root: &std::path::Path,
+    candidate_ids: &[String],
+) -> Result<Vec<String>, String> {
+    if candidate_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    if candidate_ids.len() > 50 {
+        return Err("batch promote limit is 50 candidates".to_string());
+    }
+
+    // Gather candidate metadata to group and sort by file + start_line DESC
+    let mut candidates: Vec<(String, String, i32)> = Vec::with_capacity(candidate_ids.len());
+    for id in candidate_ids {
+        let (_, info) = get_candidate_chunk_text(embed_conn, id)?;
+        candidates.push((id.clone(), info.rel_path, info.start_line));
+    }
+
+    // Sort by (rel_path ASC, start_line DESC) — within same file, process bottom-first
+    candidates.sort_by(|a, b| {
+        a.1.cmp(&b.1).then(b.2.cmp(&a.2))
+    });
+
+    let mut created_ids = Vec::with_capacity(candidate_ids.len());
+    for (cid, _, _) in &candidates {
+        match promote_candidate(embed_conn, canonical_root, cid) {
+            Ok(thought_id) => created_ids.push(thought_id),
+            Err(e) => {
+                // Log but continue — partial success is acceptable
+                eprintln!("batch_promote: skipping candidate {cid}: {e}");
+            }
+        }
+    }
+    Ok(created_ids)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

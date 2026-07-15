@@ -129,6 +129,9 @@
 /* --- Candidate Card --- */
 
 .discovery-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   padding: 10px 12px;
   margin-bottom: 6px;
   border: 1px solid rgba(0, 0, 0, 0.08);
@@ -331,4 +334,125 @@
     border-color: rgba(255, 255, 255, 0.1);
     border-top-color: var(--accent, #60a5fa);
   }
+
+  .discovery-pane__batch {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .discovery-pane__batch--active {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .discovery-pane__batch-btn--dismiss {
+    color: var(--fg-dim, #999);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .discovery-pane__batch-btn--promote {
+    color: var(--accent, #60a5fa);
+    border-color: var(--accent, #60a5fa);
+  }
+
+  .discovery-card--checked {
+    background: rgba(96, 165, 250, 0.08);
+    border-color: var(--accent, #60a5fa);
+  }
+}
+
+/* --- Batch operations bar --- */
+
+.discovery-pane__batch {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+}
+
+.discovery-pane__batch--active {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.discovery-pane__batch-select-all {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--fg-dim, #666);
+  font-size: 12px;
+}
+
+.discovery-pane__batch-select-all input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.discovery-pane__batch-count {
+  color: var(--fg-default, #333);
+  font-weight: 500;
+}
+
+.discovery-pane__batch-btn {
+  padding: 3px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  transition: background 0.12s, color 0.12s;
+}
+
+.discovery-pane__batch-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.discovery-pane__batch-btn--dismiss {
+  color: var(--fg-dim, #888);
+}
+
+.discovery-pane__batch-btn--dismiss:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.discovery-pane__batch-btn--promote {
+  color: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+}
+
+.discovery-pane__batch-btn--promote:hover:not(:disabled) {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+
+.discovery-pane__batch-btn--clear {
+  color: var(--fg-dim, #888);
+  border-color: transparent;
+}
+
+.discovery-pane__batch-btn--clear:hover:not(:disabled) {
+  color: var(--fg-default, #333);
+}
+
+/* --- Checkbox in card --- */
+
+.discovery-card__checkbox {
+  flex-shrink: 0;
+  margin: 0;
+  cursor: pointer;
+  width: 14px;
+  height: 14px;
+}
+
+.discovery-card__body {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.discovery-card--checked {
+  background: rgba(59, 130, 246, 0.05);
+  border-color: var(--accent, #3b82f6);
 }

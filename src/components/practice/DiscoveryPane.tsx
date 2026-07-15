@@ -76,8 +76,13 @@ export function DiscoveryPane({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Selection
+  // Selection (single-click for detail view)
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Multi-select for batch operations
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const isSelecting = checkedIds.size > 0;
 
   // Computed filter object for invoke
   const filter: DiscoveryFilter = useMemo(
@@ -175,6 +180,62 @@ export function DiscoveryPane({
     [selectedId, onSelectCandidate, fetchData],
   );
 
+  // --- Multi-select handlers ---
+
+  const handleToggleCheck = useCallback((id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleSelectAll = useCallback(() => {
+    if (!response) return;
+    const allIds = new Set(response.items.map((i) => i.id));
+    setCheckedIds(allIds);
+  }, [response]);
+
+  const handleClearSelection = useCallback(() => {
+    setCheckedIds(new Set());
+  }, []);
+
+  const handleBatchDismiss = useCallback(async () => {
+    if (checkedIds.size === 0 || batchBusy) return;
+    setBatchBusy(true);
+    try {
+      const ids = Array.from(checkedIds);
+      await invoke<number>("batch_dismiss_candidates", { candidateIds: ids });
+      setCheckedIds(new Set());
+      setSelectedId(null);
+      onSelectCandidate(null);
+      void fetchData();
+    } catch (err) {
+      console.error("batch_dismiss_candidates failed:", err);
+    } finally {
+      setBatchBusy(false);
+    }
+  }, [checkedIds, batchBusy, onSelectCandidate, fetchData]);
+
+  const handleBatchPromote = useCallback(async () => {
+    if (checkedIds.size === 0 || batchBusy) return;
+    setBatchBusy(true);
+    try {
+      const ids = Array.from(checkedIds);
+      await invoke<string[]>("batch_promote_candidates", { candidateIds: ids });
+      setCheckedIds(new Set());
+      setSelectedId(null);
+      onSelectCandidate(null);
+      void fetchData();
+    } catch (err) {
+      console.error("batch_promote_candidates failed:", err);
+    } finally {
+      setBatchBusy(false);
+    }
+  }, [checkedIds, batchBusy, onSelectCandidate, fetchData]);
+
   // Pagination
   const totalPages = response ? Math.ceil(response.total / PAGE_SIZE) : 0;
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
@@ -239,7 +300,10 @@ export function DiscoveryPane({
                 key={item.id}
                 item={item}
                 selected={item.id === selectedId}
+                checked={checkedIds.has(item.id)}
+                isSelecting={isSelecting}
                 onSelect={handleSelect}
+                onToggleCheck={handleToggleCheck}
                 onPromote={handlePromote}
                 onDismiss={handleDismiss}
               />
@@ -271,6 +335,51 @@ export function DiscoveryPane({
           </>
         )}
       </div>
+
+      {/* Batch operations bar */}
+      {response && response.items.length > 0 && (
+        <div className={`discovery-pane__batch${isSelecting ? " discovery-pane__batch--active" : ""}`}>
+          <label className="discovery-pane__batch-select-all">
+            <input
+              type="checkbox"
+              checked={checkedIds.size === response.items.length && response.items.length > 0}
+              onChange={(e) => { if (e.target.checked) handleSelectAll(); else handleClearSelection(); }}
+            />
+            {t("discovery.batch.selectAll", "Select all")} ({response.items.length})
+          </label>
+          {isSelecting && (
+            <>
+              <span className="discovery-pane__batch-count">
+                {t("discovery.batch.selected", "{{count}} selected", { count: checkedIds.size })}
+              </span>
+              <button
+                type="button"
+                className="discovery-pane__batch-btn discovery-pane__batch-btn--dismiss"
+                disabled={batchBusy}
+                onClick={() => void handleBatchDismiss()}
+              >
+                {t("discovery.batch.dismiss", "Batch dismiss")}
+              </button>
+              <button
+                type="button"
+                className="discovery-pane__batch-btn discovery-pane__batch-btn--promote"
+                disabled={batchBusy}
+                onClick={() => void handleBatchPromote()}
+              >
+                {t("discovery.batch.promote", "Batch promote")}
+              </button>
+              <button
+                type="button"
+                className="discovery-pane__batch-btn discovery-pane__batch-btn--clear"
+                disabled={batchBusy}
+                onClick={handleClearSelection}
+              >
+                {t("discovery.batch.clear", "Clear")}
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -282,12 +391,15 @@ export function DiscoveryPane({
 interface CandidateCardProps {
   item: CandidateForUi;
   selected: boolean;
+  checked: boolean;
+  isSelecting: boolean;
   onSelect: (item: CandidateForUi) => void;
+  onToggleCheck: (id: string, e: React.MouseEvent) => void;
   onPromote: (id: string, e: React.MouseEvent) => void;
   onDismiss: (id: string, e: React.MouseEvent) => void;
 }
 
-function CandidateCard({ item, selected, onSelect, onPromote, onDismiss }: CandidateCardProps) {
+function CandidateCard({ item, selected, checked, isSelecting, onSelect, onToggleCheck, onPromote, onDismiss }: CandidateCardProps) {
   const { t } = useTranslation();
 
   const reasonLabel = useMemo(() => {
@@ -307,34 +419,47 @@ function CandidateCard({ item, selected, onSelect, onPromote, onDismiss }: Candi
 
   return (
     <div
-      className={`discovery-card${selected ? " discovery-card--selected" : ""}`}
+      className={`discovery-card${selected ? " discovery-card--selected" : ""}${checked ? " discovery-card--checked" : ""}`}
       onClick={() => onSelect(item)}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onSelect(item); }}
     >
-      <div className="discovery-card__excerpt">{item.excerpt}</div>
-      <div className="discovery-card__meta">
-        <span className="discovery-card__reason">{reasonLabel}</span>
-        <span className="discovery-card__file" title={item.relPath}>{fileName}</span>
-      </div>
-      <div className="discovery-card__actions">
-        <button
-          type="button"
-          className="discovery-card__btn discovery-card__btn--promote"
-          onClick={(e) => onPromote(item.id, e)}
-          title={t("discovery.promote", "Promote")}
-        >
-          {t("discovery.promote", "Promote")}
-        </button>
-        <button
-          type="button"
-          className="discovery-card__btn discovery-card__btn--dismiss"
-          onClick={(e) => onDismiss(item.id, e)}
-          title={t("discovery.dismiss", "Dismiss")}
-        >
-          {t("discovery.dismiss", "Dismiss")}
-        </button>
+      {isSelecting && (
+        <input
+          type="checkbox"
+          className="discovery-card__checkbox"
+          checked={checked}
+          onClick={(e) => onToggleCheck(item.id, e as unknown as React.MouseEvent)}
+          onChange={() => {/* controlled via onClick */}}
+        />
+      )}
+      <div className="discovery-card__body">
+        <div className="discovery-card__excerpt">{item.excerpt}</div>
+        <div className="discovery-card__meta">
+          <span className="discovery-card__reason">{reasonLabel}</span>
+          <span className="discovery-card__file" title={item.relPath}>{fileName}</span>
+        </div>
+        {!isSelecting && (
+          <div className="discovery-card__actions">
+            <button
+              type="button"
+              className="discovery-card__btn discovery-card__btn--promote"
+              onClick={(e) => onPromote(item.id, e)}
+              title={t("discovery.promote", "Promote")}
+            >
+              {t("discovery.promote", "Promote")}
+            </button>
+            <button
+              type="button"
+              className="discovery-card__btn discovery-card__btn--dismiss"
+              onClick={(e) => onDismiss(item.id, e)}
+              title={t("discovery.dismiss", "Dismiss")}
+            >
+              {t("discovery.dismiss", "Dismiss")}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
