@@ -3,7 +3,7 @@
  * Lists latent candidates with type filtering, sorting, and promote/dismiss actions.
  */
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DiscoveryFilterBar, type DiscoveryReasonCounts } from "./DiscoveryFilterBar";
 import "./DiscoveryPane.css";
@@ -21,11 +21,15 @@ export interface CandidateForUi {
   pairedRelPath: string | null;
   startLine: number;
   endLine: number;
+  // LLM confirmation (Spec 11)
+  llmConfirmed: "confirmed" | "downgraded" | "rejected" | null;
+  llmReason: string | null;
 }
 
 interface DiscoveryFilter {
   markingReason: string | null;
   sortBy: string | null;
+  llmStatus: string | null;
   offset: number;
   limit: number;
 }
@@ -34,6 +38,7 @@ interface DiscoveryListResponse {
   items: CandidateForUi[];
   total: number;
   byReason: DiscoveryReasonCounts;
+  confirmedCount: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +74,7 @@ export function DiscoveryPane({
   // Filter / sort / pagination state
   const [filterReason, setFilterReason] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<string>("freshness");
+  const [llmStatus, setLlmStatus] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
 
   // Data
@@ -86,8 +92,8 @@ export function DiscoveryPane({
 
   // Computed filter object for invoke
   const filter: DiscoveryFilter = useMemo(
-    () => ({ markingReason: filterReason, sortBy, offset, limit: PAGE_SIZE }),
-    [filterReason, sortBy, offset],
+    () => ({ markingReason: filterReason, sortBy, llmStatus, offset, limit: PAGE_SIZE }),
+    [filterReason, sortBy, llmStatus, offset],
   );
 
   // Fetch data
@@ -113,7 +119,7 @@ export function DiscoveryPane({
   // Reset offset when filter/sort changes
   useEffect(() => {
     setOffset(0);
-  }, [filterReason, sortBy]);
+  }, [filterReason, sortBy, llmStatus]);
 
   // Counts (default zeros before first load)
   const counts: DiscoveryReasonCounts = response?.byReason ?? {
@@ -240,6 +246,9 @@ export function DiscoveryPane({
   const totalPages = response ? Math.ceil(response.total / PAGE_SIZE) : 0;
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
 
+  // LLM lazy confirmation (Spec 11)
+  useLazyLlmConfirm(response?.items, setResponse);
+
   // ---------------------------------------------------------------------------
   // Empty state rendering
   // ---------------------------------------------------------------------------
@@ -290,6 +299,9 @@ export function DiscoveryPane({
         onFilterChange={setFilterReason}
         sortBy={sortBy}
         onSortChange={setSortBy}
+        llmStatus={llmStatus}
+        onLlmStatusChange={setLlmStatus}
+        confirmedCount={response?.confirmedCount ?? 0}
       />
 
       <div className="discovery-pane__list">
@@ -417,9 +429,12 @@ function CandidateCard({ item, selected, checked, isSelecting, onSelect, onToggl
 
   const fileName = item.relPath.split("/").pop()?.replace(/\.md$/i, "") ?? item.relPath;
 
+  const llmClass = item.llmConfirmed === "confirmed" ? " discovery-card--confirmed"
+    : item.llmConfirmed === "downgraded" ? " discovery-card--downgraded" : "";
+
   return (
     <div
-      className={`discovery-card${selected ? " discovery-card--selected" : ""}${checked ? " discovery-card--checked" : ""}`}
+      className={`discovery-card${selected ? " discovery-card--selected" : ""}${checked ? " discovery-card--checked" : ""}${llmClass}`}
       onClick={() => onSelect(item)}
       role="button"
       tabIndex={0}
@@ -438,8 +453,15 @@ function CandidateCard({ item, selected, checked, isSelecting, onSelect, onToggl
         <div className="discovery-card__excerpt">{item.excerpt}</div>
         <div className="discovery-card__meta">
           <span className="discovery-card__reason">{reasonLabel}</span>
+          <LlmConfirmBadge status={item.llmConfirmed} />
           <span className="discovery-card__file" title={item.relPath}>{fileName}</span>
         </div>
+        {item.llmReason && (
+          <div className="discovery-card__llm-reason">
+            <span className="discovery-card__llm-reason-icon" aria-hidden>&#128161;</span>
+            <span className="discovery-card__llm-reason-text">{item.llmReason}</span>
+          </div>
+        )}
         {!isSelecting && (
           <div className="discovery-card__actions">
             <button
@@ -463,4 +485,83 @@ function CandidateCard({ item, selected, checked, isSelecting, onSelect, onToggl
       </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// LLM Confirm Badge sub-component (Spec 11)
+// ---------------------------------------------------------------------------
+
+function LlmConfirmBadge({ status }: { status: string | null }) {
+  if (!status) {
+    return <span className="discovery-card__llm-badge discovery-card__llm-badge--pending" title="Awaiting AI review">&#9203;</span>;
+  }
+  switch (status) {
+    case "confirmed":
+      return <span className="discovery-card__llm-badge discovery-card__llm-badge--confirmed" title="AI confirmed">&#10003;</span>;
+    case "downgraded":
+      return <span className="discovery-card__llm-badge discovery-card__llm-badge--downgraded" title="Low priority">&#9675;</span>;
+    case "rejected":
+      return null; // rejected items should be filtered out by backend
+    default:
+      return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// LLM lazy confirmation hook (Spec 11)
+// ---------------------------------------------------------------------------
+
+interface ConfirmResult {
+  candidateId: string;
+  verdict: string;
+  reason: string;
+}
+
+/**
+ * Trigger LLM confirmation for unconfirmed candidates in the current view.
+ * Runs once per data load — non-blocking, silent on failure.
+ */
+export function useLazyLlmConfirm(
+  items: CandidateForUi[] | undefined,
+  setResponse: React.Dispatch<React.SetStateAction<DiscoveryListResponse | null>>,
+) {
+  const confirmedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!items || items.length === 0) return;
+
+    // Find unconfirmed items not already in-flight
+    const unconfirmed = items
+      .filter((i) => i.llmConfirmed === null && !confirmedRef.current.has(i.id))
+      .slice(0, 5)
+      .map((i) => i.id);
+
+    if (unconfirmed.length === 0) return;
+
+    // Mark as in-flight to prevent duplicate requests
+    for (const id of unconfirmed) {
+      confirmedRef.current.add(id);
+    }
+
+    void invoke<ConfirmResult[]>("confirm_discovery_batch", { candidateIds: unconfirmed })
+      .then((results) => {
+        if (!results || results.length === 0) return;
+        setResponse((prev) => {
+          if (!prev) return prev;
+          const updated = prev.items.map((item) => {
+            const result = results.find((r) => r.candidateId === item.id);
+            if (!result) return item;
+            return {
+              ...item,
+              llmConfirmed: result.verdict as CandidateForUi["llmConfirmed"],
+              llmReason: result.reason,
+            };
+          });
+          return { ...prev, items: updated };
+        });
+      })
+      .catch(() => {
+        // Silent failure — LLM confirmation is a pure enhancement layer
+      });
+  }, [items, setResponse]);
 }

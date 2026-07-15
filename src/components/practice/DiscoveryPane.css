@@ -145,6 +145,20 @@
   border-color: rgba(0, 0, 0, 0.15);
 }
 
+/* Confirmed cards get a subtle left accent line */
+.discovery-card--confirmed {
+  border-left: 3px solid #16a34a;
+}
+
+/* Downgraded cards are slightly muted */
+.discovery-card--downgraded {
+  opacity: 0.65;
+}
+
+.discovery-card--downgraded:hover {
+  opacity: 0.85;
+}
+
 .discovery-card--selected {
   background: var(--accent-subtle, rgba(59, 130, 246, 0.06));
   border-color: var(--accent, #3b82f6);
@@ -180,6 +194,77 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* --- LLM Confirmation Badge & Reason (Spec 11) --- */
+
+.discovery-card__llm-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  padding: 1px 5px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.discovery-card__llm-badge--confirmed {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.1);
+}
+
+.discovery-card__llm-badge--downgraded {
+  color: #a3a3a3;
+  background: rgba(163, 163, 163, 0.1);
+}
+
+.discovery-card__llm-badge--pending {
+  color: #a3a3a3;
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+.discovery-card__llm-reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 6px;
+  padding: 5px 8px;
+  background: rgba(139, 92, 246, 0.04);
+  border-radius: 4px;
+  border-left: 2px solid rgba(139, 92, 246, 0.3);
+}
+
+.discovery-card__llm-reason-icon {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.discovery-card__llm-reason-text {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg-default, #444);
+  word-break: break-word;
+}
+
+/* --- AI filter tab accent --- */
+
+.discovery-filter-bar__tab--ai {
+  border-color: rgba(22, 163, 74, 0.3);
+  color: #16a34a;
+}
+
+.discovery-filter-bar__tab--ai:hover {
+  background: rgba(22, 163, 74, 0.06);
+  color: #16a34a;
+}
+
+.discovery-filter-bar__tab--ai.discovery-filter-bar__tab--active {
+  background: rgba(22, 163, 74, 0.1);
+  border-color: #16a34a;
+  color: #16a34a;
+}
+
+/* --- Card actions --- */
 
 .discovery-card__actions {
   display: flex;
@@ -288,6 +373,10 @@
     border-color: rgba(255, 255, 255, 0.15);
   }
 
+  .discovery-card--confirmed {
+    border-left-color: #4ade80;
+  }
+
   .discovery-card--selected {
     background: rgba(96, 165, 250, 0.08);
     border-color: var(--accent, #60a5fa);
@@ -356,6 +445,43 @@
   .discovery-card--checked {
     background: rgba(96, 165, 250, 0.08);
     border-color: var(--accent, #60a5fa);
+  }
+
+  /* --- LLM badge & reason dark mode --- */
+
+  .discovery-card__llm-badge--confirmed {
+    color: #4ade80;
+    background: rgba(74, 222, 128, 0.12);
+  }
+
+  .discovery-card__llm-badge--downgraded {
+    color: #737373;
+    background: rgba(115, 115, 115, 0.12);
+  }
+
+  .discovery-card__llm-reason {
+    background: rgba(139, 92, 246, 0.08);
+    border-left-color: rgba(139, 92, 246, 0.4);
+  }
+
+  .discovery-card__llm-reason-text {
+    color: var(--fg-default, #ddd);
+  }
+
+  .discovery-filter-bar__tab--ai {
+    border-color: rgba(74, 222, 128, 0.3);
+    color: #4ade80;
+  }
+
+  .discovery-filter-bar__tab--ai:hover {
+    background: rgba(74, 222, 128, 0.08);
+    color: #4ade80;
+  }
+
+  .discovery-filter-bar__tab--ai.discovery-filter-bar__tab--active {
+    background: rgba(74, 222, 128, 0.12);
+    border-color: #4ade80;
+    color: #4ade80;
   }
 }
 

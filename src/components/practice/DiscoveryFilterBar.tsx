@@ -15,6 +15,11 @@ export interface DiscoveryFilterBarProps {
   onFilterChange: (reason: string | null) => void;
   sortBy: string;
   onSortChange: (sort: string) => void;
+  /** LLM confirmation status filter: "confirmed" | "downgraded" | "unconfirmed" | null (all) */
+  llmStatus: string | null;
+  onLlmStatusChange: (status: string | null) => void;
+  /** Number of LLM-confirmed candidates */
+  confirmedCount: number;
 }
 
 type FilterOption = {
@@ -49,6 +54,9 @@ export function DiscoveryFilterBar({
   onFilterChange,
   sortBy,
   onSortChange,
+  llmStatus,
+  onLlmStatusChange,
+  confirmedCount,
 }: DiscoveryFilterBarProps) {
   const { t } = useTranslation();
 
@@ -56,7 +64,7 @@ export function DiscoveryFilterBar({
     <div className="discovery-filter-bar">
       <div className="discovery-filter-bar__tabs" role="tablist">
         {FILTER_OPTIONS.map((opt) => {
-          const isActive = activeFilter === opt.key;
+          const isActive = activeFilter === opt.key && !llmStatus;
           const count = opt.countFn(counts);
           return (
             <button
@@ -65,13 +73,26 @@ export function DiscoveryFilterBar({
               role="tab"
               className={`discovery-filter-bar__tab${isActive ? " discovery-filter-bar__tab--active" : ""}`}
               aria-selected={isActive}
-              onClick={() => onFilterChange(opt.key)}
+              onClick={() => { onFilterChange(opt.key); onLlmStatusChange(null); }}
             >
               {t(opt.labelKey, opt.fallback)}
               <span className="discovery-filter-bar__count">{count}</span>
             </button>
           );
         })}
+        {/* Spec 11: AI confirmed filter */}
+        {confirmedCount > 0 && (
+          <button
+            type="button"
+            role="tab"
+            className={`discovery-filter-bar__tab discovery-filter-bar__tab--ai${llmStatus === "confirmed" ? " discovery-filter-bar__tab--active" : ""}`}
+            aria-selected={llmStatus === "confirmed"}
+            onClick={() => { onLlmStatusChange(llmStatus === "confirmed" ? null : "confirmed"); onFilterChange(null); }}
+          >
+            {t("discovery.filterConfirmed", "\u2713 AI")}
+            <span className="discovery-filter-bar__count">{confirmedCount}</span>
+          </button>
+        )}
       </div>
       <div className="discovery-filter-bar__sort">
         <label className="discovery-filter-bar__sort-label" htmlFor="discovery-sort-select">

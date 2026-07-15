@@ -37,6 +37,7 @@ mod semantic_index;
 mod workspace_text_search;
 mod understanding_graph;
 mod latent_paragraphs;
+mod discovery_confirm;
 mod link_recommendation;
 mod topic_network;
 mod tools;
@@ -2010,6 +2011,50 @@ async fn list_discovery_candidates(
 }
 
 #[tauri::command]
+async fn confirm_discovery_batch(
+    state: tauri::State<'_, WorkspaceState>,
+    http_client: tauri::State<'_, Arc<reqwest::Client>>,
+    candidate_ids: Vec<String>,
+) -> Result<Vec<discovery_confirm::ConfirmResult>, String> {
+    let root = lock_workspace_root(&state)?;
+    let root2 = root.clone();
+    let client = Arc::clone(http_client.inner());
+
+    // Load candidates and check caps in blocking context
+    let candidates = tauri::async_runtime::spawn_blocking(move || {
+        let conn = semantic_index::open_embedding_db(&root2)?;
+        let today_count = discovery_confirm::today_confirm_count(&conn)?;
+        if today_count >= 30 {
+            return Ok(Vec::new());
+        }
+        let needs = discovery_confirm::filter_needing_confirmation(&conn, &candidate_ids)?;
+        let batch: Vec<String> = needs.into_iter().take(5).collect();
+        discovery_confirm::load_candidates_for_confirm(&conn, &batch)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Call LLM (async)
+    let results = discovery_confirm::confirm_batch_with_llm(&candidates, &root, &client).await?;
+
+    // Persist results
+    let results_for_persist = results.clone();
+    let root3 = root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = semantic_index::open_embedding_db(&root3)?;
+        discovery_confirm::persist_confirm_results(&conn, &results_for_persist)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    Ok(results)
+}
+
+#[tauri::command]
 async fn batch_dismiss_candidates(
     state: tauri::State<'_, WorkspaceState>,
     candidate_ids: Vec<String>,
@@ -2193,6 +2238,7 @@ pub fn run() {
             onboarding::seed_onboarding_content,
             list_latent_candidates,
             list_discovery_candidates,
+            confirm_discovery_batch,
             batch_dismiss_candidates,
             batch_promote_candidates,
             list_discovery_daily_picks,

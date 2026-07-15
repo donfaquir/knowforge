@@ -28,6 +28,9 @@ pub struct CandidateForUi {
     pub paired_rel_path: Option<String>,
     pub start_line: i32,
     pub end_line: i32,
+    // LLM confirmation (Spec 11)
+    pub llm_confirmed: Option<String>,
+    pub llm_reason: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -41,6 +44,8 @@ pub struct DiscoveryFilter {
     pub marking_reason: Option<String>,
     /// "freshness" | "similarity" | "age"
     pub sort_by: Option<String>,
+    /// "confirmed" | "downgraded" | "unconfirmed" | None (all visible)
+    pub llm_status: Option<String>,
     pub offset: usize,
     pub limit: usize,
 }
@@ -51,6 +56,8 @@ pub struct DiscoveryListResponse {
     pub items: Vec<CandidateForUi>,
     pub total: usize,
     pub by_reason: DiscoveryReasonCounts,
+    /// Count of LLM-confirmed candidates (for filter badge)
+    pub confirmed_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,6 +114,31 @@ pub fn init_candidates_schema(conn: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|e| format!("init thought_candidates schema: {e}"))?;
+
+    // Migration: add LLM confirmation columns (Spec 11)
+    migrate_add_llm_confirm_columns(conn)?;
+
+    Ok(())
+}
+
+/// Add llm_confirmed, llm_reason, llm_confirmed_at columns if they do not exist.
+fn migrate_add_llm_confirm_columns(conn: &Connection) -> Result<(), String> {
+    // Check if column already exists by querying table_info
+    let has_col: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('thought_candidates') WHERE name = 'llm_confirmed'")
+        .and_then(|mut s| s.exists([]))
+        .unwrap_or(false);
+    if has_col {
+        return Ok(());
+    }
+    conn.execute_batch(
+        r#"
+        ALTER TABLE thought_candidates ADD COLUMN llm_confirmed TEXT;
+        ALTER TABLE thought_candidates ADD COLUMN llm_reason TEXT;
+        ALTER TABLE thought_candidates ADD COLUMN llm_confirmed_at TEXT;
+        "#,
+    )
+    .map_err(|e| format!("migrate llm_confirm columns: {e}"))?;
     Ok(())
 }
 
@@ -769,6 +801,8 @@ pub fn list_candidates(
             paired_rel_path: paired,
             start_line,
             end_line,
+            llm_confirmed: None,
+            llm_reason: None,
         });
     }
 
@@ -784,6 +818,7 @@ fn count_by_reason(conn: &Connection) -> Result<DiscoveryReasonCounts, String> {
         .prepare(
             "SELECT marking_reason, COUNT(*) FROM thought_candidates
              WHERE dismissed_at IS NULL AND promoted_thought_id IS NULL
+               AND (llm_confirmed IS NULL OR llm_confirmed != 'rejected')
              GROUP BY marking_reason",
         )
         .map_err(|e| format!("prepare count_by_reason: {e}"))?;
@@ -822,12 +857,30 @@ pub fn list_candidates_filtered(
     let mut where_clauses = vec![
         "tc.dismissed_at IS NULL".to_string(),
         "tc.promoted_thought_id IS NULL".to_string(),
+        // Spec 11: exclude LLM-rejected candidates by default
+        "(tc.llm_confirmed IS NULL OR tc.llm_confirmed != 'rejected')".to_string(),
     ];
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
     if let Some(ref reason) = filter.marking_reason {
         where_clauses.push(format!("tc.marking_reason = ?{}", params_vec.len() + 1));
         params_vec.push(Box::new(reason.clone()));
+    }
+
+    // Spec 11: filter by LLM confirmation status
+    if let Some(ref llm_status) = filter.llm_status {
+        match llm_status.as_str() {
+            "confirmed" => {
+                where_clauses.push("tc.llm_confirmed = 'confirmed'".to_string());
+            }
+            "downgraded" => {
+                where_clauses.push("tc.llm_confirmed = 'downgraded'".to_string());
+            }
+            "unconfirmed" => {
+                where_clauses.push("tc.llm_confirmed IS NULL".to_string());
+            }
+            _ => {} // unknown value, no additional filter
+        }
     }
 
     let where_sql = where_clauses.join(" AND ");
@@ -843,17 +896,18 @@ pub fn list_candidates_filtered(
             .map_err(|e| format!("count query: {e}"))?
     };
 
-    // Build ORDER BY
+    // Build ORDER BY — Spec 11: confirmed first, then unconfirmed, then downgraded
     let order_sql = match filter.sort_by.as_deref() {
-        Some("similarity") => "tc.similarity_score DESC",
-        Some("age") => "tc.created_at ASC",
-        _ => "tc.similarity_score DESC", // default: similarity (freshness deferred to Phase 3)
+        Some("similarity") => "CASE WHEN tc.llm_confirmed = 'confirmed' THEN 0 WHEN tc.llm_confirmed IS NULL THEN 1 ELSE 2 END ASC, tc.similarity_score DESC",
+        Some("age") => "CASE WHEN tc.llm_confirmed = 'confirmed' THEN 0 WHEN tc.llm_confirmed IS NULL THEN 1 ELSE 2 END ASC, tc.created_at ASC",
+        _ => "CASE WHEN tc.llm_confirmed = 'confirmed' THEN 0 WHEN tc.llm_confirmed IS NULL THEN 1 ELSE 2 END ASC, tc.similarity_score DESC",
     };
 
     // Query with LIMIT/OFFSET
     let query_sql = format!(
         "SELECT tc.id, tc.rel_path, tc.paragraph_start_line, tc.paragraph_end_line,
-                tc.marking_reason, tc.similarity_score, tc.paired_rel_path, tc.chunk_id
+                tc.marking_reason, tc.similarity_score, tc.paired_rel_path, tc.chunk_id,
+                tc.llm_confirmed, tc.llm_reason
          FROM thought_candidates tc
          WHERE {where_sql}
          ORDER BY {order_sql}
@@ -878,13 +932,15 @@ pub fn list_candidates_filtered(
                 row.get::<_, Option<f64>>(5)?,
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
             ))
         })
         .map_err(|e| format!("query filtered candidates: {e}"))?;
 
     let mut items = Vec::new();
     for row in rows {
-        let (id, rel_path, start_line, end_line, reason, score, paired, chunk_id) =
+        let (id, rel_path, start_line, end_line, reason, score, paired, chunk_id, llm_confirmed, llm_reason) =
             row.map_err(|e| format!("read filtered candidate row: {e}"))?;
 
         let chunk_text: String = conn
@@ -904,18 +960,40 @@ pub fn list_candidates_filtered(
             paired_rel_path: paired,
             start_line,
             end_line,
+            llm_confirmed,
+            llm_reason,
         });
     }
 
     // For freshness sort: re-sort by file mtime (Phase 1 simple approach)
+    // Preserve LLM confirmation priority: confirmed first, then by mtime
     if filter.sort_by.as_deref() == Some("freshness") || filter.sort_by.is_none() {
         sort_by_freshness(&mut items, workspace_root);
+        // Stable partition: confirmed first, then unconfirmed, then downgraded
+        items.sort_by_key(|item| match item.llm_confirmed.as_deref() {
+            Some("confirmed") => 0,
+            None => 1,
+            Some("downgraded") => 2,
+            _ => 3,
+        });
     }
+
+    // Count confirmed candidates (for filter badge in UI)
+    let confirmed_count: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM thought_candidates
+             WHERE dismissed_at IS NULL AND promoted_thought_id IS NULL
+               AND llm_confirmed = 'confirmed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
 
     Ok(DiscoveryListResponse {
         items,
         total,
         by_reason,
+        confirmed_count,
     })
 }
 
@@ -1013,6 +1091,8 @@ pub fn get_candidate_chunk_text(
         paired_rel_path: paired,
         start_line,
         end_line,
+        llm_confirmed: None,
+        llm_reason: None,
     };
     Ok((chunk_text, candidate))
 }
@@ -1120,6 +1200,7 @@ pub fn list_daily_picks(
     let primary_filter = DiscoveryFilter {
         marking_reason: Some(primary_reason.to_string()),
         sort_by: Some("freshness".to_string()),
+        llm_status: Some("confirmed".to_string()),
         offset: 0,
         limit: 1,
     };
@@ -1132,6 +1213,7 @@ pub fn list_daily_picks(
     let all_filter = DiscoveryFilter {
         marking_reason: None,
         sort_by: Some("similarity".to_string()),
+        llm_status: None,
         offset: 0,
         limit: 3,
     };
