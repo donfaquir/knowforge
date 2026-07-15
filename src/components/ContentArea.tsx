@@ -14,7 +14,6 @@ import { PracticeMode } from "./practice/PracticeMode";
 import { LinkRecommendationPanel } from "./LinkRecommendationPanel";
 import { OutlineBulkToolbar } from "./OutlineBulkToolbar";
 import { OutlinePanel } from "./OutlinePanel";
-import { RightPanelReviewTab } from "./RightPanelReviewTab";
 import { RightPanelShell, type RightPanelTab } from "./RightPanelShell";
 import { ThoughtManagementPanel } from "./ThoughtManagementPanel";
 import type { LeftPanelView } from "./ActivityBar";
@@ -59,7 +58,6 @@ export interface ContentAreaProps {
   rightResizableIsDragging: boolean;
   rightResizableHandleMouseDown: (e: React.MouseEvent) => void;
   initialDepthMode: DepthMode | undefined;
-  reviewTabBadgeCount: number | null;
 
   // Outline
   outlineState: ReturnType<typeof useOutline>;
@@ -110,7 +108,6 @@ export function ContentArea(props: ContentAreaProps) {
     rightResizableIsDragging,
     rightResizableHandleMouseDown,
     initialDepthMode,
-    reviewTabBadgeCount,
     outlineState,
     outlineFold,
     navigateToHeading,
@@ -281,8 +278,7 @@ export function ContentArea(props: ContentAreaProps) {
                 crepeApiRef={crepeEditorApiRef}
               />
             }
-            reviewPanel={<RightPanelReviewTab onClose={() => onRightPanelTabChange("ai")} />}
-            reviewTabBadgeCount={reviewTabBadgeCount}
+
           />
         </AiConversationSessionProvider>
       )}

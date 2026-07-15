@@ -8,7 +8,6 @@ import {
   Suspense,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -236,38 +235,9 @@ function App() {
     workspaceRoot: rootPath,
   });
 
-  /**
-   * 离开「回顾」标签后本会话内不再显示角标（换工作区重置）。
-   * 必须在渲染阶段同步置位：若仅用 useEffect 在 tab 已非 review 后才 setState，
-   * 会多出一帧 dismissed 仍为 false，角标会按 totalDue 闪一下。
-   */
-  const reviewBadgeAfterVisitSuppressedRef = useRef(false);
-  const lastRootPathForReviewBadgeRef = useRef(rootPath);
-  if (lastRootPathForReviewBadgeRef.current !== rootPath) {
-    reviewBadgeAfterVisitSuppressedRef.current = false;
-    lastRootPathForReviewBadgeRef.current = rootPath;
-  }
-
-  const prevRightPanelTabForBadgeRef = useRef<RightPanelTab>(rightPanelTab);
-  if (prevRightPanelTabForBadgeRef.current === "review" && rightPanelTab !== "review") {
-    reviewBadgeAfterVisitSuppressedRef.current = true;
-  }
-
-  useLayoutEffect(() => {
-    prevRightPanelTabForBadgeRef.current = rightPanelTab;
-  }, [rightPanelTab]);
-
-  const reviewTabBadgeCount = useMemo(() => {
-    if (reviewBadgeAfterVisitSuppressedRef.current || rightPanelTab === "review" || reviewDueTabCount <= 0) {
-      return null;
-    }
-    return reviewDueTabCount;
-  }, [reviewDueTabCount, rightPanelTab, rootPath]);
-
-  const requestOpenChallengeReview = useCallback(() => {
-    setLeftPanelView("files");
-    setRightPanelOpen(true);
-    setRightPanelTab("review");
+  /** Navigate to Practice Mode (used by keyboard shortcut and onboarding) */
+  const requestOpenPracticeMode = useCallback(() => {
+    setLeftPanelView("practice");
   }, []);
 
   useEffect(() => {
@@ -292,7 +262,7 @@ function App() {
     docState,
     activePath: docState.activePath,
     tauriRuntime,
-    onStartChallengeReview: requestOpenChallengeReview,
+    onStartChallengeReview: requestOpenPracticeMode,
   });
 
   resetWorkspaceFileCommandsRef.current = resetWorkspaceFileCommands;
@@ -945,7 +915,6 @@ function App() {
         rightResizableIsDragging={rightResizable.isDragging}
         rightResizableHandleMouseDown={rightResizable.handleMouseDown}
         initialDepthMode={initialDepthMode}
-        reviewTabBadgeCount={reviewTabBadgeCount}
         outlineState={outlineState}
         outlineFold={outlineFold}
         navigateToHeading={navigateToHeading}
@@ -1024,7 +993,7 @@ function App() {
         onStartChallenge={() => {
           setOnboardingOpen(false);
           localStorage.setItem("knowforge:onboardingCompleted", "true");
-          requestOpenChallengeReview();
+          requestOpenPracticeMode();
         }}
         tauriRuntime={tauriRuntime}
       />

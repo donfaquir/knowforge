@@ -3,10 +3,9 @@ import { useTranslation } from "react-i18next";
 import {
   RightPanelOutlineIcon,
   RightPanelLinkRecIcon,
-  RightPanelReviewIcon,
 } from "./treeCollapseIcons";
 
-export type RightPanelTab = "outline" | "ai" | "linkRec" | "review";
+export type RightPanelTab = "outline" | "ai" | "linkRec";
 
 type Props = {
   tab: RightPanelTab;
@@ -18,8 +17,6 @@ type Props = {
   outlinePanel: ReactNode;
   aiPanel: ReactNode;
   linkRecPanel: ReactNode;
-  reviewPanel: ReactNode;
-  reviewTabBadgeCount?: number | null;
   onAfterSelectAiTab?: () => void;
 };
 
@@ -33,8 +30,6 @@ export function RightPanelShell({
   outlinePanel,
   aiPanel,
   linkRecPanel,
-  reviewPanel,
-  reviewTabBadgeCount = null,
   onAfterSelectAiTab,
 }: Props) {
   const { t } = useTranslation();
@@ -87,30 +82,7 @@ export function RightPanelShell({
           >
             <span className="right-panel-shell__segment-text">AI</span>
           </button>
-          <button
-            type="button"
-            role="tab"
-            id="right-panel-tab-review"
-            aria-selected={tab === "review"}
-            aria-controls="right-panel-panel-review"
-            className={`right-panel-shell__segment${tab === "review" ? " is-active" : ""}`}
-            aria-label={
-              typeof reviewTabBadgeCount === "number" && reviewTabBadgeCount > 0
-                ? `${t("rightPanel.reviewTabTitle")}（${t("rightPanel.reviewTabBadgeAria", { count: reviewTabBadgeCount })}）`
-                : t("rightPanel.reviewTabTitle")
-            }
-            title={t("rightPanel.reviewTab")}
-            onClick={() => onViewChange("review")}
-          >
-            <span className="right-panel-shell__segment-icon-wrap">
-              <RightPanelReviewIcon />
-              {typeof reviewTabBadgeCount === "number" && reviewTabBadgeCount > 0 ? (
-                <span className="right-panel-shell__segment-badge" aria-hidden={true}>
-                  {reviewTabBadgeCount > 99 ? "99+" : reviewTabBadgeCount}
-                </span>
-              ) : null}
-            </span>
-          </button>
+
           <button
             type="button"
             role="tab"
@@ -152,16 +124,7 @@ export function RightPanelShell({
       >
         {aiPanel}
       </div>
-      <div
-        id="right-panel-panel-review"
-        role="tabpanel"
-        aria-labelledby="right-panel-tab-review"
-        hidden={tab !== "review"}
-        inert={tab !== "review" ? true : undefined}
-        className="right-panel-shell__panel"
-      >
-        {reviewPanel}
-      </div>
+
       <div
         id="right-panel-panel-linkRec"
         role="tabpanel"
