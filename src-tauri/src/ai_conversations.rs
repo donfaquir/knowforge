@@ -124,6 +124,9 @@ struct PersistedMessageDisk {
     skill_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Value>,
+    /// Ordered content blocks for chronological rendering (thinking -> tool call -> thinking -> ...)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_blocks: Option<Value>,
 }
 
 /// 会话级「想法聚焦」上下文（磁盘与 LLM 字段对齐）
@@ -305,6 +308,9 @@ pub struct PersistedMessageIn {
     pub skill_name: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Value>,
+    /// Ordered content blocks for chronological rendering (thinking -> tool call -> thinking -> ...)
+    #[serde(default)]
+    pub content_blocks: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -365,6 +371,7 @@ fn validate_messages_for_save(msgs: &[PersistedMessageIn]) -> Result<Vec<Persist
             skill_id: m.skill_id.clone(),
             skill_name: m.skill_name.clone(),
             tool_calls: m.tool_calls.clone(),
+            content_blocks: m.content_blocks.clone(),
         });
     }
     Ok(out)
@@ -651,6 +658,7 @@ mod tests {
                         skill_id: None,
                         skill_name: None,
                         tool_calls: None,
+                        content_blocks: None,
                     },
                     PersistedMessageIn {
                         id: "a1".to_string(),
@@ -661,6 +669,7 @@ mod tests {
                         skill_id: None,
                         skill_name: None,
                         tool_calls: None,
+                        content_blocks: None,
                     },
                 ],
                 set_as_active: Some(true),
@@ -691,6 +700,7 @@ mod tests {
             skill_id: None,
             skill_name: None,
             tool_calls: None,
+            content_blocks: None,
         }];
         assert_eq!(compute_title_from_messages(&msgs), "New chat");
     }

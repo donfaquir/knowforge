@@ -1,5 +1,10 @@
 import type { ReplyContextSources } from "./replyContextSources";
 
+/** Ordered content block for chronological rendering of thinking + tool calls */
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_call"; toolCallId: string };
+
 /** 与 `docs/ai_tasks/07-conversation-storage.md` 及 Rust IPC 对齐（camelCase） */
 
 export type ConversationMeta = {
@@ -36,6 +41,8 @@ export type PersistedChatMessage = {
   skillId?: string;
   skillName?: string;
   toolCalls?: PersistedToolCall[];
+  /** Ordered content blocks for chronological rendering (thinking -> tool call -> thinking -> ...) */
+  contentBlocks?: ContentBlock[];
 };
 
 /** 与 Rust `ThoughtFocusContextDisk` / LLM `thought_focus_context` 对齐 */

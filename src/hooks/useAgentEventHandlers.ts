@@ -2,7 +2,7 @@ import { type MutableRefObject, useRef, useEffect } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import type { ChatMessage, ToolCallDisplayInfo } from "./useWorkspaceAiConversations";
+import type { ChatMessage, ContentBlock, ToolCallDisplayInfo } from "./useWorkspaceAiConversations";
 import type { ReplyContextSources } from "../types/replyContextSources";
 import type { ApprovalRequest } from "../types/toolTypes";
 import type { AutoResolvedDepth, DepthMode, ThoughtRetrievalResult, CountVaultThoughtsForReviewResponse, ListReviewQueueResponse } from "../types/cognitiveTypes";
@@ -395,9 +395,18 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
           const last = next[next.length - 1];
           if (last?.role === "assistant" && last.streaming) {
             const isFirstToken = last.content === "";
+            // Update contentBlocks: append to last text block or create new one
+            const blocks = last.contentBlocks ? [...last.contentBlocks] : [];
+            const lastBlock = blocks[blocks.length - 1];
+            if (lastBlock && lastBlock.type === "text") {
+              blocks[blocks.length - 1] = { type: "text", text: mergeStreamDelta(lastBlock.text, p.delta) };
+            } else {
+              blocks.push({ type: "text", text: p.delta });
+            }
             next[next.length - 1] = {
               ...last,
               content: mergeStreamDelta(last.content, p.delta),
+              contentBlocks: blocks,
               meta: isFirstToken && last.meta?.timing
                 ? { ...last.meta, timing: { ...last.meta.timing, firstTokenMs: Date.now() } }
                 : last.meta,
@@ -644,10 +653,14 @@ export function useAgentEventHandlers(deps: AgentEventDeps): AgentSessionState {
             }
             const existing = last.meta?.toolCalls ?? [];
             if (existing.some((tc) => tc.toolCallId === p.toolCallId)) return prev;
+            // Append tool_call block to contentBlocks for chronological ordering
+            const blocks: ContentBlock[] = last.contentBlocks ? [...last.contentBlocks] : [];
+            blocks.push({ type: "tool_call", toolCallId: p.toolCallId });
             let result: ChatMessage[] = [
               ...next.slice(0, -1),
               {
                 ...last,
+                contentBlocks: blocks,
                 meta: { ...last.meta, toolCalls: [...existing, newCall] },
               },
             ];

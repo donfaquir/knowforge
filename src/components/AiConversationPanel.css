@@ -67,12 +67,12 @@
   filter: brightness(1.08);
 }
 
-/* P2 Tool Calling Loop：工具调用状态行。在 assistant 气泡顶部、文本之前。 */
+/* P2 Tool Calling Loop：工具调用状态行 */
 .ai-chat__tool-calls {
-  margin: 0 0 8px 0;
+  margin: 2px 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 .ai-chat__tool-call {
   display: inline-flex;
@@ -80,22 +80,29 @@
   gap: 6px;
   padding: 3px 8px;
   border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--kf-border, #555) 50%, transparent);
-  background: color-mix(in srgb, var(--kf-accent, #3b82f6) 6%, transparent);
-  font-size: 12px;
+  border: 1px solid color-mix(in srgb, var(--kf-border, #555) 30%, transparent);
+  background: color-mix(in srgb, var(--kf-accent, #3b82f6) 4%, transparent);
+  font-size: 11px;
   line-height: 1.4;
   align-self: flex-start;
   max-width: 100%;
+  overflow: hidden;
+  color: var(--text-muted, #888);
 }
 .ai-chat__tool-call__icon {
   display: inline-flex;
   width: 14px;
   justify-content: center;
   font-weight: 600;
+  opacity: 0.7;
 }
 .ai-chat__tool-call__name {
   font-family: var(--kf-mono-font, ui-monospace, monospace);
-  opacity: 0.92;
+  opacity: 0.75;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 .ai-chat__tool-call__status {
   opacity: 0.65;
@@ -119,6 +126,8 @@
   margin-left: auto;
   color: var(--text-muted, #888);
   font-size: 11px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .ai-chat__tool-call__detail {

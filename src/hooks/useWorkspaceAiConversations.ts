@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAiNoteContext } from "../contexts/AiNoteContext";
 import type {
+  ContentBlock,
   ConversationBodyOut,
   ConversationMeta,
   ListAiConversationsResponse,
@@ -18,6 +19,8 @@ export type ChatMessageTiming = {
   firstTokenMs?: number;
   endMs?: number;
 };
+
+export type { ContentBlock };
 
 /** P2 Tool Calling Loop：assistant 消息上展示的工具调用状态（运行时，不持久化） */
 export type ToolCallDisplayInfo = {
@@ -43,6 +46,8 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   streaming?: boolean;
+  /** Ordered content blocks for chronological rendering (thinking -> tool call -> thinking -> ...) */
+  contentBlocks?: ContentBlock[];
   /** 运行时标记，不持久化到磁盘。 */
   meta?: {
     deepening?: boolean;
@@ -93,12 +98,16 @@ function bodyToMessages(body: ConversationBodyOut): ChatMessage[] {
     if (m.skillId) meta.skillId = m.skillId;
     if (m.skillName) meta.skillName = m.skillName;
     if (m.toolCalls) meta.toolCalls = m.toolCalls as unknown as ToolCallDisplayInfo[];
-    return {
+    const result: ChatMessage = {
       id: m.id,
       role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
       content: m.content,
       meta: Object.keys(meta).length > 0 ? meta : undefined,
     };
+    if (m.contentBlocks && m.contentBlocks.length > 0) {
+      result.contentBlocks = m.contentBlocks;
+    }
+    return result;
   });
 }
 
@@ -116,6 +125,9 @@ function toPersistPayload(messages: ChatMessage[]): PersistedChatMessage[] {
       };
       if (m.meta?.toolCalls && m.meta.toolCalls.length > 0) {
         msg.toolCalls = m.meta.toolCalls.map(normalizeToolCallForPersist);
+      }
+      if (m.contentBlocks && m.contentBlocks.length > 0) {
+        msg.contentBlocks = m.contentBlocks;
       }
       return msg;
     });

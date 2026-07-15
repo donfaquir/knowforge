@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next";
-import type { ChatMessage } from "../hooks/useWorkspaceAiConversations";
+import type { ChatMessage, ContentBlock } from "../hooks/useWorkspaceAiConversations";
 import type { ReplyContextSources } from "../types/replyContextSources";
 import type { PassiveHighlightMarked } from "../types/passiveHighlight";
 import { ToolCallItem } from "./ToolCallItem";
@@ -76,19 +76,42 @@ export function MessageBubble({
       <div className={`ai-chat__bubble ai-chat__bubble--${m.role}`}>
         {m.role === "assistant" ? (
           <>
-            {m.meta?.toolCalls && m.meta.toolCalls.length > 0 ? (
-              <div className="ai-chat__tool-calls">
-                {m.meta.toolCalls.map((tc) => (
-                  <ToolCallItem key={tc.toolCallId} tc={tc} />
-                ))}
-              </div>
-            ) : null}
+            {m.contentBlocks && m.contentBlocks.length > 0 ? (
+              /* Chronological rendering: thinking -> tool call -> thinking -> tool call -> ... */
+              <>
+                {m.contentBlocks.map((block: ContentBlock, idx: number) => {
+                  if (block.type === "text") {
+                    return block.text.trim() ? (
+                      <AiAssistantMarkdown key={`text-${idx}`} content={block.text} />
+                    ) : null;
+                  }
+                  // block.type === "tool_call"
+                  const tc = m.meta?.toolCalls?.find((t) => t.toolCallId === block.toolCallId);
+                  return tc ? (
+                    <div key={`tc-${block.toolCallId}`} className="ai-chat__tool-calls">
+                      <ToolCallItem tc={tc} />
+                    </div>
+                  ) : null;
+                })}
+              </>
+            ) : (
+              /* Fallback for historical messages without contentBlocks */
+              <>
+                {m.meta?.toolCalls && m.meta.toolCalls.length > 0 ? (
+                  <div className="ai-chat__tool-calls">
+                    {m.meta.toolCalls.map((tc) => (
+                      <ToolCallItem key={tc.toolCallId} tc={tc} />
+                    ))}
+                  </div>
+                ) : null}
+                <AiAssistantMarkdown content={m.content} />
+              </>
+            )}
             {m.meta?.budgetWarning && (
               <div className="ai-chat__budget-warning">
                 Agent {m.meta.budgetWarning.used}/{m.meta.budgetWarning.limit} tool calls used
               </div>
             )}
-            <AiAssistantMarkdown content={m.content} />
             {!m.streaming && m.meta?.thoughtCitation && !m.meta.thoughtCitation.privateOmitted ? (
               <button
                 type="button"
