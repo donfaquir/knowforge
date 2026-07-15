@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ReviewQueueItem } from "../../types/cognitiveTypes";
+import { DiscoveryPane, type CandidateForUi } from "./DiscoveryPane";
 import { PracticeReviewPane } from "./PracticeReviewPane";
 import { PracticeSourcePreview } from "./PracticeSourcePreview";
 import "./PracticeMode.css";
@@ -18,9 +19,14 @@ export function PracticeMode({ workspaceReady, tauriRuntime }: PracticeModeProps
   const [subTab, setSubTab] = useState<PracticeSubTab>("review");
   const [reviewCompleted, setReviewCompleted] = useState(false);
   const [focusedThought, setFocusedThought] = useState<ReviewQueueItem | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState<CandidateForUi | null>(null);
 
   const handleReviewCompleted = useCallback(() => {
     setReviewCompleted(true);
+  }, []);
+
+  const handleSelectCandidate = useCallback((candidate: CandidateForUi | null) => {
+    setSelectedCandidate(candidate);
   }, []);
 
   return (
@@ -71,15 +77,30 @@ export function PracticeMode({ workspaceReady, tauriRuntime }: PracticeModeProps
             </div>
           )}
           {subTab === "discovery" && (
-            <div className="practice-mode__placeholder">
-              <p>{t("practice.discoveryPlaceholder", "Discovery pane — coming soon")}</p>
-            </div>
+            <DiscoveryPane
+              workspaceReady={workspaceReady}
+              tauriRuntime={tauriRuntime}
+              onSelectCandidate={handleSelectCandidate}
+            />
           )}
         </div>
         <div className="practice-mode__right">
           <PracticeSourcePreview
-            relPath={focusedThought?.relPath ?? null}
-            startLine={focusedThought?.startLine ?? undefined}
+            relPath={
+              subTab === "review"
+                ? (focusedThought?.relPath ?? null)
+                : (selectedCandidate?.relPath ?? null)
+            }
+            startLine={
+              subTab === "review"
+                ? (focusedThought?.startLine ?? undefined)
+                : (selectedCandidate?.startLine ?? undefined)
+            }
+            endLine={
+              subTab === "discovery"
+                ? (selectedCandidate?.endLine ?? undefined)
+                : undefined
+            }
           />
         </div>
       </div>
